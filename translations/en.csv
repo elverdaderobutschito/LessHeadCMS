@@ -1,0 +1,819 @@
+kind,ref,text
+ui_text,login.subtitle,Please sign in.
+ui_text,login.username,Username
+ui_text,login.password,Password
+ui_text,login.submit,Sign in
+ui_text,login.submit_busy,Signing in…
+ui_text,login.rate_limited_one,"Too many failed attempts, please try again in 1 minute."
+ui_text,login.rate_limited_many,"Too many failed attempts, please try again in {minutes} minutes."
+ui_text,password.heading,Change password
+ui_text,password.intro_forced,"Signed in as {username}. Before you continue, the initial password must be replaced with one of your own."
+ui_text,password.intro_voluntary,New password for your own account {username}. The new password applies from your next sign-in.
+ui_text,password.current,Current password
+ui_text,password.new,New password
+ui_text,password.generate,Generate secure password
+ui_text,password.hint,"At least 8 characters, including at least one digit and one special character (e.g. ! ? # - _)."
+ui_text,password.repeat,Repeat password
+ui_text,password.mismatch,The two passwords do not match.
+ui_text,password.reveal,Show password
+ui_text,password.submit,Save password
+ui_text,password.submit_busy,Saving…
+ui_text,password.cancel,Cancel
+ui_text,password.logout,Sign out
+ui_text,password.changed,Password changed. The new password applies from your next sign-in.
+ui_text,sidebar.tables_aria,Data tables
+ui_text,sidebar.other_group,Other
+ui_text,sidebar.tasks,My tasks
+ui_text,sidebar.tasks_open,{count} open task(s)
+ui_text,sidebar.system_heading,System
+ui_text,sidebar.system_media,Media library
+ui_text,sidebar.system_users,Users
+ui_text,sidebar.system_rights,Rights management
+ui_text,sidebar.system_testdata,Test data
+ui_text,sidebar.system_schema,Schema
+ui_text,sidebar.system_workflows,Workflows
+ui_text,sidebar.system_localization,Localization
+ui_text,sidebar.system_languages,Languages
+ui_text,sidebar.system_translations,Translations
+ui_text,sidebar.system_settings,Settings
+ui_text,sidebar.change_password,Change password
+ui_text,sidebar.language,Language
+ui_text,sidebar.language_aria,Display language
+ui_text,sidebar.logout,Sign out
+ui_text,app.loading,Loading…
+ui_text,app.server_unreachable,Server unreachable: {error}
+ui_text,app.loading_schema,Loading schema…
+ui_text,app.schema_error,The schema could not be loaded: {error}
+ui_text,app.no_access,No access.
+ui_text,app.unknown_entity,Unknown entity “{entity}”.
+ui_text,app.no_action_create,No permission to create in '{entity}'.
+ui_text,app.no_action_update,No permission to edit in '{entity}'.
+ui_text,app.no_action_delete,No permission to delete in '{entity}'.
+ui_text,form.heading_new,Create {entity}
+ui_text,form.heading_edit,Edit {entity} #{id}
+ui_text,form.loading,Loading…
+ui_text,form.save,Save and close
+ui_text,form.save_busy,Saving…
+ui_text,form.save_and_continue,Save and continue
+ui_text,form.save_and_new,Save and new
+ui_text,form.cancel,Cancel
+ui_text,form.saved_next,Saved: {entity} #{id}. Ready for the next record.
+ui_text,form.saved_stay,Saved: {entity} #{id}.
+ui_text,form.no_update,"No permission to edit '{entity}'. You can view the contents, but not save them."
+ui_text,form.no_create,"No permission to create '{entity}'. You can view the form, but not save it."
+ui_text,form.copy_notice,Copy of {entity} #{id} – not saved yet.
+ui_text,form.copy_one_to_one,“{label}” was cleared (1:1 relation: already assigned to the original).
+ui_text,form.min_warning,⚠ {entity} #{id} has no record in “{child}” yet (at least 1 required).
+ui_text,form.workflow_heading,Workflow
+ui_text,form.workflow_status,Status
+ui_text,form.workflow_chain,Progress
+ui_text,form.workflow_step_done,completed
+ui_text,form.workflow_step_current,current status
+ui_text,form.workflow_step_upcoming,upcoming
+ui_text,form.workflow_next,Next step
+ui_text,form.workflow_choose,– please choose –
+ui_text,form.workflow_run,Run transition
+ui_text,form.workflow_run_busy,Running …
+ui_text,form.workflow_done,Transition “{label}” done. New status: {state}.
+ui_text,form.workflow_final,This record is in a final state. No further workflow transitions are defined.
+ui_text,form.workflow_jump,↓ Go to workflow actions
+ui_text,form.workflow_preview,The record starts in this state once it has been created. Workflow actions become available after saving.
+ui_text,form.workflow_none_allowed,There are currently no workflow actions available to you for this record.
+ui_text,list.new,Create new
+ui_text,list.loading,Loading…
+ui_text,list.count,{shown} of {total} entries
+ui_text,list.reset_filters,Reset filters
+ui_text,list.columns,Columns ({visible}/{total})
+ui_text,list.columns_aria,Visible columns
+ui_text,list.columns_reset,Restore defaults
+ui_text,list.edit,Edit
+ui_text,list.duplicate,Duplicate
+ui_text,list.delete,Delete
+ui_text,list.delete_confirm,Really delete record #{id}?
+ui_text,list.empty,No entries yet.
+ui_text,list.no_hits,No matches.
+ui_text,list.filter_placeholder,Filter…
+ui_text,list.filter_aria,Filter {label}
+ui_text,list.filter_from,from
+ui_text,list.filter_to,to
+ui_text,list.filter_from_aria,{label} from
+ui_text,list.filter_to_aria,{label} to
+ui_text,list.filter_all,All
+ui_text,list.filter_yes,Yes
+ui_text,list.filter_no,No
+ui_text,list.filter_published,Published
+ui_text,list.filter_draft,Draft
+ui_text,list.min_warning,No record in “{child}” yet (at least 1 required)
+ui_text,list.media_more,+{count} more
+ui_text,list.pager_aria,Pages
+ui_text,list.pager_page_of,Page {page} of {pages}
+ui_text,list.pager_first,First page
+ui_text,list.pager_prev,Previous page
+ui_text,list.pager_next,Next page
+ui_text,list.pager_last,Last page
+ui_text,list.pager_jump,Go to page
+ui_text,list.pager_go,Go
+ui_text,list.pager_per_page,Rows per page
+ui_text,field.please_select,– please select –
+ui_text,field.search,Search {entity}
+ui_text,field.add,Create new {entity}
+ui_text,field.many_empty,No entries available yet.
+ui_text,field.filter_hint,Select “{label}” first to narrow down the choices.
+ui_text,field.filter_active,Choices narrowed to {label}: {value}
+ui_text,field.filter_mismatch,does not match “{label}"
+ui_text,field.ref_partial,The list shows {shown} of {total} entries – find all others via search (magnifier).
+ui_text,select_modal.title,Select {entity}
+ui_text,select_modal.title_labeled,{label} – select {entity}
+ui_text,select_modal.search_placeholder,Search…
+ui_text,select_modal.loading,Loading…
+ui_text,select_modal.no_hits,No matches.
+ui_text,select_modal.empty,No entries yet.
+ui_text,inline_create.title,Create {entity}
+ui_text,inline_create.loading,Loading…
+ui_text,inline_create.no_required,{entity} has no required fields – an empty record will be created.
+ui_text,inline_create.submit,Create
+ui_text,inline_create.submit_busy,Creating…
+ui_text,inline_create.cancel,Cancel
+ui_text,modal.close,Close
+ui_text,richtext.headings,Headings
+ui_text,richtext.heading,Heading
+ui_text,richtext.paragraph,Paragraph
+ui_text,richtext.bold,Bold
+ui_text,richtext.italic,Italic
+ui_text,richtext.strike,Strikethrough
+ui_text,richtext.line,Horizontal line
+ui_text,richtext.blockquote,Blockquote
+ui_text,richtext.unordered_list,Bulleted list
+ui_text,richtext.ordered_list,Numbered list
+ui_text,richtext.task,Task
+ui_text,richtext.indent,Indent
+ui_text,richtext.outdent,Outdent
+ui_text,richtext.insert_table,Insert table
+ui_text,richtext.insert_link,Insert link
+ui_text,richtext.code,Code
+ui_text,richtext.insert_codeblock,Insert code block
+ui_text,richtext.more,More
+ui_text,richtext.url,URL
+ui_text,richtext.link_text,Link text
+ui_text,richtext.ok,OK
+ui_text,richtext.cancel,Cancel
+ui_text,richtext.table_add_row_up,Add row above
+ui_text,richtext.table_add_row_down,Add row below
+ui_text,richtext.table_add_column_left,Add column to the left
+ui_text,richtext.table_add_column_right,Add column to the right
+ui_text,richtext.table_remove_row,Remove row
+ui_text,richtext.table_remove_column,Remove column
+ui_text,richtext.table_align_left,Align left
+ui_text,richtext.table_align_center,Align center
+ui_text,richtext.table_align_right,Align right
+ui_text,richtext.table_remove,Remove table
+ui_text,media.heading,Media library
+ui_text,media.loading,Loading…
+ui_text,media.col_preview,Preview
+ui_text,media.col_name,Title / file
+ui_text,media.col_description,Description
+ui_text,media.col_dimensions,Dimensions
+ui_text,media.col_tags,Tags
+ui_text,media.col_uploaded,Uploaded
+ui_text,media.col_used,In use
+ui_text,media.open_file,Open file
+ui_text,media.alt_text,Alt text: {alt}
+ui_text,media.used_count,{count}×
+ui_text,media.unused,no
+ui_text,media.edit,Edit
+ui_text,media.delete,Delete
+ui_text,media.delete_confirm,Really delete the media item “{name}”? The file will be removed.
+ui_text,media.deleted,“{name}” deleted.
+ui_text,media.saved,“{name}” saved.
+ui_text,media.no_hits,No matches.
+ui_text,media.empty,No media uploaded yet.
+ui_text,media.search_placeholder,"Search (title, description, file name)…"
+ui_text,media.search_aria,Search media
+ui_text,media.kind_aria,Type
+ui_text,media.kind_all,All types
+ui_text,media.kind_image,Image
+ui_text,media.kind_video,Video
+ui_text,media.kind_audio,Audio
+ui_text,media.kind_document,Document
+ui_text,media.tag_aria,Tag
+ui_text,media.tag_all,All tags
+ui_text,media.saved_replaced,"“{name}” saved, file replaced."
+ui_text,media.tags_manage,Manage tags
+ui_text,media.tags_title,Manage tags
+ui_text,media.tags_intro,Renaming applies to all media with this tag. Deleting removes the tag and its assignments – the media themselves are kept.
+ui_text,media.tags_empty,No tags yet.
+ui_text,media.tags_col_name,Tag
+ui_text,media.tags_col_count,Media
+ui_text,media.tags_rename,Rename
+ui_text,media.tags_rename_aria,New name for “{name}”
+ui_text,media.tags_rename_save,Save
+ui_text,media.tags_rename_cancel,Cancel
+ui_text,media.tags_renamed,Tag “{old}” renamed to “{name}”.
+ui_text,media.tags_delete,Delete
+ui_text,media.tags_delete_confirm,Delete the tag “{name}”? It is used by {count} media.
+ui_text,media.tags_delete_confirm_one,Delete the tag “{name}”? It is used by 1 medium.
+ui_text,media.tags_deleted,Tag “{name}” deleted.
+ui_text,media_edit.title,Edit media item: {name}
+ui_text,media_edit.title_label,Title
+ui_text,media_edit.alt_text,Alt text
+ui_text,media_edit.alt_hint,Short description of the image content for screen readers (accessibility).
+ui_text,media_edit.description,Description
+ui_text,media_edit.tags,Tags (comma-separated)
+ui_text,media_edit.save,Save
+ui_text,media_edit.save_busy,Saving…
+ui_text,media_edit.cancel,Cancel
+ui_text,media_edit.replace,Replace file …
+ui_text,media_edit.replace_aria,Choose new file
+ui_text,media_edit.replace_chosen,New file: {name} ({size})
+ui_text,media_edit.replace_undo,Do not replace
+ui_text,media_edit.replace_hint,"Replaces the file of this medium. Title, tags and all uses in records are kept."
+ui_text,media_edit.replace_hint_chosen,The file is replaced when saving; the previous file is deleted.
+ui_text,media_upload.choose,Choose files
+ui_text,media_upload.or_drop,or drag them here
+ui_text,media_upload.input_aria,Upload files
+ui_text,media_upload.limit,At most {size} per file.
+ui_text,media_upload.status_aria,Upload status
+ui_text,media_upload.busy,uploading…
+ui_text,media_upload.done,uploaded
+ui_text,media_upload.too_large,The file is too large ({size}). At most {max} per file is allowed.
+ui_text,media_field.empty,No media selected.
+ui_text,media_field.tiles_aria,{label}: selected media
+ui_text,media_field.move_up,Move forward
+ui_text,media_field.move_up_aria,Move {name} forward
+ui_text,media_field.move_down,Move back
+ui_text,media_field.move_down_aria,Move {name} back
+ui_text,media_field.remove,Remove
+ui_text,media_field.remove_aria,Remove {name}
+ui_text,media_field.browse,Browse media library
+ui_text,media_field.picker_title,{label} – select media
+ui_text,media_picker.loading,Loading…
+ui_text,media_picker.no_hits,No matches.
+ui_text,media_picker.empty,No media yet – upload above.
+ui_text,media_picker.grid_aria,Media
+ui_text,media_picker.done,Done
+ui_text,users.heading,Users
+ui_text,users.new,New user
+ui_text,users.loading,Loading…
+ui_text,users.col_name,Name
+ui_text,users.col_username,Login name
+ui_text,users.col_email,Email
+ui_text,users.col_role,Role
+ui_text,users.col_status,Status
+ui_text,users.role_admin,Admin
+ui_text,users.role_redakteur,Editor
+ui_text,users.role_api,API
+ui_text,users.status_active,Active
+ui_text,users.status_inactive,Inactive
+ui_text,users.edit,Edit
+ui_text,users.rights,Roles & permissions
+ui_text,users.empty,No users yet.
+ui_text,users.created,User “{name}” ({username}) created. Please pass this password on; the user must change it at first sign-in:
+ui_text,users.created_api,API user “{name}” ({username}) created. The API key is shown only now – please copy it right away and keep it safe:
+ui_text,user_new.title,New user
+ui_text,user_new.name,Name
+ui_text,user_new.username,Login name
+ui_text,user_new.email,Email
+ui_text,user_new.role,Role
+ui_text,user_new.password,Password
+ui_text,user_new.first_login_hint,The new user must replace this password with one of their own at first sign-in – please pass it on after creating the account.
+ui_text,user_new.submit,Create
+ui_text,user_new.submit_busy,Creating…
+ui_text,user_new.cancel,Cancel
+ui_text,user_new.api_hint,API users have no password and cannot sign in. After creation an API key is shown once; the user then gets permissions under “Roles & permissions”.
+ui_text,user_edit.title,Edit “{name}”
+ui_text,user_edit.name,Name
+ui_text,user_edit.username,Login name
+ui_text,user_edit.email,Email
+ui_text,user_edit.role,Role
+ui_text,user_edit.active,Active
+ui_text,user_edit.admin_hint,"You cannot deactivate your own account, and at least one active admin must remain."
+ui_text,user_edit.save,Save
+ui_text,user_edit.save_busy,Saving…
+ui_text,user_edit.cancel,Cancel
+ui_text,user_edit.api_role_hint,The role of an API user cannot be changed.
+ui_text,rights.loading,Loading …
+ui_text,rights.roles_heading,Roles
+ui_text,rights.roles_intro,"A role bundles deviations from the default: restricted entities and fields, granted system areas. Roles are assigned to users or groups. Across all sources a restriction wins."
+ui_text,rights.roles_empty,No roles yet.
+ui_text,rights.role_new_heading,Create new role
+ui_text,rights.role_new_submit,Create role
+ui_text,rights.role_created,Role “{name}” created.
+ui_text,rights.role_deleted,Role “{name}” deleted.
+ui_text,rights.role_delete_confirm,Really delete role “{name}”? It is assigned to {users} user(s) and {groups} group(s); its permissions and assignments will be removed.
+ui_text,rights.role_heading,Role “{name}”
+ui_text,rights.role_back,← All roles
+ui_text,rights.role_unknown,This role does not exist.
+ui_text,rights.role_editor_intro,Permissions of this role. Every change is saved immediately.
+ui_text,rights.builtin_badge,built-in
+ui_text,rights.builtin_summary,"unrestricted, not editable"
+ui_text,rights.builtin_detail,The built-in role is unrestricted and cannot be edited. Administrators are defined in the user management.
+ui_text,rights.groups_heading,Groups
+ui_text,rights.groups_intro,A group collects users. It passes its roles on to them and can also have permissions of its own.
+ui_text,rights.groups_empty,No groups yet.
+ui_text,rights.group_new_heading,Create new group
+ui_text,rights.group_new_submit,Create group
+ui_text,rights.group_created,Group “{name}” created.
+ui_text,rights.group_deleted,Group “{name}” deleted.
+ui_text,rights.group_delete_confirm,Really delete group “{name}”? {users} user(s) belong to it; its permissions and memberships will be removed.
+ui_text,rights.group_heading,Group “{name}”
+ui_text,rights.group_back,← All groups
+ui_text,rights.group_unknown,This group does not exist.
+ui_text,rights.group_roles,Roles of this group
+ui_text,rights.group_members,Members: {names}. Assign them under Users → “Roles & permissions”.
+ui_text,rights.group_no_members,No members yet. Assign them under Users → “Roles & permissions”.
+ui_text,rights.group_editor_intro,This group’s own permissions – in addition to its roles. Every change is saved immediately.
+ui_text,rights.col_name,Name
+ui_text,rights.col_summary,Deviations from the default
+ui_text,rights.summary,"{restrictions} restriction(s), {grants} system area(s) granted"
+ui_text,rights.summary_group,{summary} · {roles} role(s) · {users} user(s)
+ui_text,rights.name,Name
+ui_text,rights.open,Permissions
+ui_text,rights.rename,Rename
+ui_text,rights.rename_aria,New name for “{name}”
+ui_text,rights.rename_save,Save
+ui_text,rights.rename_cancel,Cancel
+ui_text,rights.delete,Delete
+ui_text,rights.no_roles,There are no roles yet (Rights management → Roles).
+ui_text,rights.no_groups,There are no groups yet (Rights management → Groups).
+ui_text,rights.entities_heading,Entities
+ui_text,rights.entities_hint,Default: allowed. Ticking a field restricts it – it is then neither shown nor saved.
+ui_text,rights.entity_access,Access to {entity}
+ui_text,rights.entity_locked,no access
+ui_text,rights.restrictions,Restrictions (ticked = restricted)
+ui_text,rights.fields_count,{count} of {total} fields restricted
+ui_text,rights.required,required
+ui_text,rights.abstract,(abstract – applies to all subclasses)
+ui_text,rights.nn_suffix,(n:n)
+ui_text,rights.systables_heading,System areas
+ui_text,rights.systables_hint,Default: locked. Here it is the other way round: a tick grants the area.
+ui_text,rights.grant,Grant access
+ui_text,rights.explicit_deny,explicitly locked
+ui_text,rights.explicit_deny_remove,Remove lock
+ui_text,rights.user_heading,Roles & permissions: {name}
+ui_text,rights.user_back,← All users
+ui_text,rights.user_unknown,This user does not exist.
+ui_text,rights.user_roles,Roles of this user
+ui_text,rights.user_groups,Groups of this user
+ui_text,rights.user_editor_intro,This user’s own permissions – in addition to roles and groups. Every change is saved immediately.
+ui_text,rights.effective_heading,Effective permissions
+ui_text,rights.effective_hint,"The final result from all sources: roles, roles via groups, group permissions and the user’s own. Read-only."
+ui_text,rights.effective_admin,"Administrator: unrestricted access. Roles, groups and permissions have no effect for administrators."
+ui_text,rights.effective_entities,No access to
+ui_text,rights.effective_fields,Restricted fields
+ui_text,rights.effective_systables,Granted system areas
+ui_text,rights.effective_none,none
+ui_text,rights.tab_users,Users
+ui_text,rights.tab_roles,Roles
+ui_text,rights.tab_groups,Groups
+ui_text,rights.actions,Actions (checked = forbidden)
+ui_text,rights.action_create,Forbid creating
+ui_text,rights.action_update,Forbid editing
+ui_text,rights.action_delete,Forbid deleting
+ui_text,rights.actions_count,{count} action(s) forbidden
+ui_text,rights.actions_moot,No access to the entity – these bans only take effect once access is restored.
+ui_text,rights.action_name_create,Create
+ui_text,rights.action_name_update,Edit
+ui_text,rights.action_name_delete,Delete
+ui_text,rights.effective_actions,Forbidden actions
+ui_text,rights.inherited_denied,Already locked by {sources}
+ui_text,rights.inherited_denied_many,Already locked by: {sources}
+ui_text,rights.inherited_forbidden,Already forbidden by {sources}
+ui_text,rights.inherited_forbidden_many,Already forbidden by: {sources}
+ui_text,rights.inherited_granted,Already granted by {sources}
+ui_text,rights.inherited_granted_many,Already granted by: {sources}
+ui_text,rights.source_role,role '{name}'
+ui_text,rights.source_group,group '{name}'
+ui_text,rights.source_role_via,role '{name}' (via group '{group}')
+ui_text,rights.api_key_heading,API key
+ui_text,rights.api_key_usage,Access to the API with the header “Authorization: Bearer <key>”. Only a hash is stored – the key itself is shown only right after it has been created.
+ui_text,rights.api_key_preview,Key (last characters)
+ui_text,rights.api_key_created,Created
+ui_text,rights.api_key_last_used,Last used
+ui_text,rights.api_key_never_used,never
+ui_text,rights.api_key_status,Status
+ui_text,rights.api_key_status_active,Active
+ui_text,rights.api_key_status_revoked,Revoked – no access
+ui_text,rights.api_key_status_none,No key
+ui_text,rights.api_key_generate,Create new key
+ui_text,rights.api_key_generate_confirm,The current key stops working immediately. Create a new key?
+ui_text,rights.api_key_revoke,Revoke key
+ui_text,rights.api_key_revoke_confirm,The key stops working immediately. No access is possible until a new one is created. Revoke?
+ui_text,rights.api_key_new,New API key. It is shown only now – please copy it right away and keep it safe:
+ui_text,rights.api_key_read_only,Read only
+ui_text,rights.api_key_read_only_hint,"Writing requests (POST, PUT, DELETE) are refused – regardless of all assigned permissions. Takes effect immediately."
+ui_text,testdata.heading,Test data
+ui_text,testdata.intro,"Generates {additional} records with random content for the selected entities. Existing data stays unchanged – nothing is reset or deleted. For an empty database, delete {file} as before and call {bootstrap} again."
+ui_text,testdata.intro_additional,additional
+ui_text,testdata.col_entity,Entity
+ui_text,testdata.col_count,Count
+ui_text,testdata.generate,Generate
+ui_text,testdata.generate_busy,Generating…
+ui_text,testdata.result,Result
+ui_text,testdata.created,{count} created
+ui_text,testdata.min_extra,{count} of them added for the minimum count
+ui_text,testdata.skipped,skipped – {reason}
+ui_text,testdata.links,{count} links
+ui_text,testdata.media_empty,Media fields stay empty (no files are made up): {fields}
+ui_text,testdata.media_required,{field} (required – select media when editing)
+ui_text,testdata.nothing,No count greater than 0 selected – nothing generated.
+ui_text,languages.heading,Languages
+ui_text,languages.intro,"Additional languages for the labels of the interface (entities, fields, relations, enum values). Each user chooses their display language at the bottom of the sidebar; the data itself and the public API stay unchanged."
+ui_text,languages.loading,Loading…
+ui_text,languages.table_aria,Languages
+ui_text,languages.col_name,Name
+ui_text,languages.col_code,Code
+ui_text,languages.default_badge,Default language (diagram)
+ui_text,languages.delete,Delete
+ui_text,languages.delete_confirm,Delete the language “{name}”? All translations in this language will be removed as well.
+ui_text,languages.deleted,Language “{name}” deleted ({count} translation(s) removed).
+ui_text,languages.default_created,Default language “{name}” set.
+ui_text,languages.created,Language “{name}” added.
+ui_text,languages.setup_heading,Set default language
+ui_text,languages.setup_hint,"First name the language the diagram is written in (e.g. “Deutsch”, code “de”). This is only the label in the language switcher – the texts of the diagram do not change."
+ui_text,languages.add_heading,Add new language
+ui_text,languages.name,Name
+ui_text,languages.code,Code
+ui_text,languages.name_placeholder_default,Deutsch
+ui_text,languages.code_placeholder_default,de
+ui_text,languages.name_placeholder,English
+ui_text,languages.code_placeholder,en
+ui_text,languages.setup_submit,Set default language
+ui_text,languages.add_submit,Add language
+ui_text,languages.col_formats,Date · Number
+ui_text,languages.edit,Edit
+ui_text,languages.edit_heading,Edit language “{name}”
+ui_text,languages.edit_submit,Save
+ui_text,languages.edit_cancel,Cancel
+ui_text,languages.saved,Language “{name}” saved.
+ui_text,languages.formats_heading,Display formats
+ui_text,languages.date_format,Date format
+ui_text,languages.date_format_hint,d.m.Y → 31.12.2026 · m/d/Y → 12/31/2026
+ui_text,languages.datetime_format,Date and time format
+ui_text,languages.datetime_format_hint,"d.m.Y, H:i → 31.12.2026, 14:05 · m/d/Y, g:i A → 12/31/2026, 2:05 PM"
+ui_text,languages.decimal_separator,Decimal separator
+ui_text,languages.decimal_separator_hint,"one character, e.g. , or ."
+ui_text,languages.thousands_separator,Thousands separator
+ui_text,languages.thousands_separator_hint,"one character, empty = no grouping"
+ui_text,languages.formats_help,"Date formats as in PHP date(). Supported placeholders: {placeholders} (day, month, year, hour, minute, second, AM/PM); all other characters appear unchanged, a preceding \ outputs a letter literally. {link}. The formats apply to displayed values (lists, media library, backups); input fields for dates and numbers keep the browser's format."
+ui_text,languages.formats_help_link,Description of the placeholders (php.net)
+ui_text,languages.preview,Preview
+ui_text,languages.preview_date,Date
+ui_text,languages.preview_datetime,Date and time
+ui_text,languages.preview_number,Number
+ui_text,languages.preview_fallback,Empty or not usable – the preview shows the default for: {fields}
+ui_text,languages.preview_unsupported,Unsupported placeholders (shown as letters): {letters}
+ui_text,languages.preset_aria,Preset for {field}
+ui_text,languages.preset_custom,– custom format –
+ui_text,languages.preset_date_format_de,German (DD.MM.YYYY)
+ui_text,languages.preset_date_format_us,US English (MM/DD/YYYY)
+ui_text,languages.preset_date_format_uk,UK English (DD/MM/YYYY)
+ui_text,languages.preset_date_format_iso,ISO 8601 (YYYY-MM-DD)
+ui_text,languages.preset_date_format_fr_es,French/Spanish (DD/MM/YYYY)
+ui_text,languages.preset_datetime_format_de,German (24h)
+ui_text,languages.preset_datetime_format_us,US English (12h)
+ui_text,languages.preset_datetime_format_uk,UK English (24h)
+ui_text,languages.preset_datetime_format_iso,ISO 8601
+ui_text,translations_ui.heading,Translations
+ui_text,translations_ui.loading,Loading…
+ui_text,translations_ui.no_languages,"No language yet. Under {link}, first set the default language (for display overrides) and add another language for translations."
+ui_text,translations_ui.no_languages_link,System → Localization → Languages
+ui_text,translations_ui.language,Language
+ui_text,translations_ui.option_default,{name} ({code}) – original
+ui_text,translations_ui.count_translated,{done} of {total} translated
+ui_text,translations_ui.count_override,{done} of {total} with override
+ui_text,translations_ui.only_missing,Show untranslated only
+ui_text,translations_ui.tabs_aria,Section
+ui_text,translations_ui.tab_schema,Schema elements
+ui_text,translations_ui.tab_ui,Fixed UI texts
+ui_text,translations_ui.unsaved_title,unsaved changes
+ui_text,translations_ui.default_hint,"{language} is the default language – the language of the diagram. Here you can override the label derived from it, for example “Veröffentlicht” for the field {example} (names in the diagram must stay ASCII-safe). Diagram, database and API stay unchanged. Without an entry, the derived label applies; other languages show the override as long as they have no translation of their own."
+ui_text,translations_ui.default_ui_hint,"Fixed UI texts have no override in the default language: the German texts are located directly in frontend/src/i18n-strings.js. To translate, choose another language above."
+ui_text,translations_ui.ui_hint,"Labels of the interface itself. Without a translation, the German text is shown. Please keep placeholders in curly braces such as {example} unchanged. Server messages (e.g. validation errors) and schema editing remain in German for now."
+ui_text,translations_ui.schema_empty,The active schema contains nothing to translate.
+ui_text,translations_ui.all_done,Everything in this section is translated.
+ui_text,translations_ui.group_enum,(enum)
+ui_text,translations_ui.group_abstract,(abstract – the fields apply to all subclasses)
+ui_text,translations_ui.group_unsaved,{count} unsaved change(s)
+ui_text,translations_ui.col_key,Key
+ui_text,translations_ui.col_kind,Type
+ui_text,translations_ui.col_original,Original
+ui_text,translations_ui.col_translation,Translation ({language})
+ui_text,translations_ui.col_override,Display override ({language})
+ui_text,translations_ui.derived,derived: {original}
+ui_text,translations_ui.input_aria,Translation for {name}
+ui_text,translations_ui.placeholder_missing,{text} (not yet translated)
+ui_text,translations_ui.placeholder_override,"{text} (derived, no override)"
+ui_text,translations_ui.missing,not yet translated
+ui_text,translations_ui.no_override,no override – derived label
+ui_text,translations_ui.placeholder_warning,Placeholders differ from the original (expected: {expected})
+ui_text,translations_ui.placeholder_none,none
+ui_text,translations_ui.discard_confirm,Discard unsaved translations?
+ui_text,translations_ui.saved,Saved: {saved} translation(s).
+ui_text,translations_ui.saved_removed,"Saved: {saved} translation(s), {removed} removed."
+ui_text,translations_ui.save,Save
+ui_text,translations_ui.save_busy,Saving…
+ui_text,translations_ui.unsaved_count,{count} unsaved change(s)
+ui_text,translations_ui.no_unsaved,No unsaved changes.
+ui_text,translations_ui.export,Download (CSV)
+ui_text,translations_ui.import_summary,Import CSV
+ui_text,translations_ui.import_hint,"Apply translations from a CSV file (columns {format}, as produced by “Download (CSV)”). Existing texts are overwritten, nothing is deleted. A preview shows what will change before anything is saved."
+ui_text,translations_ui.import_upload,File from your computer
+ui_text,translations_ui.import_directory,or from the directory {dir}
+ui_text,translations_ui.import_directory_choose,– please select –
+ui_text,translations_ui.import_directory_empty,– no files available –
+ui_text,translations_ui.import_target,Target language
+ui_text,translations_ui.import_read_error,The file could not be read.
+ui_text,translations_ui.import_preview_busy,Checking…
+ui_text,translations_ui.import_preview_aria,Import preview
+ui_text,translations_ui.import_preview_heading,Preview: {file} → {language}
+ui_text,translations_ui.import_new,{count} new
+ui_text,translations_ui.import_changed,{count} changed (existing translation will be overwritten)
+ui_text,translations_ui.import_unchanged,{count} unchanged
+ui_text,translations_ui.import_skipped,{count} skipped
+ui_text,translations_ui.import_changed_details,Show changed texts
+ui_text,translations_ui.import_changed_row,“{old}” → “{new}”
+ui_text,translations_ui.import_skipped_row,Line {line}: {reason}
+ui_text,translations_ui.import_more,… and {count} more
+ui_text,translations_ui.import_nothing,Nothing to apply – the file contains no new or changed translations.
+ui_text,translations_ui.import_apply,Apply
+ui_text,translations_ui.import_apply_busy,Applying…
+ui_text,translations_ui.import_cancel,Cancel
+ui_text,translations_ui.import_done,"Import into {language}: {new} new, {changed} changed, {unchanged} unchanged, {skipped} skipped."
+ui_text,schema.heading,Schema
+ui_text,schema.intro,"Edit the active diagram ({file}) and apply it to the existing database without resetting it. Rename without data loss: {field_marker} on the field, or {class_marker}."
+ui_text,schema.backup_hint,"Before every “Apply”, a backup is created automatically (complete database + previous .puml in {dir}; the last {keep} are kept)."
+ui_text,schema.file_mismatch,The file on the server differs from the active schema in the database (e.g. changed via FTP). Checks always run against the active schema – “Check changes” therefore shows what the file would change compared with the database.
+ui_text,schema.restored_message,Backup of {created} restored.
+ui_text,schema.restored_active,Database and schema/{schema} from this backup are now active.
+ui_text,schema.restored_backup,Previous state backed up: {path}
+ui_text,schema.applied_created,new: {list}
+ui_text,schema.applied_rebuilt,rebuilt: {list}
+ui_text,schema.applied_dropped,removed: {list}
+ui_text,schema.applied_backup,Backup beforehand: {path}
+ui_text,schema.loading,Loading…
+ui_text,schema.editor_aria,Diagram (.puml)
+ui_text,schema.editor_locked_title,Locked while the diagram is open
+ui_text,schema.analyze,Check changes
+ui_text,schema.analyze_busy,Checking…
+ui_text,schema.download,Download (.puml)
+ui_text,schema.discard,Discard
+ui_text,schema.show_diagram,Show diagram
+ui_text,schema.show_diagram_busy,Loading diagram…
+ui_text,schema.indexes,Add missing indexes
+ui_text,schema.indexes_busy,Creating indexes …
+ui_text,schema.indexes_title,Creates missing indexes on foreign key columns and junction tables. Does not change any data.
+ui_text,schema.indexes_done,"{created} indexes added, {existing} already present."
+ui_text,schema.indexes_removed,{removed} outdated ones removed.
+ui_text,schema.locked,Text locked while the diagram is open.
+ui_text,schema.backups,Existing backups ({count})
+ui_text,schema.backups_empty,None yet – the first one is created at the next “Apply”.
+ui_text,schema.backups_aria,Backups
+ui_text,schema.col_time,Time
+ui_text,schema.col_database,Database
+ui_text,schema.col_schema,Schema
+ui_text,schema.restore,Restore
+ui_text,schema.puml_only,.puml only
+ui_text,schema.puml_only_title,Older backup without database
+ui_text,schema.backups_hint,"“Restore” brings back the database and .puml of a backup; the current state is itself backed up first. If necessary, this can also be done via FTP (see README, “Sicherung zurückspielen”)."
+ui_text,schema.stale,The text was changed after the check – please run “Check changes” again.
+ui_text,schema.text_changed,The text has changed since the check – please run “Check changes” again.
+ui_text,schema.result,Result of the check
+ui_text,schema.no_changes,No changes to tables or data.
+ui_text,schema.no_changes_text,"“Apply” still saves the text (e.g. comments, display settings)."
+ui_text,schema.severity_info,Change
+ui_text,schema.severity_warning,Note
+ui_text,schema.severity_confirm,Data loss
+ui_text,schema.severity_backfill,Backfill
+ui_text,schema.severity_blocker,Blocked
+ui_text,schema.severity_permission,Permission conflict
+ui_text,schema.renames,Possible renames
+ui_text,schema.renames_hint,"Without this information, a renamed element counts as “removed + new” (values are lost). A selection inserts {marker} into the text and checks again."
+ui_text,schema.rename_question,{text} (line {line}) – is this a rename of …?
+ui_text,schema.rename_choose,– please select –
+ui_text,schema.rename_no,"No, new element"
+ui_text,schema.blocked,Blocked:
+ui_text,schema.blocker_rows,Rows #{ids}
+ui_text,schema.blocker_row,Row #{id}
+ui_text,schema.blocker_total,… {count} in total
+ui_text,schema.confirm_legend,Confirm data loss
+ui_text,schema.backfill_legend,Values for existing rows (backfill)
+ui_text,schema.backfill_rows,({count} row(s))
+ui_text,schema.backfill_choose,– please select –
+ui_text,schema.apply,Apply
+ui_text,schema.apply_busy,Applying…
+ui_text,schema.apply_missing,Set all confirmations and enter all values first.
+ui_text,schema_restore.title,Restore backup
+ui_text,schema_restore.intro,Database and schema will be reset to the state of {created}.
+ui_text,schema_restore.warning,"All changes since that point in time will be lost: content, schema changes, users and passwords, media library entries (the uploaded files themselves stay in the media/ folder) and the diagram layout. The current state is stored as a new backup beforehand, so the restore can itself be undone."
+ui_text,schema_restore.confirm_label,Type {word} to confirm
+ui_text,schema_restore.submit,Restore now
+ui_text,schema_restore.submit_busy,Restoring…
+ui_text,schema_restore.cancel,Cancel
+ui_text,schema_diagram.title,Diagram
+ui_text,schema_diagram.discard_confirm,Discard all changes in the diagram? The text field stays unchanged.
+ui_text,schema_diagram.rearrange,Rearrange
+ui_text,schema_diagram.rearrange_busy,Arranging…
+ui_text,schema_diagram.zoom_out,Zoom out
+ui_text,schema_diagram.zoom_in,Zoom in
+ui_text,schema_diagram.zoom_level,{percent}%
+ui_text,schema_diagram.zoom_reset_title,Reset to 100%
+ui_text,schema_diagram.fit,Fit to view
+ui_text,schema_diagram.save,Save
+ui_text,schema_diagram.save_busy,Checking…
+ui_text,schema_diagram.save_none_title,No changes yet
+ui_text,schema_diagram.close,Close
+ui_text,schema_diagram.cancel,Cancel
+ui_text,schema_diagram.fix_error_one,Please fix the highlighted error first.
+ui_text,schema_diagram.fix_error_many,Please fix the {count} highlighted errors first.
+ui_text,schema_diagram.new_entity,+ New entity
+ui_text,schema_diagram.new_enum,+ New enum
+ui_text,schema_diagram.new_relation,+ New relation
+ui_text,schema_diagram.hint,"Clicking a box, a field or a line shows its properties. “Save” writes the changes to the text field; they are applied as before via “Check changes”."
+ui_text,schema_diagram.layout_unavailable,Layout: automatic (saved layout not available).
+ui_text,schema_diagram.layout_saved,Layout: saved (version {version}).
+ui_text,schema_diagram.layout_saved_placed,"Layout: saved (version {version}), {count} new element(s) placed automatically."
+ui_text,schema_diagram.layout_auto,Layout: automatic – “Rearrange” saves it.
+ui_text,schema_diagram.layout_error,Layout not saved: {error}
+ui_text,schema_diagram.warnings,Not included in the diagram ({count}):
+ui_text,schema_diagram.render_error,The diagram could not be drawn: {error}
+ui_text,schema_diagram.legend_aria,Legend
+ui_text,schema_diagram.legend_n1,n:1 (arrow points to the referenced class)
+ui_text,schema_diagram.legend_nn,n:n
+ui_text,schema_diagram.legend_extends,inherits from
+ui_text,schema_diagram.legend_abstract,abstract
+ui_text,schema_diagram.legend_enum,Enum
+ui_text,schema_diagram.legend_package,Package
+ui_text,schema_panel.aria,Properties
+ui_text,schema_panel.unnamed,(unnamed)
+ui_text,schema_panel.close,Close panel
+ui_text,schema_panel.what_entity,entity
+ui_text,schema_panel.what_field,field
+ui_text,schema_panel.what_relation,relation
+ui_text,schema_panel.what_enum,enum
+ui_text,schema_panel.delete,🗑 Delete {what} …
+ui_text,schema_panel.delete_aria,Confirm deletion
+ui_text,schema_panel.delete_question,Really delete this {what}?
+ui_text,schema_panel.delete_yes,"Yes, delete"
+ui_text,schema_panel.delete_no,No
+ui_text,schema_panel.kind_entity,Entity
+ui_text,schema_panel.kind_abstract,Abstract class
+ui_text,schema_panel.kind_field,Field in {entity}
+ui_text,schema_panel.kind_relation,Relation
+ui_text,schema_panel.kind_new_relation,New relation
+ui_text,schema_panel.kind_enum,Enum
+ui_text,schema_panel.name,Name
+ui_text,schema_panel.abstract,abstract (template without its own table)
+ui_text,schema_panel.abstract_used_title,Used by subclasses
+ui_text,schema_panel.extends,extends
+ui_text,schema_panel.extends_none,There is no (other) abstract class.
+ui_text,schema_panel.none_extends,– none –
+ui_text,schema_panel.package,Package
+ui_text,schema_panel.none_package,– none –
+ui_text,schema_panel.new_package,New package …
+ui_text,schema_panel.new_package_name,Name of the new package
+ui_text,schema_panel.fields,Fields
+ui_text,schema_panel.field_auto,(automatic)
+ui_text,schema_panel.field_inherited,(from {entity})
+ui_text,schema_panel.add_field,+ Add field
+ui_text,schema_panel.relations,Relations
+ui_text,schema_panel.delete_relations,This also removes {count} relation(s).
+ui_text,schema_panel.blocked_subclasses,Cannot be deleted: {names} inherits from it.
+ui_text,schema_panel.back,← back to {entity}
+ui_text,schema_panel.back_fallback,the entity
+ui_text,schema_panel.type,Type
+ui_text,schema_panel.enum_option,Enum …
+ui_text,schema_panel.enum,Enum
+ui_text,schema_panel.choose,– please select –
+ui_text,schema_panel.optional,optional (?)
+ui_text,schema_panel.title_title,Display name of the row
+ui_text,schema_panel.title_disabled_title,"Only for string, int, date, decimal and enums"
+ui_text,schema_panel.unique_title,All {unique} fields of a class together form one uniqueness rule
+ui_text,schema_panel.unique_disabled_title,Not for media fields
+ui_text,schema_panel.no_entities,There is no (non-abstract) entity yet.
+ui_text,schema_panel.from,Source
+ui_text,schema_panel.to,Target
+ui_text,schema_panel.swap,⇄ Swap direction
+ui_text,schema_panel.kind,Type
+ui_text,schema_panel.hint_n1,Each row of {from} refers to one row of the target (column in {from}).
+ui_text,schema_panel.hint_one_to_one,"Like n:1, but each row of the target at most once (column in {from})."
+ui_text,schema_panel.hint_nn,Any number on both sides (separate junction table).
+ui_text,schema_panel.from_fallback,the source
+ui_text,schema_panel.from_mult,Source multiplicity
+ui_text,schema_panel.to_mult,Target multiplicity
+ui_text,schema_panel.mult_required,{mult} (required)
+ui_text,schema_panel.mult_optional,{mult} (optional)
+ui_text,schema_panel.label,Label
+ui_text,schema_panel.cascade_title,Deleting the target also deletes the dependent rows (otherwise the deletion is rejected)
+ui_text,schema_panel.unique_relation_title,Column is part of the uniqueness rule of the source
+ui_text,schema_panel.label_title,The interface shows the label instead of the table name
+ui_text,schema_panel.symmetric_title,Undirected: one row per pair
+ui_text,schema_panel.filter_by,"Filter choices by field ({filter_by}, e.g. sprache or sprache=lang)"
+ui_text,schema_panel.create_relation,Create relation
+ui_text,schema_panel.cancel,Cancel
+ui_text,schema_panel.values,Values
+ui_text,schema_panel.value_aria,Value {n}
+ui_text,schema_panel.value_up,Move value {n} up
+ui_text,schema_panel.value_down,Move value {n} down
+ui_text,schema_panel.value_remove,Remove value {n}
+ui_text,schema_panel.add_value,+ Add value
+ui_text,schema_panel.used_by,Used by: {list}
+ui_text,schema_panel.blocked_enum,Cannot be deleted: {list} uses it.
+ui_text,schema_check.name_missing,Name is missing.
+ui_text,schema_check.name_chars,"Only letters, digits and _ (no umlauts), not starting with a digit."
+ui_text,schema_check.name_underscore,Must not start with _.
+ui_text,schema_check.reserved,“{name}” is reserved.
+ui_text,schema_check.class_exists,A class “{name}” already exists.
+ui_text,schema_check.enum_exists,An enum “{name}” already exists.
+ui_text,schema_check.package_invalid,"Package name is missing or contains ""."
+ui_text,schema_check.base_missing,Base class is missing.
+ui_text,schema_check.base_not_abstract,“{name}” is not abstract.
+ui_text,schema_check.cyclic,Cyclic inheritance.
+ui_text,schema_check.abstract_relations,Abstract classes have no table and cannot have relations.
+ui_text,schema_check.field_id,“id” is created automatically.
+ui_text,schema_check.field_exists,A field “{name}” already exists in {entity}.
+ui_text,schema_check.field_inherited,“{name}” is already inherited.
+ui_text,schema_check.enum_choose,Please choose an enum.
+ui_text,schema_check.title_type,"{title} is only possible for string, int, date, decimal and enums."
+ui_text,schema_check.unique_media,{unique} is not possible for media fields.
+ui_text,schema_check.visibility_once,At most one visibility field per class.
+ui_text,schema_check.base_type,“{name}” is a base type.
+ui_text,schema_check.values_min,At least one value.
+ui_text,schema_check.value_chars,"Only letters, digits and _, not starting with a digit."
+ui_text,schema_check.value_duplicate,“{value}” is duplicated.
+ui_text,schema_check.from_missing,Source is missing.
+ui_text,schema_check.to_missing,Target is missing.
+ui_text,schema_check.end_abstract,“{name}” is abstract (no table).
+ui_text,schema_check.label_braces,The label must not contain { }.
+ui_text,schema_check.nn_self_label,An n:n self-reference needs a label.
+ui_text,schema_check.label_needed,{label} needs a label.
+ui_text,schema_check.one_self_optional,A 1:1 self-reference is only possible as optional (0..1).
+ui_text,schema_diff.title,Changes to the text
+ui_text,schema_diff.summary,{added} / {removed} line(s). This is how the text field looks after “Accept”; the database only changes via “Check changes” → “Apply”.
+ui_text,schema_diff.lost,"The text is regenerated from the diagram: comments, formatting and purely decorative details of the previous text are dropped."
+ui_text,schema_diff.lost_warnings,"The text is regenerated from the diagram: comments, formatting and purely decorative details ({count} note(s) on opening) of the previous text are dropped."
+ui_text,schema_diff.lines_aria,Text diff
+ui_text,schema_diff.unchanged,The text stays the same.
+ui_text,schema_diff.apply,Accept
+ui_text,schema_diff.back,Back to the diagram
+ui_text,column_prefs.save_error,The column selection could not be saved: {error}
+ui_text,column_prefs.reset_error,The column selection could not be reset: {error}
+ui_text,column_prefs.load_error,The column selection could not be loaded: {error}
+ui_text,workflows.heading,Workflows
+ui_text,workflows.intro,"Workflow files end in .lhwf, live in the folder {dir} (uploaded via FTP or created here) and are not part of the bootstrap. At most one is active. “Apply” checks the text together with the active schema, writes the file and makes it the active one – the same way as any schema change, including a backup."
+ui_text,workflows.loading,Loading …
+ui_text,workflows.empty,No workflow file yet.
+ui_text,workflows.files_aria,Workflow files
+ui_text,workflows.col_file,File
+ui_text,workflows.col_size,Size
+ui_text,workflows.col_modified,Modified
+ui_text,workflows.col_status,Status
+ui_text,workflows.status_active,active
+ui_text,workflows.used,Used by the schema: {list}
+ui_text,workflows.new_label,New workflow file
+ui_text,workflows.new_placeholder,e.g. article.lhwf
+ui_text,workflows.new_create,Create new workflow file
+ui_text,workflows.active_label,Active workflow file
+ui_text,workflows.none_option,None (workflows switched off)
+ui_text,workflows.active_suffix,{file} (active)
+ui_text,workflows.not_active_hint,This file is not active yet. “Apply” makes it the active workflow file.
+ui_text,workflows.none_hint,“Apply” switches workflows off. This only works while no field of the schema uses a workflow.
+ui_text,workflows.file_missing,The active workflow file is missing from the folder – the applied text is shown. “Apply” writes it again.
+ui_text,workflows.file_mismatch,The file was changed outside this page and differs from the applied state – it only takes effect with “Apply”.
+ui_text,workflows.editor_aria,Workflow definition
+ui_text,workflows.renamed,"Workflow files now end in .lhwf: the active workflow file {from} is now called {to}. Its content and the active workflow are unchanged."
+ui_text,workflows.legacy,"Files with the old extension .puml are not recognised as workflow files: {list}. If they are workflow files, please rename them to .lhwf via FTP."
+ui_text,workflows.error_goto,Show line {line}
+ui_text,workflows.applied,Applied. Active workflow file: {file}.
+ui_text,workflows.applied_off,Applied. Workflows are switched off.
+ui_text,workflows.summary,Workflows in this file
+ui_text,workflows.summary_none,The file contains no workflow.
+ui_text,workflows.summary_item,"{name}: {states} states, {transitions} transition(s), initial state “{initial}”"
+ui_text,workflows.summary_entity,Class {entity}
+ui_text,workflows.summary_unused,not used by any class yet
+ui_text,tasks.heading,My tasks
+ui_text,tasks.intro,Tasks assigned to you directly or through one of your groups. Click a row to open the record.
+ui_text,tasks.loading,Loading …
+ui_text,tasks.load_error,Tasks could not be loaded: {error}
+ui_text,tasks.filter_aria,Display
+ui_text,tasks.filter_open,Open only
+ui_text,tasks.filter_all,Also show completed
+ui_text,tasks.empty_open,No open tasks
+ui_text,tasks.empty_all,No tasks
+ui_text,tasks.list_aria,Tasks
+ui_text,tasks.col_status,Status
+ui_text,tasks.col_record,Record
+ui_text,tasks.col_transition,Transition
+ui_text,tasks.col_by,Performed by
+ui_text,tasks.col_at,Time
+ui_text,tasks.col_assigned,Assigned to
+ui_text,tasks.status_open,open
+ui_text,tasks.status_done,completed
+ui_text,tasks.assigned_direct,You directly
+ui_text,tasks.assigned_group,Group {group}
+ui_text,tasks.assigned_group_unknown,through a group
+ui_text,tasks.by_unknown,unknown
+ui_text,settings.heading,Settings
+ui_text,settings.loading,Loading …
+ui_text,settings.saved,Saved.
+ui_text,settings.require_auth_for_read,Require authentication for read access as well
+ui_text,settings.require_auth_for_read_hint,"If this switch is on, GET requests without a valid sign-in or API key are no longer possible either – regardless of the publication status of individual records. Files of the media library remain reachable via their address."

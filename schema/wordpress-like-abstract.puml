@@ -1,0 +1,44 @@
+@startuml WordPressLikeInherit
+
+abstract class Basisinhalt {
+  + titel: string {title}
+  + inhalt: richtext
+  + veroeffentlicht: visibility
+  + erstellt_am: date?
+}
+
+class Beitrag extends Basisinhalt {
+  + kommentare_erlaubt: bool
+}
+
+class Seite extends Basisinhalt {
+  + reihenfolge: int
+}
+
+class Kategorie {
+  + id: int
+  + name: string {title}
+  + beschreibung: text?
+}
+
+class Tag {
+  + id: int
+  + name: string {title}
+}
+
+class Autor {
+  + id: int
+  + name: string {title}
+  + email: string?
+  + rolle: string
+}
+
+Beitrag "n" --> "1" Autor : geschrieben von {cascade}
+Beitrag "n" --> "1" Kategorie : gehört zu
+Beitrag "n" -- "n" Tag : hat
+
+Seite "n" --> "1" Autor : geschrieben von {cascade}
+
+Kategorie "n" --> "0..1" Kategorie : Unterkategorie von {cascade}
+
+@enduml

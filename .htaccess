@@ -1,0 +1,40 @@
+Options -Indexes
+DirectoryIndex index.php
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # API-Schlüssel ("Authorization: Bearer ..."): Manche Hoster (PHP als CGI/FastCGI) reichen den Header nicht an PHP
+    # durch. Hier wird er in die Umgebung kopiert (ApiKeys::bearerToken() liest HTTP_AUTHORIZATION bzw. nach dem
+    # Rewrite REDIRECT_HTTP_AUTHORIZATION).
+    RewriteRule ^ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # Statische Frontend-Dateien direkt ausliefern
+    RewriteRule ^assets/ - [L]
+
+    # Hochgeladene Dateien der Mediathek direkt ausliefern (öffentlich; media/.htaccess verhindert jede Skriptausführung)
+    RewriteRule ^media/ - [L]
+
+    # Alles andere (auch src/, vendor/, schema/, data/) läuft über Flight -> nie als Datei erreichbar
+    RewriteRule ^index\.php$ - [L]
+    RewriteRule ^ index.php [QSA,L]
+</IfModule>
+
+# Verteidigung in der Tiefe für die Oberfläche. Nur für HTML-Antworten (die Seite selbst), nicht für die JSON-API, assets/
+# und media/ (media/.htaccess setzt für SVG eine eigene CSP).
+# Die CSP ist gegen das gebaute Frontend getestet (e2e/tests/security-headers.spec.js) und erlaubt nur, was es braucht:
+#   script-src 'self'            nur die eigenen Dateien aus assets/, kein Inline-Skript, kein eval
+#   style-src-elem               assets/*.css und genau EIN eingebettetes <style>: das feste Stylesheet, das JointJS
+#                                (@joint/core 4.3.3) in jedes Diagramm schreibt - über seinen sha256-Wert. Ändert es sich
+#                                mit einer neuen JointJS-Version, nennt die Browser-Konsole den neuen Wert.
+#   style-src-attr               style="..."-Attribute: der Richtext-Editor (Toast UI) setzt sie laufend selbst
+#   style-src                    nur Rückfall für alte Browser, die -elem/-attr nicht kennen
+#   img-src 'self' data:         media/ und die als data:-URI eingebetteten Symbole des Richtext-Editors
+#   connect-src 'self'           die eigene API
+# Wer im Frontend Schriften, Bilder oder Skripte von einer anderen Adresse einbindet, muss die passende Direktive erweitern.
+<IfModule mod_headers.c>
+    # Einbetten in fremde Seiten verbieten (Clickjacking); frame-ancestors in der CSP ist das moderne Gegenstück
+    Header set X-Frame-Options "DENY" "expr=%{CONTENT_TYPE} =~ m#^text/html#i"
+    Header set Referrer-Policy "same-origin" "expr=%{CONTENT_TYPE} =~ m#^text/html#i"
+    Header set Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'sha256-c/PHNd78dqpHpfQbEJ/PIhwmQukJpGFNXtlAp6vOzDg='; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" "expr=%{CONTENT_TYPE} =~ m#^text/html#i"
+</IfModule>

@@ -1,0 +1,35 @@
+# Mediathek: hochgeladene Dateien werden direkt von Apache ausgeliefert, aber nie ausgeführt.
+# Verteidigung in der Tiefe - die Dateinamen erzeugt ohnehin das CMS (zufällig, nur Endungen aus einer festen Liste).
+Options -Indexes -ExecCGI
+
+# Keine Skript-Handler in diesem Verzeichnis (PHP als Apache-Modul bzw. per CGI/FPM-Handler)
+<IfModule mod_php.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php7.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php5.c>
+    php_flag engine off
+</IfModule>
+RemoveHandler .php .php3 .php4 .php5 .php7 .php8 .phtml .phar .pht .phps .cgi .pl .py .sh .shtml
+RemoveType .php .php3 .php4 .php5 .php7 .php8 .phtml .phar .pht .phps
+
+# Ausführbare bzw. serverseitig interpretierte Endungen gar nicht erst ausliefern (auch nicht als Quelltext)
+<FilesMatch "(?i)\.(php\d?|phtml|phar|pht|phps|cgi|pl|py|sh|shtml|asp|aspx|jsp|htaccess|htpasswd|ini)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+<IfModule mod_headers.c>
+    # Browser sollen den Typ nicht aus dem Inhalt raten (Content-Type kommt aus der geprüften Endung)
+    Header set X-Content-Type-Options "nosniff"
+    # SVG kann Skripte enthalten: direkt aufgerufen ohne jede Skriptausführung (in <img> laufen ohnehin keine)
+    <FilesMatch "(?i)\.svg$">
+        Header set Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox"
+    </FilesMatch>
+</IfModule>

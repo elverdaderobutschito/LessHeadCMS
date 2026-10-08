@@ -1,0 +1,51 @@
+@startuml Kursverwaltung
+
+package "Kursangebot" {
+
+  class Kurs {
+    + id: int
+    + titel: string {title}
+    + beschreibung: richtext
+    + preis: decimal
+    + aktiv: visibility
+  }
+
+  class Kursleiter {
+    + id: int
+    + name: string {title}
+  }
+
+  class Kategorie {
+    + id: int
+    + name: string {title}
+  }
+
+  Kurs "n" --> "1" Kategorie : gehört zu
+  Kurs "n" --> "1" Kursleiter : geleitet von {cascade}
+  Kategorie "n" --> "0..1" Kategorie : Unterkategorie von {cascade}
+
+}
+
+package "Mitgliederverwaltung" {
+
+  class Mitglied {
+    + id: int
+    + name: string {title}
+    + email: string
+    + mitglied_seit: date
+  }
+
+  class Buchung {
+    + id: int
+    + gebucht_am: date {title}
+    + status: string {title}
+  }
+
+  Buchung "n" --> "1" Mitglied : gebucht von {cascade}
+
+}
+
+Buchung "n" --> "1" Kurs : für Kurs {cascade}
+Mitglied "n" -- "n" Kurs : interessiert an {label}
+
+@enduml

@@ -1,0 +1,91 @@
+{
+    "packages": [
+        {
+            "name": "mikecao/flight",
+            "version": "v3.19.3",
+            "version_normalized": "3.19.3.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/flightphp/core.git",
+                "reference": "24640dcbcbda710a151316676ed8f02bfdec7aee"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/flightphp/core/zipball/24640dcbcbda710a151316676ed8f02bfdec7aee",
+                "reference": "24640dcbcbda710a151316676ed8f02bfdec7aee",
+                "shasum": ""
+            },
+            "require": {
+                "ext-json": "*",
+                "php": ">=7.4"
+            },
+            "require-dev": {
+                "ext-fileinfo": "*",
+                "ext-mbstring": "*",
+                "ext-pdo_sqlite": "*",
+                "flightphp/container": "^1.3",
+                "flightphp/runway": "^1.2",
+                "league/container": "^4.2",
+                "level-2/dice": "^4.0",
+                "phpstan/extension-installer": "^1.4",
+                "phpstan/phpstan": "^2.2",
+                "phpunit/phpunit": "^9.6",
+                "rregeer/phpunit-coverage-check": "^0.3.1",
+                "spatie/phpunit-watcher": "^1.23",
+                "squizlabs/php_codesniffer": "^4.0"
+            },
+            "suggest": {
+                "latte/latte": "Latte template engine (optional alternative to Twig)",
+                "phpstan/phpstan": "PHP Static Analyzer",
+                "tracy/tracy": "Tracy debugger",
+                "twig/twig": "Twig template engine (recommended for apps, e.g. flightphp/skeleton)"
+            },
+            "time": "2026-09-04T03:49:59+00:00",
+            "type": "library",
+            "installation-source": "dist",
+            "autoload": {
+                "files": [
+                    "flight/autoload.php"
+                ],
+                "psr-4": {
+                    "flight\\": "flight"
+                },
+                "classmap": [
+                    "flight/Flight.php"
+                ]
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Mike Cao",
+                    "email": "mike@mikecao.com",
+                    "homepage": "http://www.mikecao.com/",
+                    "role": "Original Developer"
+                },
+                {
+                    "name": "Franyer Sánchez",
+                    "email": "franyeradriansanchez@gmail.com",
+                    "homepage": "https://github.com/fadrian06",
+                    "role": "Maintainer"
+                },
+                {
+                    "name": "n0nag0n",
+                    "email": "n0nag0n@sky-9.com",
+                    "role": "Maintainer"
+                }
+            ],
+            "description": "Flight is a fast, simple, extensible framework for PHP. Flight enables you to quickly and easily build RESTful web applications. This is the maintained fork of mikecao/flight",
+            "homepage": "https://docs.flightphp.com",
+            "support": {
+                "issues": "https://github.com/flightphp/core/issues",
+                "source": "https://github.com/flightphp/core/tree/v3.19.3"
+            },
+            "install-path": "../mikecao/flight"
+        }
+    ],
+    "dev": false,
+    "dev-package-names": []
+}

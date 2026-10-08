@@ -1,0 +1,53 @@
+@startuml WordPressLike
+
+class Beitrag {
+  + id: int
+  + titel: string
+  + inhalt: richtext
+  + veroeffentlicht: visibility
+  + erstellt_am: date
+  + beitragsbild: media?
+}
+
+class Seite {
+  + id: int
+  + titel: string
+  + kurzfassung: string?
+  + inhalt: richtext
+  + veroeffentlicht: visibility
+  + erstellt_am: date
+}
+
+class Kategorie {
+  + id: int
+  + name: string
+  + beschreibung: text?
+}
+
+class Tag {
+  + id: int
+  + name: string
+}
+
+class Test {
+  + id: int
+  + name: string
+  + nummer: int?
+}
+
+class Autor {
+  + id: int
+  + name: string
+  + email: string?
+  + rolle: string
+}
+
+Beitrag "n" --> "1" Autor : geschrieben von
+Beitrag "n" --> "1" Kategorie : gehört zu
+Beitrag "n" -- "n" Tag : hat
+
+Seite "n" --> "1" Autor : geschrieben von
+
+Kategorie "n" --> "0..1" Kategorie : Unterkategorie von
+
+@enduml

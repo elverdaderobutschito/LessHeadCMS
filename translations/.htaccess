@@ -1,0 +1,24 @@
+# Sprachdateien (CSV) für den Import unter System -> Übersetzungen. Sie werden per FTP hier abgelegt und ausschließlich
+# über die Admin-API gelesen (GET /api/_translations/files, POST /api/_translations/import/…) - anders als media/ ist
+# dieses Verzeichnis nicht öffentlich. Die .htaccess im Hauptverzeichnis leitet ohnehin alles an index.php weiter;
+# das hier ist Verteidigung in der Tiefe: kein Listing, keine Skriptausführung, kein direkter Abruf.
+Options -Indexes -ExecCGI
+
+<IfModule mod_php.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php7.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php5.c>
+    php_flag engine off
+</IfModule>
+RemoveHandler .php .php3 .php4 .php5 .php7 .php8 .phtml .phar .pht .phps .cgi .pl .py .sh .shtml
+RemoveType .php .php3 .php4 .php5 .php7 .php8 .phtml .phar .pht .phps
+
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Deny from all
+</IfModule>
