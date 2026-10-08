@@ -1,0 +1,23 @@
+@startuml MinRequiredTest
+
+class Kunde {
+  + id: int
+  + name: string {title}
+}
+
+class Rechnung {
+  + id: int
+  + nummer: string {title}
+  + datum: date
+}
+
+class Position {
+  + id: int
+  + beschreibung: string {title}
+  + betrag: decimal
+}
+
+Rechnung "n" --> "1" Kunde : gehört zu
+Position "1..*" --> "1" Rechnung : gehört zu {cascade}
+
+@enduml

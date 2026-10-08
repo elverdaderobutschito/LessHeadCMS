@@ -1,0 +1,9 @@
+@startuml NnSelfTest
+
+class Nutzer {
+  + id: int
+  + name: string {title}
+}
+
+Nutzer "n" -- "n" Nutzer : folgt {label}
+Nutzer "n" -- "n" Nutzer : befreundet mit {label} {symmetric}

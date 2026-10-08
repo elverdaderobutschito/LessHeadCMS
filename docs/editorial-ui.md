@@ -11,7 +11,7 @@ _Part of the [LessHeadCMS documentation](../README.md)._
 
 * Forms are generated generically from `/api/{entity}/_schema` (text, textarea, Toast editor, checkbox, date, number, select,
   media tiles).
-* **Media library** („Mediathek“, system section, **any** logged-in role): global collection, independent of the
+* **Media library** („Mediathek“, system section; admins, otherwise only with the system area `media`, see [Roles and permissions](roles-and-permissions.md)): global collection, independent of the
   diagram, of all uploaded files (images, videos, audio, documents) as a table with preview (image or symbol with
   extension – for raster images the thumbnail generated on the server, a click opens the original), title/file name/kind/size, alt text, description, dimensions (read from the file),
   tags, uploaded by/at and „Verwendet“ (number of links in records). At the top an upload area (files by
@@ -143,11 +143,11 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   (`sessionStorage`, survives switching entities and reloading) and is discarded on logout – no storage on
   the server. Without a `package` block the sidebar stays exactly as before (flat list without heading/arrow). The
   section „System“ stays below it and cannot be collapsed.
-* **Test data** („Testdaten“, system section, `role = 'admin'` only): choose a count per entity (default 10, 0 = skip,
+* **Test data** („Testdaten“, system section, `role = 'admin'` or system area `testdata`): choose a count per entity (default 10, 0 = skip,
   at most 1000), „Generieren“ creates **additional** records with random content and shows a summary.
   Nothing is changed or deleted; for an empty database still delete `data/cms.sqlite` + `/bootstrap`.
   For details see `POST /api/_testdata/generate` under [User management](api-users.md).
-* **Users** („Nutzer“): menu item only visible for `role = 'admin'` (`GET /api/me` delivers the role; the server-side check in
+* **Users** („Nutzer“): tab „Nutzer“ of System → Rechteverwaltung, only visible for `role = 'admin'` or with the system area `users` (`GET /api/me` delivers the role; the server-side check in
   `/api/users` is the actual protection, hiding it in the menu is UX only). List with name/login name/e-mail/role/status
   and an edit dialog; „Neuer Nutzer“ additionally has an unmasked password field with a generator button (16 characters,
   cryptographic randomness via `crypto.getRandomValues`, with upper/lower-case letters, digits and special characters) – the admin

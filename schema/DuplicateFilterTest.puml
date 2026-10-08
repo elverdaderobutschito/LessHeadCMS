@@ -1,0 +1,42 @@
+@startuml DuplicateFilterTest
+
+enum Sprache {
+  DE
+  EN
+}
+
+class Artikel {
+  + id: int
+  + titel: string {title} {unique}
+  + inhalt: richtext
+  + sprache: Sprache
+  + veroeffentlicht: visibility?
+}
+
+class Tag {
+  + id: int
+  + name: string {title}
+  + sprache: Sprache
+}
+
+class Rubrik {
+  + id: int
+  + name: string {title}
+  + lang: Sprache
+}
+
+class Autor {
+  + id: int
+  + name: string {title}
+}
+
+class Profil {
+  + id: int
+  + biografie: text?
+}
+
+Artikel "n" -- "n" Tag : hat {filter_by:sprache}
+Artikel "n" --> "0..1" Rubrik : einsortiert in {filter_by:sprache=lang}
+Autor "1" --> "1" Profil : hat
+
+@enduml

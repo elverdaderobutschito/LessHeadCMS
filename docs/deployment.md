@@ -299,8 +299,11 @@ active schema); no bootstrap call needed.
 
 * **Authentication:** Writing and the UI are protected by login, **reading the API is public** (intended;
   drafts of entities with a `visibility` field excepted). The login has a rate limit (see [Rate limiting on login](api-users.md#rate-limiting-on-login)). Several users with the
-  roles `admin`/`redakteur` are managed via `/api/users` (see [User management](api-users.md)) – every logged-in role
-  may still write content, only `/api/users` itself is restricted to `admin`. Not included: an
+  roles `admin`/`redakteur`/`api` are managed via `/api/users` (see [User management](api-users.md)) – by default every
+  editor and API user may write all content, restrictable per entity, field and action via [Roles and permissions](roles-and-permissions.md); the
+  system areas `users`, `media`, `languages`, `translations` and `testdata` are denied for them until granted there, and
+  schema editing, workflows, settings and the rights management itself stay reserved for `admin`. API users
+  authenticate with a key instead of a login (see [API users and API keys](api-users.md)). Not included: an
   admin-side password reset for other users (stays reserved for `PUT /api/me/password`, i.e. the user themselves).
   Operate over HTTPS only (otherwise password and session cookie travel over the wire in plain text).
 * **Forgotten password (admin):** download `data/cms.sqlite`, in `users` replace the `password_hash` of the admin with a new
@@ -319,7 +322,7 @@ active schema); no bootstrap call needed.
   sandbox`) – in addition to the extension and content check on upload. Size limit per file in `config.php` via
   `define('MEDIA_MAX_MB', 20);` (default 20 MB); if the hoster's `upload_max_filesize`/`post_max_size` are lower,
   their value applies (the media library shows the effective limit). Thumbnails need GD (see [REST API](rest-api.md)
-  "Thumbnails"); without GD the preview loads the original. Tags no longer in use stay (no deletion of tags in the MVP).
+  "Thumbnails"); without GD the preview loads the original. Tags no longer in use are not removed automatically; delete them via „Tags verwalten“ in the media library.
 * **Apache only:** The `.htaccess` protects `data/`, `schema/`, `src/` and `vendor/` by routing everything except `/assets/` and
   `/media/` through `index.php`. With nginx, access to these folders (above all `data/cms.sqlite`) must be blocked in the server configuration
   – and for `media/` what `media/.htaccess` does there must be replicated (no script execution, no listing).

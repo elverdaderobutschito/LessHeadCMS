@@ -74,7 +74,7 @@ user data (uploaded by) is deliberately not included there. `POST`/`PUT` accept 
 desired order (`"galerie": [7, 3]`), as well as the objects read back (`id` is what counts); duplicate IDs count
 once. If the field is missing in a `PUT`, the list stays unchanged. Unknown ID → `422` („Medium #9 existiert nicht“).
 
-**Media library (any logged-in role; a session is always needed, also for GET → otherwise `401`/`403`; class `src/Media.php`):**
+**Media library (admins, otherwise only with the system area `media`; a session is always needed, also for GET → otherwise `401`/`403`; class `src/Media.php`):**
 
 | Method  | Path                    | Description |
 |---------|-------------------------|--------------|

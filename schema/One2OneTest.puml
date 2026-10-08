@@ -1,0 +1,27 @@
+@startuml OneToOneTest
+
+class Nutzer {
+  + id: int
+  + name: string {title}
+}
+
+class Profil {
+  + id: int
+  + bio: text
+}
+
+class Ausweis {
+  + id: int
+  + nummer: string {title}
+}
+
+class Person {
+  + id: int
+  + name: string {title}
+}
+
+Profil "1" --> "1" Nutzer : gehört zu
+Ausweis "0..1" --> "0..1" Person : gehört zu
+Person "0..1" --> "0..1" Person : Nachfolger von
+
+@enduml

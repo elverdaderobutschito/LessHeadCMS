@@ -1,0 +1,11 @@
+@startuml WorkflowTest
+
+class Artikel {
+  + id: int
+  + titel: string {title}
+  + inhalt: text?
+  + veroeffentlicht: visibility?
+  + state: ArtikelWorkflow
+}
+
+@enduml

@@ -46,13 +46,13 @@ are translated by phase 2 (see below, all fixed frontend texts). **Not** transla
   can be linked directly: `#/_localization/languages`, `#/_localization/translations`. The former addresses
   (`#/_languages`, `#/_translations`) redirect there. Each tab is visible for admins, otherwise only with the
   permission on the system area `languages` or `translations`.
-* **Tab Sprachen** (languages; admin only): first set the **default language** – the language the diagram is written
+* **Tab Sprachen** (languages; admins or system area `languages`): first set the **default language** – the language the diagram is written
   in (e.g. „Deutsch“/„de“). This is only its label in the switcher, nothing changes about the diagram texts. Then
   add further languages (code freely chosen, 1–20 characters of letters, digits, `-`, `_`, unique regardless of
   case; name up to 60 characters) and delete them – including all translations of this language; users who
   had chosen it see the default language again. The default language cannot be deleted (`409`), there is
   always exactly one.
-* **Tab Übersetzungen** (translations; admin only): at the top the language (all except the default language), below it all translatable
+* **Tab Übersetzungen** (translations; admins or system area `translations`): at the top the language (all except the default language), below it all translatable
   elements of the **active** schema grouped by class, per row kind, original text (as form and list show it,
   i.e. with `capitalize()`) and input field; empty = "not translated yet" (the placeholder shows the original). Saving is done
   **collectively** via „Speichern“ (one transaction, changed rows are marked; an empty field removes the
@@ -79,8 +79,8 @@ are translated by phase 2 (see below, all fixed frontend texts). **Not** transla
   (`user_language_prefs`) and applies immediately to sidebar, headings, form labels, column headers, filters,
   column selection, enum dropdowns and cells as well as the label of referenced records ("Course #3 – …"). If a
   translation is missing, the original appears. An enum dropdown shows the translated text, the original value is still
-  what is stored. The name of an enum itself currently appears nowhere in the UI; its translation is prepared for later
-  phases.
+  what is stored. The name of an enum itself can be translated, but the translation is not displayed anywhere
+  yet: the name only appears in the schema diagram and on the translation page, there always in the original.
 * **Stable IDs:** Translations are bound to `schema_ids` (`translations.ref_id`; enum values: ID of the enum + value in plain text).
   A rename by migration (`{renamed_from}`) therefore keeps them; if a migration removes an element, its
   translations are deleted along with it (like the layout position), as are those of a removed enum value.
@@ -109,8 +109,8 @@ are translated by phase 2 (see below, all fixed frontend texts). **Not** transla
   (title, field labels, accessibility hint), upload area (button, size hint, status per file, client-side
   size check – the status texts are only translated when rendering and change along with a language switch), media field in the
   form („Mediathek durchsuchen“, ←/→/× with `title` and `aria-label`, „Keine Medien ausgewählt.“) and media selection dialog.
-  Errors from the server (rejected uploads, 409 on deletion, required field) stay German; dates and numbers are still
-  formatted the German way.
+  Errors from the server (rejected uploads, 409 on deletion, required field) stay German; dates and numbers follow the
+  date and number format of the display language (see "Date and number format per language").
 * **User management (2d):** list (heading, „Neuer Nutzer“, columns, role and status names, Bearbeiten, notice with
   the initial password after creation), dialog „Neuer Nutzer“ (title, labels, role selection, hint about the first login,
   Anlegen/Abbrechen; generator button and rule hint via the existing keys `password.generate`/`password.hint`) and

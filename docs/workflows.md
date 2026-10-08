@@ -1,4 +1,4 @@
-# Workflows (phase 1: state machine, enforcement, management)
+# Workflows (phase 1: state machine, enforcement, management; phase 2: "My tasks")
 
 _Part of the [LessHeadCMS documentation](../README.md)._
 
@@ -7,8 +7,16 @@ A workflow gives a class a state (`draft`, `review`, …) that can only be chang
 no entity gets a state, `PUT` works as before, the model and all API responses are byte-identical to the
 state without this feature. The same applies to every class without a workflow field, even if workflows are active for other classes.
 
-Not included yet (later phases): "My tasks" UI, notifications, visual workflow editor,
-dynamic assignment targets (`field:`).
+**Scope:**
+
+* **Included:** the state machine with enforced transitions, the management page System → Workflows (workflow files are
+  edited as text, with check and apply) and "My tasks" – the sidebar entry „Meine Aufgaben“ with the page of the own
+  tasks (`GET /api/_tasks/mine`, see "Transitions and tasks").
+* **Partly included – notifications:** the only hint at a new task is the counter of the open tasks at the sidebar entry
+  „Meine Aufgaben“. It is loaded at the start and after every own transition (no polling), so it is only seen by a user who
+  is logged in and reloads. There is no e-mail, no push message and no other active notification.
+* **Not included:** a visual workflow editor (the diagram editor only covers the main schema) and dynamic assignment
+  targets (`assign=field:…`) – `assign=` only accepts `group:<name>`, `user:<login name>` and `initiator`.
 
 ## Workflow files
 

@@ -1,0 +1,45 @@
+@startuml NnUniqueTest
+
+class Artikel {
+  + id: int
+  + titel: string {title}
+}
+
+class Tag {
+  + id: int
+  + name: string {title}
+}
+
+class Gutschein {
+  + id: int
+  + code: string {unique} {title}
+  + rabatt_prozent: int
+}
+
+class Schueler {
+  + id: int
+  + name: string {title}
+}
+
+class Kurs {
+  + id: int
+  + titel: string {title}
+}
+
+class Lehrer {
+  + id: int
+  + name: string {title}
+}
+
+class Teilnahme {
+  + id: int
+}
+
+Artikel "n" -- "n" Tag : Haupttags {label}
+Artikel "n" -- "n" Tag : Zusatztags {label}
+
+Teilnahme "n" --> "1" Schueler : Schüler {unique}
+Teilnahme "n" --> "1" Kurs : besuchter Kurs {unique}
+Teilnahme "n" --> "1" Lehrer : unterrichtet von {unique}
+
+@enduml
