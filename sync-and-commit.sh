@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ── Konfiguration ──────────────────────────────────────────────────────────
-SOURCE_DIR="/home/butsch/MEGA/Daten auf Thinkpad/UB-Internetberatung/Projekte/LessHeadCMS/deploy"
+SOURCE_DIR="/home/butsch/LessHeadCMS-dev/deploy"
 TARGET_DIR="$HOME/LessHeadCMS-public"
 BRANCH="main"
 
