@@ -3,6 +3,10 @@
   "description": "A headless CMS that runs on any shared hosting",
   "type": "project",
   "license": "AGPL-3.0-or-later",
+  "require": {
+    "php": ">=7.4",
+    "mikecao/flight": "^3.19"
+  },
   "require": { "php": ">=7.4" },
   "homepage": "https://github.com/elverdaderobutschito/LessHeadCMS",
   "support": { "issues": "https://github.com/elverdaderobutschito/LessHeadCMS/issues" }
