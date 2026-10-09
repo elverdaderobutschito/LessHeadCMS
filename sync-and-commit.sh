@@ -20,6 +20,7 @@ rsync -av --delete \
   --exclude='.gitignore' \
   --exclude='.git' \
   --exclude='sync-and-commit.sh' \
+  --exclude='composer.json' \
   "$SOURCE_DIR/" "$TARGET_DIR/"
 
 cd "$TARGET_DIR"

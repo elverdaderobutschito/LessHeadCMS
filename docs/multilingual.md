@@ -2,6 +2,14 @@
 
 _Part of the [LessHeadCMS documentation](../README.md)._
 
+"Multilingual" means two different things, and this file covers both:
+
+* **Labels of the schema and fixed UI texts** (System → Lokalisierung) – a feature of the editorial UI, described in the
+  following sections. The stored data stays the same for every user.
+* **Multilingual data content** – e.g. an article that exists in German and in English as two separate but linked
+  records. There is no feature of its own for this; it is a modelling pattern in the diagram, see
+  [Multilingual data content (modelling pattern)](#multilingual-data-content-modelling-pattern) at the end of this file.
+
 The labels from the diagram – entity names, field and relationship labels, enum values – can be translated into further
 languages (`src/Languages.php`). Every user chooses their display language themselves. Fixed texts of the UI
 are translated by phase 2 (see below, all fixed frontend texts). **Not** translated are messages from the server
@@ -195,3 +203,86 @@ hard disk or from the directory `translations/`, which is filled via FTP like `s
 * **`translations/` is not public:** only the admin API reads the files. The `.htaccess` in the main directory routes
   everything to `index.php` anyway; the separate `translations/.htaccess` additionally blocks any retrieval (`403`), the listing and
   any script execution. Only files with the extension `.csv` and names made of letters, digits, `.`, `_`, `-` are listed.
+
+## Multilingual data content (modelling pattern)
+
+Everything above translates **labels**: the data itself is stored once and looks the same for every user. If the **content**
+is to exist in several languages – an article in German and in English – this is modelled in the diagram, with means that
+exist anyway: an `enum` for the language, a self-reference to the original and `{unique}`. It is a pattern, not a
+function: no code of its own, no setting, nothing the UI or the API treat specially. Every language version is a
+record of its own with its own `id`.
+
+The pattern is independent of System → Lokalisierung: the values of `Sprache` are data, not the display languages set up
+there (the two lists are not connected; the enum values can be translated like those of any other enum).
+
+**Variant 1 – without delete cascade (default, restrict):**
+
+```plantuml
+enum Sprache {
+  DE
+  EN
+  FR
+  ES
+}
+
+class Artikel {
+  + titel: string {title}
+  + inhalt: richtext
+  + sprache: Sprache {unique}
+}
+Artikel "n" --> "0..1" Artikel : Original von {unique}
+```
+
+**Variant 2 – with `{cascade}` (deleting the original deletes all its translations along with it):**
+
+```plantuml
+enum Sprache {
+  DE
+  EN
+  FR
+  ES
+}
+
+class Artikel {
+  + titel: string {title}
+  + inhalt: richtext
+  + sprache: Sprache {unique}
+}
+Artikel "n" --> "0..1" Artikel : Original von {cascade} {unique}
+```
+
+How it works (the rules themselves are in the [PlantUML rules](plantuml-syntax.md): "Self-reference", "`{unique}` marker",
+"Delete behaviour, `{cascade}` marker"):
+
+1. **The self-reference links every translation to its original.** `Artikel "n" --> "0..1" Artikel : Original von` yields
+   the optional column `original_von_artikel_id`. A translation has the `id` of its original there, the original itself has
+   `NULL`. An original and its translations form a translation group.
+2. **`{unique}` on `sprache` and on the relation form one combined rule**, `UNIQUE (sprache, original_von_artikel_id)`:
+   within a translation group every language may occur only once. A second English translation of the same original is
+   rejected with `409` (on creation and on editing, see "`unique_fields` in `_schema`" in the [REST API](rest-api.md)). `NULL` never
+   counts as a duplicate, as in SQL – so any number of originals in the same language can exist side by side.
+3. **The two variants differ only when an original is deleted.** Without `{cascade}`, the `DELETE` is rejected with `409` as
+   long as translations still exist („Kann nicht gelöscht werden: 3 abhängige Zeile(n) in 'artikel'.“); the translations
+   have to be deleted first. With `{cascade}`, all translations are deleted along with the original. Translations can be
+   deleted individually in both variants.
+   * Restrict (variant 1) fits when deleting all translations by accident must not happen with a single click, or when a
+     translation should be able to live on (assign it to another original or clear „Original von“ first).
+   * `{cascade}` (variant 2) fits when a translation makes no sense without its original and the editors should not have
+     to clean up every language version by hand.
+
+What the rule does **not** cover, because the original has `NULL` in the relation column and is therefore not part of
+the combination:
+
+* A translation can have the same language as its original (original `DE`, translation `DE` – once per group).
+* A translation can itself be chosen as the "original" of another record (a chain instead of a flat group). Only a cycle
+  is prevented (see cycle protection in the [Editorial UI](editorial-ui.md) / [REST API](rest-api.md)). Convention: always
+  link to the actual original. With `{cascade}` such chains are deleted along recursively.
+
+**Related records are not narrowed down by language on their own.** If `Artikel` has an n:n relationship to a class that
+carries a language as well (e.g. `Tag` with its own `sprache: Sprache`), the form offers all tags, not only those in the
+language of the article being edited. For this there is the marker `{filter_by:sprache}` on the relationship – see
+"`{filter_by:field}`" in the [PlantUML rules](plantuml-syntax.md) and "Filtered selection" in the [Editorial UI](editorial-ui.md).
+It narrows down the selection in the form only; the API does not check it.
+
+**Reading via the API:** all translations of article 1 with `GET /api/artikel?eq[original_von_artikel_id]=1`, a single
+language additionally with `&eq[sprache]=EN` (see "Lists: paging, sorting, filtering" in the [REST API](rest-api.md)).

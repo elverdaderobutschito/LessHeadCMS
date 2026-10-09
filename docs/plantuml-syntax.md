@@ -137,7 +137,8 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   `{unique}` group; several independent rules in one class (e.g. `code` unique **and** separately `name`
   unique) cannot be expressed at present – if you mark both, the rule "combination of `code` and
   `name`" results. Schema errors: `{unique}` on an n:n relation (the link table is unique per pair anyway), on the field
-  `id` (unique anyway) and twice on one line.
+  `id` (unique anyway) and twice on one line. Example with a field and a self-reference in one group:
+  [Multilingual data content (modelling pattern)](multilingual.md#multilingual-data-content-modelling-pattern).
 * `A "n" -- "n" B : label` → link table `a_b` (`a_id`, `b_id`, `ON DELETE CASCADE`: deleting one of the two
   rows only removes the link, it never blocks), API list `b_ids`. With **one** n:n relationship from A to B
   these names do not depend on the label.
@@ -163,6 +164,8 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   (one column each, e.g. `Kategorie : Unterkategorie von` and `Kategorie : verwandt mit` →
   `unterkategorie_von_kategorie_id` / `verwandt_mit_kategorie_id`); two without a label or with the same label collide like
   any other duplicate relation (see above). Cycle protection: see [Editorial UI](editorial-ui.md) / [REST API](rest-api.md).
+  A practical application of self-reference, `{unique}` and `{cascade}` together: language versions of a record, see
+  [Multilingual data content (modelling pattern)](multilingual.md#multilingual-data-content-modelling-pattern).
 * **`{filter_by:field}` on an n:1, 1:1 or n:n relation** (`Artikel "n" -- "n" Tag : hat {filter_by:sprache}`):
   filtered selection in the form (see [Editorial UI](editorial-ui.md)). The source is the class in whose form the selection is made
   (the one with the FK column or, for n:n, the one named first), the target the class whose rows are offered for selection.
