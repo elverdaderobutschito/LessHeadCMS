@@ -3,3 +3,4 @@ data/*
 media/*
 !media/.htaccess
 config.php
+sync-and-commit.sh
