@@ -817,3 +817,21 @@ ui_text,settings.loading,Loading …
 ui_text,settings.saved,Saved.
 ui_text,settings.require_auth_for_read,Require authentication for read access as well
 ui_text,settings.require_auth_for_read_hint,"If this switch is on, GET requests without a valid sign-in or API key are no longer possible either – regardless of the publication status of individual records. Files of the media library remain reachable via their address."
+ui_text,settings.save,Save
+ui_text,settings.number_range,Please enter a whole number from {min} to {max}.
+ui_text,settings.group_login,Sign-in
+ui_text,settings.login_rate_limit_max,Failed attempts allowed
+ui_text,settings.login_rate_limit_max_unit,failed attempts
+ui_text,settings.login_rate_limit_max_hint,"This many wrong passwords are allowed per username and per IP address within the time window; the next attempt is rejected – even with the correct password. Also applies to the current password when changing the password. Default: 5, allowed: {min} to {max}."
+ui_text,settings.login_rate_limit_window_minutes,Time window
+ui_text,settings.login_rate_limit_window_minutes_unit,minutes
+ui_text,settings.login_rate_limit_window_minutes_hint,"Failed attempts count for this long, so a lock lasts at most this long as well. Default: 15, allowed: {min} to {max} (24 hours)."
+ui_text,settings.group_media,Media library
+ui_text,settings.media_max_mb,Maximum file size
+ui_text,settings.media_max_mb_unit,MB
+ui_text,settings.media_max_mb_hint,"The media library rejects larger files on upload; existing files are not affected. Default: 20 (or MEDIA_MAX_MB from config.php), allowed: {min} to {max}."
+ui_text,settings.media_php_limit,The server currently allows at most {size} per file (PHP settings upload_max_filesize/post_max_size). A higher value only takes effect once the hoster raises these limits.
+ui_text,settings.group_schema,Schema backups
+ui_text,settings.schema_backup_keep,Backups kept
+ui_text,settings.schema_backup_keep_unit,backups
+ui_text,settings.schema_backup_keep_hint,"The database is backed up before every schema change; this many backups are kept, older ones are deleted on the next “Apply”. Default: 5 (or SCHEMA_BACKUP_KEEP from config.php), allowed: {min} to {max}."

@@ -160,17 +160,35 @@ with `unauthorized` instead of `invalid_api_key`), the header does not arrive.
 Settings of the installation that are changed in the admin area instead of in `config.php` (`src/Settings.php`, stored
 as rows of `_meta`, read on every request – a change applies at once, without a new bootstrap). `GET /api/_settings`
 returns all of them as `{name: value}`, `PUT /api/_settings` changes the ones contained in the body (`422` for an unknown
-name or a wrong type); both for `role = admin` only. The available settings are defined in `Settings::DEFINITIONS`.
+name, a wrong type or a number outside the allowed range – then nothing is saved, the message is in `errors.<name>`);
+both for `role = admin` only. The available settings are defined in `Settings::DEFINITIONS`. A setting that was never
+saved has no row and keeps its default, so an existing installation behaves as before.
+
+On the page, the switch saves at once; the numbers are entered in the groups „Anmeldung“, „Mediathek“ and
+„Schema-Sicherungen“ and saved together with „Speichern“ (only the changed values are sent). Numbers are whole numbers
+(JSON integers, not strings).
 
 | Setting | Default | Effect |
 |---------|---------|--------|
 | `require_auth_for_read` | `false` | „Authentifizierung auch für Lesezugriffe erforderlich“. `false`: reading (`GET`) is public as described under "REST API". `true`: **every** request to the REST API without a valid session or API key is `401` – also `GET` on entities and rows that are published (`visibility = true`); with a session whose initial password has not been changed yet `403 password_change_required`. |
 
-Not affected, because the login page needs them: `GET /`, `/assets/`, `GET /api/me`, `POST /api/login` and
+| `login_rate_limit_max` | `5` | „Erlaubte Fehlversuche“, `3` to `100`: failed attempts allowed per user name and per IP within the time window; the next attempt is locked. See [Rate limiting on login](#rate-limiting-on-login). |
+| `login_rate_limit_window_minutes` | `15` | „Zeitfenster“ in minutes, `1` to `1440` (24 h): how long a failed attempt counts, and with that how long a lock lasts at most. |
+| `media_max_mb` | `20`, or `MEDIA_MAX_MB` from `config.php` | „Maximale Dateigröße“ per file of the media library in MB, `1` to `2048`. A saved value takes precedence over `config.php`. The PHP limits `upload_max_filesize`/`post_max_size` still apply if they are lower – the page then shows a note with the effective limit (`GET /api/_media/limits`). Files already uploaded are not touched. |
+| `schema_backup_keep` | `5`, or `SCHEMA_BACKUP_KEEP` from `config.php` | „Aufbewahrte Sicherungen“, `1` to `100`: backup pairs kept before schema changes (see [Deployment](deployment.md)). A saved value takes precedence over `config.php`; older backups are deleted on the next „Anwenden“, not when saving. |
+
+All of them apply at once: a lower `login_rate_limit_max` also locks whoever already has that many failed attempts in the
+window, a shorter window releases existing locks earlier. The session of a logged-in admin is not affected by a lock, so
+the values can still be corrected.
+
+`require_auth_for_read` – not affected, because the login page needs them: `GET /`, `/assets/`, `GET /api/me`, `POST /api/login` and
 `GET /api/_ui_texts` (texts of the UI only). **Also not affected: the files of the media library** – Apache delivers
 `/media/…` directly, without PHP; whoever knows the address of a file can fetch it.
 
 ### Rate limiting on login
+
+Threshold and time window are settings (`login_rate_limit_max`, `login_rate_limit_window_minutes`, see
+[Settings](#settings-api_settings-system--einstellungen)); the numbers below are the defaults (5 failed attempts, 15 minutes).
 
 **Also for `current_password`** in the voluntary password change (`PUT /api/me/password`): a wrong current
 password counts as a failed attempt in the same counters (user name of the logged-in account + IP), when the limit is reached

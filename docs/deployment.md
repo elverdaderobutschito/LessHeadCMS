@@ -138,7 +138,8 @@ The active diagram of an **already populated** installation can be edited as tex
    **If the backup fails** (no write permission, no disk space), „Anwenden“ aborts with `500 backup_failed` and
    a clear message before anything is changed in the database. If the change fails afterwards, the backup just created
    is removed again (the database is unchanged after all). The last **5** pairs are kept
-   (`define('SCHEMA_BACKUP_KEEP', 5);` in `config.php`); older ones are deleted together after a successful
+   (changeable under System → Einstellungen, „Aufbewahrte Sicherungen“, or with `define('SCHEMA_BACKUP_KEEP', 5);`
+   in `config.php` – a value saved in the admin area takes precedence); older ones are deleted together after a successful
    apply. If the database is larger than 50 MB (`SCHEMA_BACKUP_WARN_MB`), System → Schema shows a notice about the
    storage needed (size × count). The page lists the existing pairs; `data/` is blocked via `.htaccess`, the
    backups cannot be retrieved over the web. Older backups from before the database copies
@@ -156,7 +157,7 @@ beforehand), the server writes the text stored in the database (`_meta.schema_so
 `up_to_date` afterwards. If something fails before the swap, everything stays unchanged (and the backup just created is
 removed). Older backups with only a `.puml` cannot be restored. Uploaded files in `media/`
 stay untouched (media that were only uploaded after the backup then lie in `media/` without an entry). The
-retention (`SCHEMA_BACKUP_KEEP`) only cleans up on the next „Anwenden“, so the backup of the state before stays
+retention („Aufbewahrte Sicherungen“ / `SCHEMA_BACKUP_KEEP`) only cleans up on the next „Anwenden“, so the backup of the state before stays
 in addition for the time being.
 
 **Restoring a backup (emergency, manually via FTP – if the UI can no longer be reached):**
@@ -319,8 +320,9 @@ active schema); no bootstrap call needed.
   access control. Deliberate decision, for details and the recommendation see "Media files are publicly reachable"
   under [REST API](rest-api.md); **do not upload anything confidential**. `media/.htaccess` prevents any script execution there (PHP handler off, `.php`/`.phtml`/… → `403`,
   no directory listing, `X-Content-Type-Options: nosniff`, SVG called directly only with `Content-Security-Policy:
-  sandbox`) – in addition to the extension and content check on upload. Size limit per file in `config.php` via
-  `define('MEDIA_MAX_MB', 20);` (default 20 MB); if the hoster's `upload_max_filesize`/`post_max_size` are lower,
+  sandbox`) – in addition to the extension and content check on upload. Size limit per file under System → Einstellungen
+  („Maximale Dateigröße“) or in `config.php` via `define('MEDIA_MAX_MB', 20);` (default 20 MB; a value saved in the admin
+  area takes precedence); if the hoster's `upload_max_filesize`/`post_max_size` are lower,
   their value applies (the media library shows the effective limit). Thumbnails need GD (see [REST API](rest-api.md)
   "Thumbnails"); without GD the preview loads the original. Tags no longer in use are not removed automatically; delete them via „Tags verwalten“ in the media library.
 * **Apache only:** The `.htaccess` protects `data/`, `schema/`, `src/` and `vendor/` by routing everything except `/assets/` and

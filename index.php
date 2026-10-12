@@ -229,7 +229,7 @@ Flight::route('GET /api/_schema/source', function () {
             // immer mit dem aktiven Schema in der Datenbank
             'file_matches_active' => hash_equals((string) Database::getMeta($pdo, 'schema_hash'), hash('sha256', $source)),
             // Sicherungen vor jedem Anwenden (data/schema-backups/): Liste, Aufbewahrung, ggf. Speicherplatz-Hinweis
-            'backup' => SchemaBackup::overview(),
+            'backup' => SchemaBackup::overview($pdo),
         ]];
     });
 });
@@ -375,7 +375,7 @@ function workflowBase(PDO $pdo): array
 Flight::route('GET /api/_workflow/files', function () {
     Http::adminApi(function (Users $users, PDO $pdo) {
         Workflows::ensureTasks($pdo);
-        return [200, Workflows::files($pdo) + ['backup' => SchemaBackup::overview()]];
+        return [200, Workflows::files($pdo) + ['backup' => SchemaBackup::overview($pdo)]];
     });
 });
 
@@ -580,8 +580,8 @@ Flight::route('POST /api/_media', function () {
 });
 
 Flight::route('GET /api/_media/limits', function () {
-    Http::userApi(function () {
-        return [200, Media::limits()];
+    Http::userApi(function (Cms $cms, PDO $pdo) {
+        return [200, Media::limits($pdo)];
     }, 'media');
 });
 

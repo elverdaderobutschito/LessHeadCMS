@@ -31,7 +31,7 @@ use PDO;
  *   2026-10-01_14-30-00_kursverwaltung.puml
  *
  * (for two applies in the same second with "-2" etc. appended to the timestamp). The last
- * Config::schemaBackupKeep() pairs are kept (default 5); older pairs are deleted together after a successful apply.
+ * Settings::SCHEMA_BACKUP_KEEP pairs are kept (default 5); older pairs are deleted together after a successful apply.
  * data/ is blocked via .htaccess, so the backups cannot be retrieved over the web. Restoring: restore()
  * (System -> Schema, „Wiederherstellen“), if need be via FTP (README).
  *
@@ -326,9 +326,9 @@ final class SchemaBackup
     }
 
     /** Overview for System -> Schema: list, retention, database size and possibly a disk space notice */
-    public static function overview(): array
+    public static function overview(PDO $pdo): array
     {
-        $keep = Config::schemaBackupKeep();
+        $keep = Settings::get($pdo, Settings::SCHEMA_BACKUP_KEEP);
         $size = is_file(Config::dbFile()) ? (int) filesize(Config::dbFile()) : 0;
         $warn = Config::schemaBackupWarnBytes();
         $mb = function (int $bytes): string {

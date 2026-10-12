@@ -51,10 +51,13 @@ final class Auth
     /** Hash of a password that is never assigned: evens out the response time for an unknown user name. */
     private const DUMMY_HASH = '$2y$10$zVX75/zigYYjupG4EDSDXuw7idv9LFjo1/Cojol17x0lXI2XQJ.6O';
 
-    /** Rate limit: from this many failed attempts within the time window on, the next login attempt is rejected with 429. */
+    /**
+     * Rate limit: from this many failed attempts within the time window on, the next login attempt is rejected with 429.
+     * Defaults - both can be changed under System → Einstellungen (Settings::LOGIN_RATE_LIMIT_*), see lockedFor().
+     */
     public const RATE_LIMIT_MAX = 5;
     public const RATE_LIMIT_WINDOW = 900; // 15 minutes
-    /** Entries in login_attempts older than this are deleted on every login call. */
+    /** Entries in login_attempts older than this are deleted on every login call (the longest time window possible). */
     private const ATTEMPTS_RETENTION = '-1 day';
 
     private const ATTEMPTS_DDL = 'CREATE TABLE IF NOT EXISTS login_attempts (
@@ -214,7 +217,7 @@ final class Auth
         $pdo->exec("DELETE FROM login_attempts WHERE attempted_at < datetime('now', '" . self::ATTEMPTS_RETENTION . "')");
         $name = is_string($username) ? substr($username, 0, 255) : '';
         $ip = self::clientIp();
-        $wait = max(self::retryAfter($pdo, 'username', $name), self::retryAfter($pdo, 'ip', $ip));
+        $wait = self::lockedFor($pdo, $name, $ip);
         if ($wait > 0) {
             throw new ApiException(
                 429,
@@ -347,7 +350,7 @@ final class Auth
      *    Wrong or missing -> 422 on the field current_password. Protects a session someone left open from having the
      *    password taken over and the owner locked out.
      *
-     * Rate limit for current_password: the same lock as for the login (login_attempts, RATE_LIMIT_MAX failed attempts per
+     * Rate limit for current_password: the same lock as for the login (login_attempts, the configured number of failed attempts per
      * user name or IP within the time window, then 429). The session binding alone is not enough - precisely the attacker
      * with someone else's session could otherwise guess as often as they like. The counters are shared with the login:
      * failed attempts here also lock the login of this account (just like failed login attempts), a successful check
@@ -372,7 +375,7 @@ final class Auth
             $pdo->exec(self::ATTEMPTS_DDL); // idempotent, as for the login
             $name = substr($user['username'], 0, 255);
             $ip = self::clientIp();
-            $wait = max(self::retryAfter($pdo, 'username', $name), self::retryAfter($pdo, 'ip', $ip));
+            $wait = self::lockedFor($pdo, $name, $ip);
             if ($wait > 0) {
                 $message = 'Zu viele Fehlversuche, bitte später erneut versuchen';
                 throw new ApiException(
@@ -519,15 +522,23 @@ final class Auth
         return $ip !== '' ? substr($ip, 0, 64) : 'unknown';
     }
 
+    /** Seconds until the lock for this user name or this IP ends (the longer one counts); 0 = not locked */
+    private static function lockedFor(PDO $pdo, string $name, string $ip): int
+    {
+        $max = (int) Settings::get($pdo, Settings::LOGIN_RATE_LIMIT_MAX);
+        $window = 60 * (int) Settings::get($pdo, Settings::LOGIN_RATE_LIMIT_WINDOW_MINUTES);
+        return max(self::retryAfter($pdo, 'username', $name, $max, $window), self::retryAfter($pdo, 'ip', $ip, $max, $window));
+    }
+
     /**
      * Seconds until the lock for this counter (column username OR ip) ends; 0 = not locked.
-     * Locked is whoever has at least RATE_LIMIT_MAX failed attempts within the time window. The lock ends as soon as
-     * enough old attempts have expired that fewer than RATE_LIMIT_MAX count again (with exactly MAX attempts, that is
+     * Locked is whoever has at least $max failed attempts within the time window ($window seconds). The lock ends as
+     * soon as enough old attempts have expired that fewer than $max count again (with exactly $max attempts, that is
      * when the oldest one expires).
      *
      * @param string $column only the constants 'username' or 'ip' (is inserted into SQL)
      */
-    private static function retryAfter(PDO $pdo, string $column, string $value): int
+    private static function retryAfter(PDO $pdo, string $column, string $value, int $max, int $window): int
     {
         if ($column !== 'username' && $column !== 'ip') {
             throw new \InvalidArgumentException('Ungültige Spalte');
@@ -535,17 +546,17 @@ final class Auth
         $stmt = $pdo->prepare(
             "SELECT CAST(strftime('%s', attempted_at) AS INTEGER) AS ts, CAST(strftime('%s', 'now') AS INTEGER) AS now
                FROM login_attempts
-              WHERE $column = ? AND attempted_at > datetime('now', '-" . (int) self::RATE_LIMIT_WINDOW . " seconds')
+              WHERE $column = ? AND attempted_at > datetime('now', '-$window seconds')
               ORDER BY attempted_at ASC, id ASC"
         );
         $stmt->execute([$value]);
         $rows = $stmt->fetchAll();
         $count = count($rows);
-        if ($count < self::RATE_LIMIT_MAX) {
+        if ($count < $max) {
             return 0;
         }
-        $decisive = $rows[$count - self::RATE_LIMIT_MAX];
-        return max(1, (int) $decisive['ts'] + self::RATE_LIMIT_WINDOW - (int) $decisive['now']);
+        $decisive = $rows[$count - $max];
+        return max(1, (int) $decisive['ts'] + $window - (int) $decisive['now']);
     }
 
     private static function usersPdo(): PDO

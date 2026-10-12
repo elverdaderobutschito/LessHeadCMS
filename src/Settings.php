@@ -28,17 +28,32 @@ use PDO;
  * instead of in config.php. Stored as rows of _meta (key = name of the setting), read on every request - a change
  * applies at once, without a new bootstrap.
  *
- * A further setting is one more entry in DEFINITIONS (plus its switch in the UI); a missing row means the default, so
+ * A further setting is one more entry in DEFINITIONS (plus its field in the UI); a missing row means the default, so
  * existing installations behave as before.
  */
 final class Settings
 {
     /** Is a valid login or API key also required for read access (GET)? See Http::api(). */
     public const REQUIRE_AUTH_FOR_READ = 'require_auth_for_read';
+    /** Rate limit of the login: failed attempts allowed within the time window, and that window in minutes. See Auth. */
+    public const LOGIN_RATE_LIMIT_MAX = 'login_rate_limit_max';
+    public const LOGIN_RATE_LIMIT_WINDOW_MINUTES = 'login_rate_limit_window_minutes';
+    /** Size limit per file in the media library in MB; the PHP limits may be lower, see Media::limits(). */
+    public const MEDIA_MAX_MB = 'media_max_mb';
+    /** Backup pairs kept before schema changes, see SchemaBackup. */
+    public const SCHEMA_BACKUP_KEEP = 'schema_backup_keep';
 
-    /** name => [type, default]; type 'bool' is the only one so far */
+    /**
+     * name => ['bool', default] or ['int', default, min, max]. Default null: the value from config.php (or its own
+     * default) applies as long as nothing is stored, see fallback() - so an installation configured there stays as it is.
+     * The window may not exceed the retention of login_attempts (one day, Auth::ATTEMPTS_RETENTION).
+     */
     private const DEFINITIONS = [
-        self::REQUIRE_AUTH_FOR_READ => ['bool', false],
+        self::REQUIRE_AUTH_FOR_READ           => ['bool', false],
+        self::LOGIN_RATE_LIMIT_MAX            => ['int', Auth::RATE_LIMIT_MAX, 3, 100],
+        self::LOGIN_RATE_LIMIT_WINDOW_MINUTES => ['int', Auth::RATE_LIMIT_WINDOW / 60, 1, 1440],
+        self::MEDIA_MAX_MB                    => ['int', null, 1, 2048],
+        self::SCHEMA_BACKUP_KEEP              => ['int', null, 1, 100],
     ];
 
     /** @return array<string,mixed> all settings with their current value */
@@ -51,29 +66,47 @@ final class Settings
         return $out;
     }
 
-    /** @return mixed current value, the default if nothing is stored */
+    /** @return mixed current value, the default if nothing (or nothing valid) is stored */
     public static function get(PDO $pdo, string $name)
     {
-        [, $default] = self::DEFINITIONS[$name];
-        if (!Database::tableExists($pdo, '_meta')) {
-            return $default;
+        $def = self::DEFINITIONS[$name];
+        $stored = self::stored($pdo, $name);
+        if ($def[0] === 'bool') {
+            return $stored === null ? $def[1] : $stored === '1';
         }
-        $stored = Database::getMeta($pdo, $name);
-        return $stored === null ? $default : $stored === '1';
+        if ($stored !== null && ctype_digit($stored) && (int) $stored >= $def[2] && (int) $stored <= $def[3]) {
+            return (int) $stored;
+        }
+        return $def[1] ?? self::fallback($name);
     }
 
     /**
-     * @param array $input only the settings contained in the body are changed; unknown names and wrong types -> 422
+     * Size limit per upload in bytes: the setting if one is stored, otherwise exactly what config.php says
+     * (MEDIA_MAX_MB there may also be a fraction of a MB).
+     */
+    public static function mediaMaxBytes(PDO $pdo): int
+    {
+        return self::stored($pdo, self::MEDIA_MAX_MB) === null
+            ? Config::mediaMaxBytes()
+            : self::get($pdo, self::MEDIA_MAX_MB) * 1048576;
+    }
+
+    /**
+     * @param array $input only the settings contained in the body are changed; unknown names, wrong types and values
+     *                     outside the allowed range -> 422
      * @return array<string,mixed> all settings afterwards
      */
     public static function update(PDO $pdo, array $input): array
     {
         $errors = [];
         foreach ($input as $name => $value) {
-            if (!isset(self::DEFINITIONS[$name])) {
+            $def = self::DEFINITIONS[$name] ?? null;
+            if ($def === null) {
                 $errors[(string) $name] = 'Unbekannte Einstellung';
-            } elseif (!is_bool($value)) {
+            } elseif ($def[0] === 'bool' && !is_bool($value)) {
                 $errors[$name] = 'true oder false erwartet';
+            } elseif ($def[0] === 'int' && (!is_int($value) || $value < $def[2] || $value > $def[3])) {
+                $errors[$name] = "Ganze Zahl von {$def[2]} bis {$def[3]} erwartet";
             }
         }
         if ($errors) {
@@ -81,8 +114,21 @@ final class Settings
         }
         Database::ensureMetaTable($pdo);
         foreach ($input as $name => $value) {
-            Database::setMeta($pdo, $name, $value ? '1' : '0');
+            Database::setMeta($pdo, $name, is_bool($value) ? ($value ? '1' : '0') : (string) $value);
         }
         return self::all($pdo);
+    }
+
+    private static function stored(PDO $pdo, string $name): ?string
+    {
+        return Database::tableExists($pdo, '_meta') ? Database::getMeta($pdo, $name) : null;
+    }
+
+    /** Value of a setting without a fixed default: what config.php says (which has its own default) */
+    private static function fallback(string $name): int
+    {
+        return $name === self::MEDIA_MAX_MB
+            ? max(1, (int) round(Config::mediaMaxBytes() / 1048576))
+            : Config::schemaBackupKeep();
     }
 }

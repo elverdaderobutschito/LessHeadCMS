@@ -112,6 +112,7 @@ final class Config
     /**
      * Size limit per upload in bytes according to the configuration (MEDIA_MAX_MB in config.php, otherwise
      * MEDIA_MAX_MB_DEFAULT). The PHP limits upload_max_filesize/post_max_size may actually be lower, see Media::limits().
+     * Applies as long as nothing is saved under System → Einstellungen, see Settings::mediaMaxBytes().
      */
     public static function mediaMaxBytes(): int
     {
@@ -128,7 +129,10 @@ final class Config
     /** From this database size (MB) on, System -> Schema points out the storage needed for the backups */
     public const SCHEMA_BACKUP_WARN_MB_DEFAULT = 50;
 
-    /** Number of backup pairs kept (SCHEMA_BACKUP_KEEP in config.php, at least 1) */
+    /**
+     * Number of backup pairs kept (SCHEMA_BACKUP_KEEP in config.php, at least 1). Applies as long as nothing is saved
+     * under System → Einstellungen (Settings::SCHEMA_BACKUP_KEEP).
+     */
     public static function schemaBackupKeep(): int
     {
         self::loadConfigFile();

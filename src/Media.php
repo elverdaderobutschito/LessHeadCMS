@@ -35,7 +35,7 @@ use PDO;
  *  - stored under a random name (32 hex characters + checked extension), the original name stays display
  *    metadata only - no path traversal, no collision, no script file name
  *  - media/.htaccess switches off any script execution (Config::MEDIA_HTACCESS)
- *  - size limit (Config::mediaMaxBytes(), plus the PHP limits) with a comprehensible 422
+ *  - size limit (Settings::mediaMaxBytes(), plus the PHP limits) with a comprehensible 422
  *
  * Thumbnails (Thumbnail): for raster images, media/<name>_thumb.<extension> (at most 200 × 200) is additionally created
  * on upload. Column thumb_filename: NULL = not tried yet (existing data from before the feature, or GD was missing),
@@ -295,9 +295,9 @@ final class Media
      * Limits for the UI (upload field, pre-check): effective size limit (minimum of the configuration and the
      * PHP limits) and the allowed extensions per kind.
      */
-    public static function limits(): array
+    public static function limits(PDO $pdo): array
     {
-        $configured = Config::mediaMaxBytes();
+        $configured = Settings::mediaMaxBytes($pdo);
         $upload = self::iniBytes('upload_max_filesize');
         $post = self::iniBytes('post_max_size');
         $effective = $configured;
@@ -329,9 +329,9 @@ final class Media
      *
      * @return array{tmp:string,size:int,original:string,ext:string,kind:string,mime:string,width:?int,height:?int}
      */
-    private static function receive(array $files): array
+    private static function receive(PDO $pdo, array $files): array
     {
-        $limits = self::limits();
+        $limits = self::limits($pdo);
         $file = $files['file'] ?? null;
         if ($file === null) {
             // If the whole request is larger than post_max_size, PHP discards $_POST and $_FILES completely - then name the
@@ -421,7 +421,7 @@ final class Media
      */
     public function upload(array $post, array $files): array
     {
-        $file = self::receive($files);
+        $file = self::receive($this->pdo, $files);
         ['size' => $size, 'original' => $original, 'ext' => $ext, 'kind' => $kind, 'mime' => $mime, 'width' => $width, 'height' => $height] = $file;
 
         $errors = [];
@@ -467,7 +467,7 @@ final class Media
     public function replaceFile(int $id, array $files): array
     {
         $old = $this->row($id);
-        $file = self::receive($files);
+        $file = self::receive($this->pdo, $files);
         [$filename, $thumb] = self::store($file['tmp'], $file['ext']);
         try {
             $this->pdo->prepare(

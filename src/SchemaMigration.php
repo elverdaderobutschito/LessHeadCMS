@@ -1370,7 +1370,7 @@ final class SchemaMigration
             'rows_copied' => $copied,
             'schema_ids' => $ids,
             'backup'   => ['stamp' => $backup['stamp'], 'files' => $backup['files'], 'dir' => 'data/schema-backups/'],
-            'backups_removed' => SchemaBackup::rotate(Config::schemaBackupKeep()),
+            'backups_removed' => SchemaBackup::rotate(Settings::get($this->pdo, Settings::SCHEMA_BACKUP_KEEP)),
         ];
     }
 

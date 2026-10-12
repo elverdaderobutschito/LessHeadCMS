@@ -8,11 +8,13 @@ define('BOOTSTRAP_TOKEN', 'CHANGE_ME_TO_A_LONG_RANDOM_STRING');
 
 // Optional: size limit per file in the media library, in MB (default 20). If the hoster's PHP settings
 // (upload_max_filesize, post_max_size) are lower, their value applies - the media library shows the effective limit.
+// Can also be changed in the admin area (System -> Einstellungen); a value saved there takes precedence over this one.
 // define('MEDIA_MAX_MB', 20);
 
 // Optional: System -> Schema backs up the complete database (+ .puml) to data/schema-backups/ before every "Apply".
 // The last SCHEMA_BACKUP_KEEP backups are kept (default 5); from a database size of SCHEMA_BACKUP_WARN_MB (default 50)
-// the page shows a note about the storage required.
+// the page shows a note about the storage required. The number of backups kept can also be changed in the admin area
+// (System -> Einstellungen); a value saved there takes precedence over SCHEMA_BACKUP_KEEP.
 // define('SCHEMA_BACKUP_KEEP', 5);
 // define('SCHEMA_BACKUP_WARN_MB', 50);
 
