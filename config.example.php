@@ -13,11 +13,12 @@ define('BOOTSTRAP_TOKEN', 'CHANGE_ME_TO_A_LONG_RANDOM_STRING');
 
 // Optional: System -> Schema backs up the complete database (+ .puml) to data/schema-backups/ before every "Apply".
 // The last SCHEMA_BACKUP_KEEP backups are kept (default 5); from a database size of SCHEMA_BACKUP_WARN_MB (default 50)
-// the page shows a note about the storage required. The number of backups kept can also be changed in the admin area
-// (System -> Einstellungen); a value saved there takes precedence over SCHEMA_BACKUP_KEEP.
+// the page shows a note about the storage required. Both can also be changed in the admin area (System ->
+// Einstellungen); a value saved there takes precedence over the one given here.
 // define('SCHEMA_BACKUP_KEEP', 5);
 // define('SCHEMA_BACKUP_WARN_MB', 50);
 
 // Optional: upper limit for the raw data of a list page (GET /api/{entity}) in bytes. The API answers larger pages
 // with 413 instead of exhausting PHP memory. Default: one tenth of the free memory_limit, at most 16 MB.
+// A size saved in the admin area (System -> Einstellungen, in MB; 0 there = automatic) takes precedence over this one.
 // define('LIST_MAX_BYTES', 8 * 1024 * 1024);

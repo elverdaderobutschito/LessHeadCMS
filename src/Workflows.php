@@ -61,8 +61,8 @@ final class Workflows
 
     private const FILE_NAME = '/^[A-Za-z0-9][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*\.lhwf$/';
     private const NAME_MAX = 100;
-    /** GET /api/_tasks delivers at most this many tasks */
-    private const TASK_LIMIT = 500;
+    /** GET /api/_tasks delivers at most this many tasks. Default - can be changed under System → Einstellungen (Settings::TASKS_LIST_LIMIT). */
+    public const TASK_LIMIT = 500;
 
     // ---------------------------------------------------------------- Files
 
@@ -485,7 +485,7 @@ final class Workflows
             $params[] = $query['status'];
         }
         $stmt = $pdo->prepare('SELECT * FROM lh_task' . ($where ? ' WHERE ' . implode(' AND ', $where) : '')
-            . ' ORDER BY id DESC LIMIT ' . self::TASK_LIMIT);
+            . ' ORDER BY id DESC LIMIT ' . (int) Settings::get($pdo, Settings::TASKS_LIST_LIMIT));
         $stmt->execute($params);
         return ['tasks' => array_map([self::class, 'present'], $stmt->fetchAll())];
     }
@@ -518,7 +518,7 @@ final class Workflows
         }
         $all = ($query['status'] ?? null) === 'all';
         $rows = $pdo->query('SELECT t.*, u.username AS created_by_name FROM lh_task t LEFT JOIN users u ON u.id = t.created_by'
-            . " WHERE $mine" . ($all ? '' : " AND t.status = 'open'") . ' ORDER BY t.id DESC LIMIT ' . self::TASK_LIMIT)->fetchAll();
+            . " WHERE $mine" . ($all ? '' : " AND t.status = 'open'") . ' ORDER BY t.id DESC LIMIT ' . (int) Settings::get($pdo, Settings::TASKS_LIST_LIMIT))->fetchAll();
         $tasks = [];
         foreach ($rows as $r) {
             $task = self::present($r);

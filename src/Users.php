@@ -102,7 +102,7 @@ final class Users
         }
         $isApi = $role === ApiKeys::ROLE;
         if (!$isApi) {
-            self::validatePassword($password, $errors);
+            $this->validatePassword($password, $errors);
         } elseif ($password !== null && $password !== '') {
             $errors['password'] = 'API-Nutzer haben kein Passwort';
         }
@@ -254,11 +254,11 @@ final class Users
         return (int) $stmt->fetchColumn();
     }
 
-    private static function validatePassword($password, array &$errors): void
+    private function validatePassword($password, array &$errors): void
     {
         if (!is_string($password) || $password === '') {
             $errors['password'] = 'Pflichtfeld';
-        } elseif (($ruleError = Auth::passwordError($password)) !== null) {
+        } elseif (($ruleError = Auth::passwordError($this->pdo, $password)) !== null) {
             $errors['password'] = $ruleError; // same rule as PUT /api/me/password
         }
     }

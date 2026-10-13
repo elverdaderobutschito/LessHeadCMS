@@ -28,11 +28,12 @@ namespace LessHeadCMS;
  * unaffected: until the COMMIT, readers in SQLite see the old state anyway.
  *
  * The flag is removed again in any case (finally). If PHP aborts hard (e.g. max_execution_time), it stays behind:
- * a flag older than MAX_AGE seconds therefore counts as orphaned and is ignored.
+ * a flag older than the timeout (MAX_AGE seconds, or Settings::MAINTENANCE_TIMEOUT_SECONDS) therefore counts as orphaned
+ * and is ignored.
  */
 final class Maintenance
 {
-    /** From this age (seconds) on, a flag counts as orphaned */
+    /** From this age (seconds) on, a flag counts as orphaned. Default - can be changed under System → Einstellungen, see maxAge(). */
     public const MAX_AGE = 120;
 
     public const MESSAGE = 'Wartung: Eine Schema-Migration läuft gerade. Bitte in Kürze erneut versuchen.';
@@ -62,7 +63,21 @@ final class Maintenance
         }
         $raw = trim((string) @file_get_contents($file));
         $since = ctype_digit($raw) ? (int) $raw : (int) @filemtime($file);
-        return $since > 0 && time() - $since < self::MAX_AGE;
+        return $since > 0 && time() - $since < self::maxAge();
+    }
+
+    /**
+     * Timeout in seconds. Only asked while a flag exists, so normal requests do not pay for it; if the database cannot be
+     * read just then (it is being rebuilt or restored), the default applies.
+     */
+    private static function maxAge(): int
+    {
+        try {
+            $pdo = Database::connectIfExists();
+            return $pdo === null ? self::MAX_AGE : (int) Settings::get($pdo, Settings::MAINTENANCE_TIMEOUT_SECONDS);
+        } catch (\Throwable $e) {
+            return self::MAX_AGE;
+        }
     }
 
     /** @throws ApiException 503 maintenance while active() */

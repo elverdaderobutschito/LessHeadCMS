@@ -13,6 +13,12 @@ ui_text,password.current,Current password
 ui_text,password.new,New password
 ui_text,password.generate,Generate secure password
 ui_text,password.hint,"At least 8 characters, including at least one digit and one special character (e.g. ! ? # - _)."
+ui_text,password.rule_plain,At least {min} characters.
+ui_text,password.rule_with,"At least {min} characters, including at least {parts}."
+ui_text,password.rule_digit,one digit
+ui_text,password.rule_special,one special character (e.g. ! ? # - _)
+ui_text,password.rule_case,one upper-case and one lower-case letter
+ui_text,password.rule_and,and
 ui_text,password.repeat,Repeat password
 ui_text,password.mismatch,The two passwords do not match.
 ui_text,password.reveal,Show password
@@ -812,26 +818,101 @@ ui_text,tasks.assigned_direct,You directly
 ui_text,tasks.assigned_group,Group {group}
 ui_text,tasks.assigned_group_unknown,through a group
 ui_text,tasks.by_unknown,unknown
-ui_text,settings.heading,Settings
 ui_text,settings.loading,Loading …
 ui_text,settings.saved,Saved.
-ui_text,settings.require_auth_for_read,Require authentication for read access as well
-ui_text,settings.require_auth_for_read_hint,"If this switch is on, GET requests without a valid sign-in or API key are no longer possible either – regardless of the publication status of individual records. Files of the media library remain reachable via their address."
 ui_text,settings.save,Save
 ui_text,settings.number_range,Please enter a whole number from {min} to {max}.
-ui_text,settings.group_login,Sign-in
+ui_text,settings.per_page_order,The default page size must not exceed the largest page size.
+ui_text,settings.tab_security,Sign-in & security
+ui_text,settings.tab_media,Media library
+ui_text,settings.tab_lists,Lists
+ui_text,settings.tab_system,System & maintenance
+ui_text,settings.tab_tools,Import & test data
+ui_text,settings.require_auth_for_read,Require authentication for read access as well
+ui_text,settings.require_auth_for_read_hint,"If this switch is on, GET requests without a valid sign-in or API key are no longer possible either – regardless of the publication status of individual records. Files of the media library remain reachable via their address. The switch is saved at once."
+ui_text,settings.group_password,Passwords
+ui_text,settings.password_min_length,Minimum length
+ui_text,settings.password_min_length_unit,characters
+ui_text,settings.password_min_length_hint,"Every newly set password must have at least this many characters (creating a user, changing the password). Existing passwords stay valid; the hint text and the password generator follow the rule. Default: 8, allowed: {min} to {max}."
+ui_text,settings.password_require_digit,Digit required
+ui_text,settings.password_require_digit_hint,New passwords must contain at least one digit. Default: on.
+ui_text,settings.password_require_special,Special character required
+ui_text,settings.password_require_special_hint,New passwords must contain at least one character that is neither a letter nor a digit nor whitespace (e.g. ! ? # - _). Default: on.
+ui_text,settings.password_require_mixed_case,Upper-case and lower-case letters required
+ui_text,settings.password_require_mixed_case_hint,New passwords must contain at least one upper-case and one lower-case letter. Default: off.
+ui_text,settings.group_session,Session
+ui_text,settings.session_lifetime_hours,Validity of a session
+ui_text,settings.session_lifetime_hours_unit,hours
+ui_text,settings.session_lifetime_hours_hint,"A sign-in stays valid for this long, counted from the login – regardless of activity. After that a new sign-in is required. Applies at once, to sessions already running as well. Default: 8, allowed: {min} to {max} (30 days)."
+ui_text,settings.group_rate_limit,Lock after failed attempts
 ui_text,settings.login_rate_limit_max,Failed attempts allowed
 ui_text,settings.login_rate_limit_max_unit,failed attempts
 ui_text,settings.login_rate_limit_max_hint,"This many wrong passwords are allowed per username and per IP address within the time window; the next attempt is rejected – even with the correct password. Also applies to the current password when changing the password. Default: 5, allowed: {min} to {max}."
 ui_text,settings.login_rate_limit_window_minutes,Time window
 ui_text,settings.login_rate_limit_window_minutes_unit,minutes
 ui_text,settings.login_rate_limit_window_minutes_hint,"Failed attempts count for this long, so a lock lasts at most this long as well. Default: 15, allowed: {min} to {max} (24 hours)."
-ui_text,settings.group_media,Media library
+ui_text,settings.login_attempts_retention_days,Retention of failed attempts
+ui_text,settings.login_attempts_retention_days_unit,days
+ui_text,settings.login_attempts_retention_days_hint,"Older rows of the table login_attempts are deleted on every sign-in. Only the time window counts for the lock; a longer retention merely serves traceability. Default: 1, allowed: {min} to {max}."
+ui_text,settings.group_media_upload,Upload
 ui_text,settings.media_max_mb,Maximum file size
 ui_text,settings.media_max_mb_unit,MB
 ui_text,settings.media_max_mb_hint,"The media library rejects larger files on upload; existing files are not affected. Default: 20 (or MEDIA_MAX_MB from config.php), allowed: {min} to {max}."
 ui_text,settings.media_php_limit,The server currently allows at most {size} per file (PHP settings upload_max_filesize/post_max_size). A higher value only takes effect once the hoster raises these limits.
+ui_text,settings.group_media_thumbnails,Thumbnails
+ui_text,settings.media_thumbnail_px,Edge length of the thumbnails
+ui_text,settings.media_thumbnail_px_unit,pixels
+ui_text,settings.media_thumbnail_px_hint,"Thumbnails are created at most this wide and this high; the aspect ratio is kept. Applies to newly uploaded and replaced images; existing thumbnails stay as they are. Default: 200, allowed: {min} to {max}."
+ui_text,settings.group_media_texts,Text lengths
+ui_text,settings.media_title_max,Title
+ui_text,settings.media_title_max_unit,characters
+ui_text,settings.media_title_max_hint,"Maximum length of the title of a medium. Checked on saving; longer texts already stored stay unchanged. Default: 255, allowed: {min} to {max}."
+ui_text,settings.media_alt_max,Alt text
+ui_text,settings.media_alt_max_unit,characters
+ui_text,settings.media_alt_max_hint,"Maximum length of the alt text of a medium. Default: 1000, allowed: {min} to {max}."
+ui_text,settings.media_description_max,Description
+ui_text,settings.media_description_max_unit,characters
+ui_text,settings.media_description_max_hint,"Maximum length of the description of a medium. Default: 20000, allowed: {min} to {max}."
+ui_text,settings.media_tag_max,Tag name
+ui_text,settings.media_tag_max_unit,characters
+ui_text,settings.media_tag_max_hint,"Maximum length of a tag name. Default: 100, allowed: {min} to {max}."
+ui_text,settings.group_list_pages,Page size
+ui_text,settings.list_default_per_page,Rows per page
+ui_text,settings.list_default_per_page_unit,rows
+ui_text,settings.list_default_per_page_hint,"A list shows this many rows on opening, and GET /api/{entity} delivers this many without per_page. At most the largest page size. Default: 50, allowed: {min} to {max}."
+ui_text,settings.list_max_per_page,Largest page size
+ui_text,settings.list_max_per_page_unit,rows
+ui_text,settings.list_max_per_page_hint,"Largest value for per_page (and largest number in ids) of GET /api/{entity}; the API rejects larger values with 422. The choice “Rows per page” of the lists offers nothing above it. Default: 500, allowed: {min} to {max}."
+ui_text,settings.list_select_per_page,Rows per page in the selection dialog
+ui_text,settings.list_select_per_page_unit,rows
+ui_text,settings.list_select_per_page_hint,"Page size of the search and selection dialog for relationships (magnifier in the form). Default: 25, allowed: {min} to {max}."
+ui_text,settings.group_list_limits,Limits
+ui_text,settings.list_max_response_mb,Largest list response
+ui_text,settings.list_max_response_mb_unit,MB
+ui_text,settings.list_max_response_mb_hint,"If the raw data of a list page exceeds this size, the API answers with 413 instead of exhausting PHP memory. 0 = automatic: one tenth of the free PHP memory, at most 16 MB (or LIST_MAX_BYTES from config.php). A value above the PHP memory available leads to aborted requests. Default: 0, allowed: {min} to {max}."
+ui_text,settings.tasks_list_limit,Tasks per list
+ui_text,settings.tasks_list_limit_unit,tasks
+ui_text,settings.tasks_list_limit_hint,"“My tasks” and the task list of the API (GET /api/_tasks) deliver at most this many tasks, newest first. Default: 500, allowed: {min} to {max}."
 ui_text,settings.group_schema,Schema backups
 ui_text,settings.schema_backup_keep,Backups kept
 ui_text,settings.schema_backup_keep_unit,backups
 ui_text,settings.schema_backup_keep_hint,"The database is backed up before every schema change; this many backups are kept, older ones are deleted on the next “Apply”. Default: 5 (or SCHEMA_BACKUP_KEEP from config.php), allowed: {min} to {max}."
+ui_text,settings.schema_backup_warn_mb,Disk space notice from
+ui_text,settings.schema_backup_warn_mb_unit,MB
+ui_text,settings.schema_backup_warn_mb_hint,"From this database size on, System → Schema points out the disk space the backups take up together. Default: 50 (or SCHEMA_BACKUP_WARN_MB from config.php), allowed: {min} to {max}."
+ui_text,settings.group_maintenance,Maintenance
+ui_text,settings.maintenance_timeout_seconds,Maintenance lock lasts at most
+ui_text,settings.maintenance_timeout_seconds_unit,seconds
+ui_text,settings.maintenance_timeout_seconds_hint,"Write access is locked during a schema migration or a restore. If PHP aborts hard meanwhile, the lock stays behind; after this time it counts as orphaned and is ignored. Do not choose less than a migration takes on this server. Default: 120, allowed: {min} to {max}."
+ui_text,settings.group_api_keys,API keys
+ui_text,settings.api_key_last_used_seconds,Update “last used” every
+ui_text,settings.api_key_last_used_seconds_unit,seconds
+ui_text,settings.api_key_last_used_seconds_hint,"The time an API key was last used is written at most this often – not on every request. 0 = on every request (one write access per request). Default: 300, allowed: {min} to {max} (24 hours)."
+ui_text,settings.group_testdata,Test data
+ui_text,settings.testdata_max_count,Largest count per entity
+ui_text,settings.testdata_max_count_unit,records
+ui_text,settings.testdata_max_count_hint,"System → Test data creates at most this many records per entity in one run. Large amounts may exceed the execution time limit of the server. Default: 1000, allowed: {min} to {max}."
+ui_text,settings.group_translations_csv,Translation import
+ui_text,settings.translations_csv_max_mb,Maximum size of a CSV file
+ui_text,settings.translations_csv_max_mb_unit,MB
+ui_text,settings.translations_csv_max_mb_hint,"The import under System → Localization → Translations rejects larger language files (uploaded files and files from translations/). Default: 2, allowed: {min} to {max}."

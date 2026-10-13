@@ -40,8 +40,11 @@ final class ApiKeys
     public const PREFIX = 'lh_';
     /** Random bytes of a key (hex encoded in the key: twice as many characters). */
     private const KEY_BYTES = 24;
-    /** last_used_at is only rewritten when it is older than this (seconds) - not one write per request. */
-    private const LAST_USED_INTERVAL = 300;
+    /**
+     * last_used_at is only rewritten when it is older than this (seconds) - not one write per request. Default - can be
+     * changed under System → Einstellungen (Settings::API_KEY_LAST_USED_SECONDS).
+     */
+    public const LAST_USED_INTERVAL = 300;
 
     private const DDL = 'CREATE TABLE IF NOT EXISTS api_keys (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,7 +126,8 @@ final class ApiKeys
         self::ensure($pdo);
         $stmt = $pdo->prepare(
             "SELECT k.id AS key_id, u.id, u.username, u.name, u.role, u.active, u.api_read_only,
-                    k.last_used_at IS NULL OR k.last_used_at < datetime('now', '-" . self::LAST_USED_INTERVAL . " seconds') AS stale
+                    k.last_used_at IS NULL OR k.last_used_at <= datetime('now', '-"
+                        . (int) Settings::get($pdo, Settings::API_KEY_LAST_USED_SECONDS) . " seconds') AS stale
                FROM api_keys k JOIN users u ON u.id = k.user_id
               WHERE k.key_hash = ? AND k.revoked_at IS NULL"
         );

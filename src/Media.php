@@ -111,10 +111,11 @@ final class Media
 )',
     ];
 
-    private const MAX_TITLE = 255;
-    private const MAX_ALT = 1000;
-    private const MAX_DESCRIPTION = 20000;
-    private const MAX_TAG = 100;
+    /** Defaults of the text lengths - can be changed under System → Einstellungen (Settings::MEDIA_*_MAX). */
+    public const MAX_TITLE = 255;
+    public const MAX_ALT = 1000;
+    public const MAX_DESCRIPTION = 20000;
+    public const MAX_TAG = 100;
 
     /** Later thumbnails per list call: at most this many or this long (shared hosting: execution time limit) */
     private const BACKFILL_MAX = 25;
@@ -226,7 +227,7 @@ final class Media
     public function createTag(array $input): array
     {
         $name = $input['name'] ?? null;
-        $error = self::tagNameError($name);
+        $error = $this->tagNameError($name);
         if ($error !== null) {
             throw new ApiException(422, ['error' => 'validation', 'message' => $error, 'errors' => ['name' => $error]]);
         }
@@ -242,7 +243,7 @@ final class Media
     {
         $this->tagRow($id);
         $name = $input['name'] ?? null;
-        $error = self::tagNameError($name);
+        $error = $this->tagNameError($name);
         if ($error === null) {
             $stmt = $this->pdo->prepare('SELECT 1 FROM media_tags WHERE name = ? AND id <> ?'); // column is COLLATE NOCASE
             $stmt->execute([trim($name), $id]);
@@ -391,7 +392,7 @@ final class Media
      *
      * @return array{0:string,1:?string}
      */
-    private static function store(string $tmp, string $ext): array
+    private static function store(string $tmp, string $ext, int $thumbnailSize): array
     {
         Config::ensureMediaDir();
         $filename = bin2hex(random_bytes(16)) . '.' . $ext;
@@ -400,7 +401,7 @@ final class Media
             throw new \RuntimeException('Hochgeladene Datei kann nicht nach media/ verschoben werden.');
         }
         @chmod($target, 0644);
-        $thumb = !Thumbnail::applies($ext) ? '' : (Thumbnail::available() ? Thumbnail::create(Config::mediaDir(), $filename) : null);
+        $thumb = !Thumbnail::applies($ext) ? '' : (Thumbnail::available() ? Thumbnail::create(Config::mediaDir(), $filename, $thumbnailSize) : null);
         return [$filename, $thumb];
     }
 
@@ -431,7 +432,7 @@ final class Media
             throw new ApiException(422, ['error' => 'validation', 'message' => 'Ungültige Eingabe', 'errors' => $errors]);
         }
 
-        [$filename, $thumb] = self::store($file['tmp'], $ext);
+        [$filename, $thumb] = self::store($file['tmp'], $ext, $this->thumbnailSize());
         try {
             $this->pdo->beginTransaction();
             $stmt = $this->pdo->prepare(
@@ -468,7 +469,7 @@ final class Media
     {
         $old = $this->row($id);
         $file = self::receive($this->pdo, $files);
-        [$filename, $thumb] = self::store($file['tmp'], $file['ext']);
+        [$filename, $thumb] = self::store($file['tmp'], $file['ext'], $this->thumbnailSize());
         try {
             $this->pdo->prepare(
                 'UPDATE media SET filename = ?, original_name = ?, mime_type = ?, kind = ?, extension = ?, size_bytes = ?,
@@ -623,16 +624,23 @@ final class Media
         );
         $stmt->execute($exts);
         $update = $this->pdo->prepare('UPDATE media SET thumb_filename = ? WHERE id = ?');
+        $size = $this->thumbnailSize();
         $start = microtime(true);
         foreach ($stmt->fetchAll() as $r) {
             if (microtime(true) - $start > self::BACKFILL_SECONDS) {
                 break;
             }
-            $update->execute([Thumbnail::create(Config::mediaDir(), $r['filename']), $r['id']]);
+            $update->execute([Thumbnail::create(Config::mediaDir(), $r['filename'], $size), $r['id']]);
         }
         // non-raster images (SVG, video, ...) do not need one: mark once as "none"
         $this->pdo->prepare("UPDATE media SET thumb_filename = '' WHERE thumb_filename IS NULL AND extension NOT IN ($marks)")
             ->execute($exts);
+    }
+
+    /** Edge length of new thumbnails in pixels (Settings::MEDIA_THUMBNAIL_PX, default Thumbnail::MAX) */
+    private function thumbnailSize(): int
+    {
+        return (int) Settings::get($this->pdo, Settings::MEDIA_THUMBNAIL_PX);
     }
 
     private function row(int $id): array
@@ -729,7 +737,8 @@ final class Media
     private function collectMeta(array $input, array &$errors): array
     {
         $meta = [];
-        foreach (['title' => self::MAX_TITLE, 'alt_text' => self::MAX_ALT, 'description' => self::MAX_DESCRIPTION] as $key => $max) {
+        foreach (['title' => Settings::MEDIA_TITLE_MAX, 'alt_text' => Settings::MEDIA_ALT_MAX, 'description' => Settings::MEDIA_DESCRIPTION_MAX] as $key => $setting) {
+            $max = (int) Settings::get($this->pdo, $setting);
             if (!array_key_exists($key, $input)) {
                 continue;
             }
@@ -789,7 +798,7 @@ final class Media
             if (is_string($v) && trim($v) === '') {
                 continue;
             }
-            $error = self::tagNameError($v);
+            $error = $this->tagNameError($v);
             if ($error !== null) {
                 $errors['tags'] = $error;
                 return null;
@@ -803,13 +812,14 @@ final class Media
     }
 
     /** @param mixed $name */
-    private static function tagNameError($name): ?string
+    private function tagNameError($name): ?string
     {
+        $max = (int) Settings::get($this->pdo, Settings::MEDIA_TAG_MAX);
         if (!is_string($name) || trim($name) === '') {
             return 'Tag-Name erwartet';
         }
-        if (mb_strlen(trim($name), 'UTF-8') > self::MAX_TAG) {
-            return 'Tag-Name höchstens ' . self::MAX_TAG . ' Zeichen';
+        if (mb_strlen(trim($name), 'UTF-8') > $max) {
+            return 'Tag-Name höchstens ' . $max . ' Zeichen';
         }
         return null;
     }

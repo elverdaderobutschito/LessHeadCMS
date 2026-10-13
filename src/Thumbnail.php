@@ -32,6 +32,7 @@ namespace LessHeadCMS;
  */
 final class Thumbnail
 {
+    /** Default edge length - can be changed under System → Einstellungen (Settings::MEDIA_THUMBNAIL_PX), see create(). */
     public const MAX = 200;
 
     /** Extension => [read function, write function] */
@@ -68,7 +69,7 @@ final class Thumbnail
      * @return string file name of the thumbnail, or '' = none (not needed because the original is already small enough,
      *                or not possible - then the original counts as the preview)
      */
-    public static function create(string $dir, string $filename): string
+    public static function create(string $dir, string $filename, int $max = self::MAX): string
     {
         $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
         $source = $dir . '/' . $filename;
@@ -84,10 +85,10 @@ final class Thumbnail
             return '';
         }
         [$w, $h] = [(int) $size[0], (int) $size[1]];
-        if ($w <= self::MAX && $h <= self::MAX) {
+        if ($w <= $max && $h <= $max) {
             return ''; // already small: the original is the preview
         }
-        $scale = min(self::MAX / $w, self::MAX / $h);
+        $scale = min($max / $w, $max / $h);
         $tw = max(1, (int) round($w * $scale));
         $th = max(1, (int) round($h * $scale));
         if (!self::memoryFits($w, $h, $tw, $th)) {

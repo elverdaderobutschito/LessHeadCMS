@@ -34,19 +34,17 @@ use PDO;
 final class Auth
 {
     public const COOKIE = 'lhcms_session';
-    /** Validity of a session in seconds (from login, independent of activity). */
+    /**
+     * Validity of a session in seconds (from login, independent of activity). Default - can be changed under
+     * System → Einstellungen (Settings::SESSION_LIFETIME_HOURS), see sessionLifetime().
+     */
     public const LIFETIME = 28800;
     public const DEFAULT_ADMIN = 'admin';
     public const DEFAULT_PASSWORD = 'password';
+    /** Default minimum length; changed under System → Einstellungen (Settings::PASSWORD_MIN_LENGTH), see passwordError(). */
     public const MIN_PASSWORD_LENGTH = 8;
     /** bcrypt (PASSWORD_DEFAULT) silently truncates longer passwords. */
     public const MAX_PASSWORD_BYTES = 72;
-    /**
-     * Complexity rule for every newly set password (creating a user, PUT /api/me/password), see passwordError().
-     * Not retroactive: login only checks the hash, older simpler passwords keep working.
-     */
-    public const PASSWORD_RULE = 'Das Passwort muss mindestens ' . self::MIN_PASSWORD_LENGTH
-        . ' Zeichen, eine Ziffer und ein Sonderzeichen (z. B. ! ? # - _) enthalten.';
 
     /** Hash of a password that is never assigned: evens out the response time for an unknown user name. */
     private const DUMMY_HASH = '$2y$10$zVX75/zigYYjupG4EDSDXuw7idv9LFjo1/Cojol17x0lXI2XQJ.6O';
@@ -57,8 +55,11 @@ final class Auth
      */
     public const RATE_LIMIT_MAX = 5;
     public const RATE_LIMIT_WINDOW = 900; // 15 minutes
-    /** Entries in login_attempts older than this are deleted on every login call (the longest time window possible). */
-    private const ATTEMPTS_RETENTION = '-1 day';
+    /**
+     * Entries in login_attempts older than this many days are deleted on every login call. Default (the longest time
+     * window possible) - can be changed under System → Einstellungen (Settings::LOGIN_ATTEMPTS_RETENTION_DAYS).
+     */
+    public const ATTEMPTS_RETENTION_DAYS = 1;
 
     private const ATTEMPTS_DDL = 'CREATE TABLE IF NOT EXISTS login_attempts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -214,7 +215,8 @@ final class Auth
 
         // Rate limit BEFORE any password check: once exceeded, nothing is compared at all.
         $pdo->exec(self::ATTEMPTS_DDL); // idempotent; in case /bootstrap has not run for this table yet
-        $pdo->exec("DELETE FROM login_attempts WHERE attempted_at < datetime('now', '" . self::ATTEMPTS_RETENTION . "')");
+        $pdo->exec("DELETE FROM login_attempts WHERE attempted_at < datetime('now', '-"
+            . (int) Settings::get($pdo, Settings::LOGIN_ATTEMPTS_RETENTION_DAYS) . " days')");
         $name = is_string($username) ? substr($username, 0, 255) : '';
         $ip = self::clientIp();
         $wait = self::lockedFor($pdo, $name, $ip);
@@ -265,8 +267,8 @@ final class Auth
             error_log('[LessHeadCMS] data/sessions ist nicht beschreibbar - Login nicht möglich.');
             throw new ApiException(500, ['error' => 'session_unavailable', 'message' => 'Session-Verzeichnis nicht beschreibbar']);
         }
-        self::gcSessions();
-        self::start(false);
+        self::gcSessions(self::sessionLifetime($pdo));
+        self::start(false, self::sessionLifetime($pdo));
         session_regenerate_id(true); // against session fixation
         $_SESSION = ['user_id' => (int) $user['id']];
         session_write_close();
@@ -307,34 +309,57 @@ final class Auth
             'name'                 => $user['name'],
             'role'                 => $user['role'],
             'must_change_password' => $user['must_change_password'],
+            // what the UI needs of System → Einstellungen for every user (password rule, page sizes, ...)
+            'settings'             => Settings::client($pdo),
         ]];
     }
 
     /**
-     * Checks a password that is about to be set against the complexity rule. null = fine, otherwise a concrete message:
-     * the rule plus what is still missing. Special character = any character that is neither a letter (including umlauts)
-     * nor a digit nor whitespace - i.e. all ASCII punctuation/special characters, but also e.g. € or §. Upper/lower case is
-     * deliberately not required (see README, Login and sessions).
+     * Checks a password that is about to be set (creating a user, PUT /api/me/password) against the complexity rule.
+     * null = fine, otherwise a concrete message: the rule plus what is still missing. The rule comes from System →
+     * Einstellungen (Settings::PASSWORD_*; default: 8 characters, a digit, a special character). Special character = any
+     * character that is neither a letter (including umlauts) nor a digit nor whitespace - i.e. all ASCII
+     * punctuation/special characters, but also e.g. € or §. Upper/lower case is not required by default (see README, Login
+     * and sessions). Not retroactive: login only checks the hash, older simpler passwords keep working.
      *
      * @param string $password
      */
-    public static function passwordError(string $password): ?string
+    public static function passwordError(PDO $pdo, string $password): ?string
     {
         if (strlen($password) > self::MAX_PASSWORD_BYTES) {
             return 'Das Passwort darf höchstens ' . self::MAX_PASSWORD_BYTES . ' Bytes lang sein';
         }
+        $min = (int) Settings::get($pdo, Settings::PASSWORD_MIN_LENGTH);
         $length = function_exists('mb_strlen') ? mb_strlen($password, 'UTF-8') : strlen($password);
+        $rule = ["mindestens $min Zeichen"];
         $missing = [];
-        if ($length < self::MIN_PASSWORD_LENGTH) {
-            $missing[] = 'mindestens ' . self::MIN_PASSWORD_LENGTH . " Zeichen (bisher $length)";
+        if ($length < $min) {
+            $missing[] = "mindestens $min Zeichen (bisher $length)";
         }
-        if (!preg_match('/[0-9]/', $password)) {
-            $missing[] = 'eine Ziffer';
+        if (Settings::get($pdo, Settings::PASSWORD_REQUIRE_DIGIT)) {
+            $rule[] = 'eine Ziffer';
+            if (!preg_match('/[0-9]/', $password)) {
+                $missing[] = 'eine Ziffer';
+            }
         }
-        if (preg_match('/[^\p{L}\p{N}\s]/u', $password) !== 1) {
-            $missing[] = 'ein Sonderzeichen';
+        if (Settings::get($pdo, Settings::PASSWORD_REQUIRE_SPECIAL)) {
+            $rule[] = 'ein Sonderzeichen (z. B. ! ? # - _)';
+            if (preg_match('/[^\p{L}\p{N}\s]/u', $password) !== 1) {
+                $missing[] = 'ein Sonderzeichen';
+            }
         }
-        return $missing ? self::PASSWORD_RULE . ' Es fehlt: ' . implode(', ', $missing) . '.' : null;
+        if (Settings::get($pdo, Settings::PASSWORD_REQUIRE_MIXED_CASE)) {
+            $rule[] = 'einen Groß- und einen Kleinbuchstaben';
+            if (preg_match('/\p{Lu}/u', $password) !== 1 || preg_match('/\p{Ll}/u', $password) !== 1) {
+                $missing[] = 'ein Groß- und ein Kleinbuchstabe';
+            }
+        }
+        if (!$missing) {
+            return null;
+        }
+        $last = array_pop($rule);
+        return 'Das Passwort muss ' . ($rule ? implode(', ', $rule) . ' und ' : '') . $last . ' enthalten. Es fehlt: '
+            . implode(', ', $missing) . '.';
     }
 
     /** Message for a wrong or missing current_password (deliberately the same: does not reveal what exactly was missing) */
@@ -406,7 +431,7 @@ final class Auth
         $password = $input['password'] ?? null;
         if (!is_string($password)) {
             $errors['password'] = 'Passwort fehlt';
-        } elseif (($ruleError = self::passwordError($password)) !== null) {
+        } elseif (($ruleError = self::passwordError($pdo, $password)) !== null) {
             $errors['password'] = $ruleError;
         } elseif ($password === self::DEFAULT_PASSWORD || $password === $user['username']) {
             $errors['password'] = 'Dieses Passwort ist nicht erlaubt - bitte ein anderes wählen';
@@ -446,7 +471,12 @@ final class Auth
         if (!Database::tableExists($pdo, 'users')) {
             return null;
         }
-        self::start(true);
+        // older than the validity: counts as logged out (the file itself is removed by gcSessions() on the next login)
+        $lifetime = self::sessionLifetime($pdo);
+        if ((int) @filemtime(Config::sessionDir() . '/sess_' . self::sessionIdFromCookie()) < time() - $lifetime) {
+            return null;
+        }
+        self::start(true, $lifetime);
         $id = $_SESSION['user_id'] ?? null;
         if (!is_int($id)) {
             return null;
@@ -581,7 +611,13 @@ final class Auth
         return is_file(Config::sessionDir() . '/sess_' . $id) ? $id : null;
     }
 
-    private static function start(bool $readOnly): void
+    /** Validity of a session in seconds (Settings::SESSION_LIFETIME_HOURS, default LIFETIME) */
+    private static function sessionLifetime(PDO $pdo): int
+    {
+        return 3600 * (int) Settings::get($pdo, Settings::SESSION_LIFETIME_HOURS);
+    }
+
+    private static function start(bool $readOnly, int $lifetime = self::LIFETIME): void
     {
         if (session_status() === PHP_SESSION_ACTIVE) {
             session_write_close();
@@ -598,7 +634,7 @@ final class Auth
             'cookie_secure'    => self::isHttps() ? 1 : 0,
             'cookie_httponly'  => 1,
             'cookie_samesite'  => 'Lax',
-            'gc_maxlifetime'   => self::LIFETIME,
+            'gc_maxlifetime'   => $lifetime,
             'gc_probability'   => 0, // cleanup is done by gcSessions()
             'read_and_close'   => $readOnly,
         ]);
@@ -631,9 +667,9 @@ final class Auth
     }
 
     /** PHP's own GC is switched off on many hosters: delete expired session files here. */
-    private static function gcSessions(): void
+    private static function gcSessions(int $lifetime): void
     {
-        $limit = time() - self::LIFETIME;
+        $limit = time() - $lifetime;
         foreach (glob(Config::sessionDir() . '/sess_*') ?: [] as $file) {
             if (@filemtime($file) < $limit) {
                 @unlink($file);

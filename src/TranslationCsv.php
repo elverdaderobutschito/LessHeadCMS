@@ -52,8 +52,11 @@ use PDO;
 final class TranslationCsv
 {
     private const HEADER = ['kind', 'ref', 'text'];
-    /** Upper limit for a CSV file (the bundled en.csv is about 30 KB) */
-    private const MAX_BYTES = 2097152;
+    /**
+     * Upper limit for a CSV file (the bundled en.csv is about 60 KB). Default - can be changed under System →
+     * Einstellungen (Settings::TRANSLATIONS_CSV_MAX_MB).
+     */
+    public const MAX_BYTES = 2097152;
     private const FILE_PATTERN = '/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.csv$/i';
     /** The summary lists at most this many skipped or changed lines individually (all are counted) */
     private const DETAILS_MAX = 200;
@@ -168,7 +171,7 @@ final class TranslationCsv
             throw new ApiException(422, ['error' => 'validation', 'message' => 'Ziel-Sprache fehlt', 'errors' => ['language_id' => 'ID erwartet']]);
         }
         $language = Languages::find($pdo, $languageId);
-        [$content, $file] = self::source($body);
+        [$content, $file] = self::source($pdo, $body);
         $records = self::parse($content);
 
         // existing texts of the language, schema elements and UI texts under the same key (Languages::itemKey())
@@ -254,7 +257,7 @@ final class TranslationCsv
     }
 
     /** @return array{0:string,1:?string} CSV text and, if applicable, the file name from translations/ */
-    private static function source(array $body): array
+    private static function source(PDO $pdo, array $body): array
     {
         $file = $body['file'] ?? null;
         $content = $body['content'] ?? null;
@@ -263,7 +266,7 @@ final class TranslationCsv
                 . 'eine Datei aus translations/ (file) angeben', 'errors' => ['content' => 'Text erwartet']]);
         }
         if ($file === null) {
-            self::checkSize(strlen($content));
+            self::checkSize($pdo, strlen($content));
             return [$content, null];
         }
         // only a file name from the directory, no paths
@@ -271,7 +274,7 @@ final class TranslationCsv
         if (!preg_match(self::FILE_PATTERN, $file) || !is_file($path)) {
             throw new ApiException(404, ['error' => 'not_found', 'message' => 'Datei in translations/ nicht gefunden']);
         }
-        self::checkSize((int) filesize($path));
+        self::checkSize($pdo, (int) filesize($path));
         $content = @file_get_contents($path);
         if ($content === false) {
             throw new ApiException(409, ['error' => 'unreadable', 'message' => "translations/{$file} ist nicht lesbar (Dateirechte prüfen)"]);
@@ -279,11 +282,12 @@ final class TranslationCsv
         return [$content, $file];
     }
 
-    private static function checkSize(int $bytes): void
+    private static function checkSize(PDO $pdo, int $bytes): void
     {
-        if ($bytes > self::MAX_BYTES) {
+        $mb = (int) Settings::get($pdo, Settings::TRANSLATIONS_CSV_MAX_MB);
+        if ($bytes > $mb * 1048576) {
             throw new ApiException(422, ['error' => 'too_large', 'message' => 'Die CSV-Datei ist zu groß (höchstens '
-                . (self::MAX_BYTES / 1048576) . ' MB)']);
+                . $mb . ' MB)']);
         }
     }
 

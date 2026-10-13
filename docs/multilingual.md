@@ -197,7 +197,7 @@ hard disk or from the directory `translations/`, which is filled via FTP like `s
   default language. The rest is imported. An import adds and overwrites, it **deletes nothing**.
 * **Lenient when reading:** a BOM at the beginning, `;` instead of `,` as the separator (this is how Excel saves with German settings),
   Windows line endings and empty lines are allowed. Line breaks in the text become a single space, as when saving
-  by hand. Without the header line `kind,ref,text`, with a character set other than UTF-8 or above 2 MB → `422`.
+  by hand. Without the header line `kind,ref,text`, with a character set other than UTF-8 or above 2 MB (setting `translations_csv_max_mb`) → `422`.
 * **The server does not know the list of UI text keys** (it only exists in the frontend) and only checks the form. An
   outdated key is therefore imported but never displayed.
 * **`translations/` is not public:** only the admin API reads the files. The `.htaccess` in the main directory routes

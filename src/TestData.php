@@ -52,6 +52,7 @@ use PDO;
 final class TestData
 {
     public const DEFAULT_COUNT = 10;
+    /** Default - can be changed under System → Einstellungen (Settings::TESTDATA_MAX_COUNT). */
     public const MAX_COUNT = 1000;
 
     private const WORDS = [
@@ -317,6 +318,7 @@ final class TestData
             }
         }
         $counts = [];
+        $max = (int) Settings::get($this->pdo, Settings::TESTDATA_MAX_COUNT);
         foreach (array_keys($this->model['entities']) as $t) {
             $v = array_key_exists($t, $per) ? $per[$t] : $default;
             if (!is_int($v) && !(is_string($v) && preg_match('/^\d+$/', $v))) {
@@ -324,8 +326,8 @@ final class TestData
                 continue;
             }
             $v = (int) $v;
-            if ($v < 0 || $v > self::MAX_COUNT) {
-                $errors[$t] = 'Erlaubt: 0 bis ' . self::MAX_COUNT;
+            if ($v < 0 || $v > $max) {
+                $errors[$t] = 'Erlaubt: 0 bis ' . $max;
                 continue;
             }
             $counts[$t] = $v;

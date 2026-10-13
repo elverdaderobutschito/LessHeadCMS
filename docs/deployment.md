@@ -129,7 +129,7 @@ The active diagram of an **already populated** installation can be edited as tex
    `503 {"error": "maintenance", "message": "Wartung: Eine Schema-Migration läuft gerade. Bitte in Kürze erneut
    versuchen."}` and `Retry-After: 10`. Reading (`GET`) stays unaffected (readers see the old state until the
    COMMIT). The flag is removed again in any case; if it stays behind after a hard abort (e.g. `max_execution_time`),
-   it counts as orphaned after **2 minutes** (`Maintenance::MAX_AGE`) and is ignored. The same flag applies during
+   it counts as orphaned after **2 minutes** (`Maintenance::MAX_AGE`; changeable under System → Einstellungen, „Wartungssperre gilt höchstens“) and is ignored. The same flag applies during
    a restore.
 3. **Backup before every apply** (`src/SchemaBackup.php`): immediately before the transaction (after all checks, under
    the lock) the server creates a pair with a shared timestamp in `data/schema-backups/` – the complete
@@ -140,7 +140,7 @@ The active diagram of an **already populated** installation can be edited as tex
    is removed again (the database is unchanged after all). The last **5** pairs are kept
    (changeable under System → Einstellungen, „Aufbewahrte Sicherungen“, or with `define('SCHEMA_BACKUP_KEEP', 5);`
    in `config.php` – a value saved in the admin area takes precedence); older ones are deleted together after a successful
-   apply. If the database is larger than 50 MB (`SCHEMA_BACKUP_WARN_MB`), System → Schema shows a notice about the
+   apply. If the database is larger than 50 MB (System → Einstellungen, „Speicherplatz-Hinweis ab“, or `SCHEMA_BACKUP_WARN_MB` in `config.php`), System → Schema shows a notice about the
    storage needed (size × count). The page lists the existing pairs; `data/` is blocked via `.htaccess`, the
    backups cannot be retrieved over the web. Older backups from before the database copies
    (`20261001-143000_<file>.puml`) also appear in the list and count towards the retention.

@@ -330,7 +330,7 @@ final class SchemaBackup
     {
         $keep = Settings::get($pdo, Settings::SCHEMA_BACKUP_KEEP);
         $size = is_file(Config::dbFile()) ? (int) filesize(Config::dbFile()) : 0;
-        $warn = Config::schemaBackupWarnBytes();
+        $warn = Settings::schemaBackupWarnBytes($pdo);
         $mb = function (int $bytes): string {
             return number_format($bytes / 1048576, $bytes >= 10 * 1048576 ? 0 : 1, ',', '.') . ' MB';
         };

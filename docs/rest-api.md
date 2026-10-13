@@ -29,11 +29,11 @@ _Part of the [LessHeadCMS documentation](../README.md)._
 | Parameter | Meaning |
 |---|---|
 | `page` | page from 1 (default 1). A page past the end delivers `data: []`, not an error |
-| `per_page` | rows per page, 1 to **500** (default 50). More → `422` with a message, **no** silent capping |
+| `per_page` | rows per page, 1 to **500** (default 50). More → `422` with a message, **no** silent capping. Both numbers are the defaults of the settings `list_max_per_page` and `list_default_per_page` ([Settings](api-users.md#settings-api_settings-system--einstellungen)) |
 | `sort`, `order` | field of the entity (also `id` and FK columns; not n:n, not a media field), `order=asc`/`desc`. Empty values come last in both directions, ties are resolved by the `id`. Text case-insensitive, umlauts like their base letter, numbers in the text numerically; FK column by the label of the target row; richtext by plain text. Without `sort`: by `id` |
 | `filter[field]` | depending on the kind of field: **string/text/richtext** substring, case-insensitive (richtext in the plain text without Markdown); **FK column, n:n list** substring of the label `<entity> #<id> – <title_field>` – `<entity>` matches both in the spelling the caller sees (translation of their display language; public API: display text of the default language) and with the name from the diagram; **enum** one of the values, several separated by commas; **bool/visibility** `true`/`false` (`false` also matches empty); **int/decimal/date/id** `filter[field][from]` and/or `filter[field][to]`, bounds inclusive |
 | `eq[field]` | exact value (for FK columns the id of the target row); empty = field is empty |
-| `ids` | only these rows, separated by commas (at most 500) |
+| `ids` | only these rows, separated by commas (at most 500, setting `list_max_per_page`) |
 | `q` | substring across all fields except text/richtext/bool, including FK and n:n labels |
 | `for`, `for_id` | `for=<entity>.<field>`: only rows that are **selectable** as a value of this relationship (FK column or n:n list pointing to this entity); `for_id` = the row of `<entity>` currently being edited (missing when creating). Excluded are, for a self-reference, the row itself and all its descendants, for 1:1 the target rows already taken by another row, for n:n to the own entity the row itself. The exclusions are part of the query: `total` and every page only count selectable rows. This is how dropdown and selection dialog of the UI query; saving checks the same rules independently (`422`/`409`) |
 
@@ -54,7 +54,8 @@ on them → `422`, `q` does not search them. `total` counts the matches of the q
 of the rows while reading the page. If it exceeds the limit, it answers with `413 response_too_large` (with `suggested_per_page`) before
 the response is built – so even 500 rows of a very "wide" schema (long texts) do not lead to a silent
 abort for lack of memory. The limit is one tenth of the free PHP `memory_limit`, at most 16 MB, at least 1 MB;
-it can be fixed with `define('LIST_MAX_BYTES', …)` in `config.php`.
+it can be fixed with `define('LIST_MAX_BYTES', …)` in `config.php` or, taking precedence, with the setting
+`list_max_response_mb` under System → Einstellungen ([Settings](api-users.md#settings-api_settings-system--einstellungen)).
 
 **Sorting and text search** are computed by PHP per row (SQLite knows upper/lower case and collation for ASCII only). The
 default order by `id` and range/equality filters run directly in the database; a text sort or
@@ -104,7 +105,7 @@ file replacement – entries already stored stay unchanged, so a frontend should
 duration for video/audio deliberately does not exist (it would need e.g. ffprobe, usually not available on shared hosting).
 
 **Thumbnails** (`src/Thumbnail.php`, GD): for raster images (jpg/jpeg/png/gif/webp), `media/<same name>_thumb.<same extension>`
-is additionally created on upload, at most 200 × 200 pixels, aspect ratio kept, in the format of the
+is additionally created on upload, at most 200 × 200 pixels (setting `media_thumbnail_px` for images uploaded from then on, [Settings](api-users.md#settings-api_settings-system--einstellungen)), aspect ratio kept, in the format of the
 original (PNG/WebP with alpha channel, GIF with a transparent colour; animated GIFs become the first frame). No
 thumbnail for SVG, video, audio, documents and for images that are already at most 200 × 200 in size – there the
 original is the preview. If the creation fails (GD is missing or cannot handle the format, image broken, too large for

@@ -57,6 +57,7 @@ namespace LessHeadCMS;
  */
 final class ListQuery
 {
+    /** Defaults - both can be changed under System → Einstellungen (Settings::LIST_*_PER_PAGE), see the constructor. */
     public const DEFAULT_PER_PAGE = 50;
     public const MAX_PER_PAGE = 500;
 
@@ -94,9 +95,12 @@ final class ListQuery
      *        (parameter for), null = the entity does not exist for them; if not given, nothing is denied
      * @param callable|null $entityNames fn(): array<string,string> table => entity name in the caller's display
      *        language (translated ones only); only called if a label is searched
+     * @param int $defaultPerPage rows per page without per_page
+     * @param int $maxPerPage largest per_page (and largest number of ids) allowed
      */
     public function __construct(array $model, array $entity, array $denied, array $query, array $conditions = [],
-        ?callable $deniedOf = null, ?callable $entityNames = null)
+        ?callable $deniedOf = null, ?callable $entityNames = null, int $defaultPerPage = self::DEFAULT_PER_PAGE,
+        int $maxPerPage = self::MAX_PER_PAGE)
     {
         $this->model = $model;
         $this->entity = $entity;
@@ -104,7 +108,7 @@ final class ListQuery
         $this->deniedOf = $deniedOf;
         $this->entityNames = $entityNames;
         $this->page = $this->positiveInt($query, 'page', 1, PHP_INT_MAX);
-        $this->perPage = $this->positiveInt($query, 'per_page', self::DEFAULT_PER_PAGE, self::MAX_PER_PAGE);
+        $this->perPage = $this->positiveInt($query, 'per_page', min($defaultPerPage, $maxPerPage), $maxPerPage);
 
         foreach (['filter', 'eq'] as $key) {
             if (isset($query[$key]) && !is_array($query[$key])) {
@@ -128,8 +132,8 @@ final class ListQuery
             $ids = is_string($query['ids']) ? array_filter(explode(',', $query['ids']), 'strlen') : null;
             if ($ids === null || array_filter($ids, function ($v) {
                 return !ctype_digit($v);
-            }) || count($ids) > self::MAX_PER_PAGE) {
-                $this->errors['ids'] = 'IDs durch Komma getrennt erwartet, höchstens ' . self::MAX_PER_PAGE;
+            }) || count($ids) > $maxPerPage) {
+                $this->errors['ids'] = 'IDs durch Komma getrennt erwartet, höchstens ' . $maxPerPage;
             } else {
                 $conditions[] = $ids ? 'e."id" IN (' . implode(', ', array_map('intval', $ids)) . ')' : '0';
             }

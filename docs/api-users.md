@@ -27,7 +27,8 @@ _Part of the [LessHeadCMS documentation](../README.md)._
 * **Password rule** (`Auth::passwordError()`, applies to `POST /api/users` and `PUT /api/me/password`): at least 8 characters,
   at least one digit (0–9) and at least one special character – any character that is neither a letter (including umlauts) nor a digit
   nor whitespace, i.e. `! ? # - _ . @ $ % & * ( ) [ ] { } ; : , < > = + / …`, but also `€` or `§`; at most 72 bytes
-  (bcrypt). Upper and lower case do not have to be mixed. Violation → `422` with `errors.password`: the rule plus what is missing,
+  (bcrypt). Upper and lower case do not have to be mixed. This is the default; minimum length and the three kinds of
+  characters can be changed under System → Einstellungen ([Settings](#settings-api_settings-system--einstellungen)). Violation → `422` with `errors.password`: the rule plus what is missing,
   e.g. „… Es fehlt: eine Ziffer, ein Sonderzeichen.“; the UI shows this directly at the password field. The rule only applies
   when **setting** a password: the login only checks the hash, older simpler passwords keep working. The button
   „Sicheres Passwort generieren“ (16 characters, at least one lower-case/upper-case letter, one digit, one special character each)
@@ -43,7 +44,7 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   so that a session someone left open cannot take over the account. Technically the same API
   `PUT /api/me/password` (user ID from the session - there is still no way to set another user's
   password). No hash route name of its own, hence no further reserved class name either.
-* **Sessions:** PHP sessions with their own cookie `lhcms_session` (HttpOnly, SameSite=Lax, `Secure` under HTTPS), valid for 8 hours from login.
+* **Sessions:** PHP sessions with their own cookie `lhcms_session` (HttpOnly, SameSite=Lax, `Secure` under HTTPS), valid for 8 hours from login (setting `session_lifetime_hours`).
   The session files live in `data/sessions/` (not in the hoster's `session.save_path`); expired files are cleaned up by the
   login. Public GET requests do not start a session and do not set a cookie. A deactivated user (`active = false`)
   immediately counts as logged out even with a session that is still valid.
@@ -123,7 +124,7 @@ user no key – create a new user instead.
 SHA-256 hash** (unique index) plus the last 6 characters for recognising the key; the plain text exists only in the
 response that creates it. It is never written to a log or an error message, and it travels in a header, not in the URL.
 Each API user has **at most one active key**: creating a new one revokes the previous one in the same transaction.
-`last_used_at` is updated at most every 5 minutes, not on every request. The table and the column
+`last_used_at` is updated at most every 5 minutes (setting `api_key_last_used_seconds`), not on every request. The table and the column
 `users.api_read_only` are created on demand – an existing installation needs no new `/bootstrap`.
 
 | Method  | Path                          | Description |
@@ -162,28 +163,106 @@ as rows of `_meta`, read on every request – a change applies at once, without 
 returns all of them as `{name: value}`, `PUT /api/_settings` changes the ones contained in the body (`422` for an unknown
 name, a wrong type or a number outside the allowed range – then nothing is saved, the message is in `errors.<name>`);
 both for `role = admin` only. The available settings are defined in `Settings::DEFINITIONS`. A setting that was never
-saved has no row and keeps its default, so an existing installation behaves as before.
+saved has no row and keeps its default – the value that used to be fixed in the code, or the one from `config.php` – so
+an existing installation behaves as before. Numbers are whole numbers (JSON integers, not strings); a stored value that
+is unusable (edited by hand, outside the range) counts as not stored.
 
-On the page, the switch saves at once; the numbers are entered in the groups „Anmeldung“, „Mediathek“ and
-„Schema-Sicherungen“ and saved together with „Speichern“ (only the changed values are sent). Numbers are whole numbers
-(JSON integers, not strings).
+**The page** groups the settings in five tabs, the same building block as the rights management and the localization
+(`TabPage.jsx`); every tab has its own address and can be linked directly:
+
+| Tab | Address | Settings |
+|-----|---------|----------|
+| „Anmeldung & Sicherheit“ | `#/_settings` or `#/_settings/security` | read access, password rule, session, lock after failed attempts |
+| „Mediathek“ | `#/_settings/media` | upload size, thumbnails, text lengths |
+| „Listen“ | `#/_settings/lists` | page sizes, size of a list response, task list |
+| „System & Wartung“ | `#/_settings/system` | schema backups, maintenance lock, API keys |
+| „Import & Testdaten“ | `#/_settings/tools` | test data, translation import |
+
+The switch `require_auth_for_read` saves at once. Everything else – numbers and the checkboxes of the password rule – is
+saved per tab with „Speichern“; only the changed values are sent, so the other tabs stay untouched. The browser checks
+the same ranges as the server before sending. Changes that were typed but not saved are lost when the tab is switched.
+
+What the UI itself needs of these settings for every logged-in user, not only for admins (password rule, page sizes,
+upper limit of the test data form), is part of `GET /api/me` as `settings` (`Settings::client()`); the UI reads it on
+loading, after the login and after saving on the settings page.
+
+#### „Anmeldung & Sicherheit“
 
 | Setting | Default | Effect |
 |---------|---------|--------|
 | `require_auth_for_read` | `false` | „Authentifizierung auch für Lesezugriffe erforderlich“. `false`: reading (`GET`) is public as described under "REST API". `true`: **every** request to the REST API without a valid session or API key is `401` – also `GET` on entities and rows that are published (`visibility = true`); with a session whose initial password has not been changed yet `403 password_change_required`. |
-
+| `password_min_length` | `8` | „Mindestlänge“ in characters, `8` to `64`, for every newly set password (creating a user, `PUT /api/me/password`). Not retroactive: the login only checks the hash, existing shorter passwords keep working. |
+| `password_require_digit` | `true` | „Ziffer erforderlich“: a new password must contain a digit. |
+| `password_require_special` | `true` | „Sonderzeichen erforderlich“: a new password must contain a character that is neither a letter nor a digit nor whitespace. |
+| `password_require_mixed_case` | `false` | „Groß- und Kleinbuchstaben erforderlich“: a new password must contain an upper-case and a lower-case letter. |
+| `session_lifetime_hours` | `8` | „Gültigkeit einer Sitzung“ in hours, `1` to `720` (30 days), counted from the login, independent of activity. Applies to running sessions as well: a session older than the new value is logged out on its next request. |
 | `login_rate_limit_max` | `5` | „Erlaubte Fehlversuche“, `3` to `100`: failed attempts allowed per user name and per IP within the time window; the next attempt is locked. See [Rate limiting on login](#rate-limiting-on-login). |
 | `login_rate_limit_window_minutes` | `15` | „Zeitfenster“ in minutes, `1` to `1440` (24 h): how long a failed attempt counts, and with that how long a lock lasts at most. |
-| `media_max_mb` | `20`, or `MEDIA_MAX_MB` from `config.php` | „Maximale Dateigröße“ per file of the media library in MB, `1` to `2048`. A saved value takes precedence over `config.php`. The PHP limits `upload_max_filesize`/`post_max_size` still apply if they are lower – the page then shows a note with the effective limit (`GET /api/_media/limits`). Files already uploaded are not touched. |
-| `schema_backup_keep` | `5`, or `SCHEMA_BACKUP_KEEP` from `config.php` | „Aufbewahrte Sicherungen“, `1` to `100`: backup pairs kept before schema changes (see [Deployment](deployment.md)). A saved value takes precedence over `config.php`; older backups are deleted on the next „Anwenden“, not when saving. |
+| `login_attempts_retention_days` | `1` | „Aufbewahrung der Fehlversuche“ in days, `1` to `365`: older rows of `login_attempts` are deleted on every login call. Only the time window counts for the lock; a longer retention merely keeps the rows for looking them up. |
 
-All of them apply at once: a lower `login_rate_limit_max` also locks whoever already has that many failed attempts in the
+The message of the server for a password that is too simple and the hint below the password fields name exactly the rule
+in force, and „Sicheres Passwort generieren“ always satisfies it (16 characters, or the minimum length if that is
+larger; lower-case, upper-case, digit and special character are always contained). With the default rule the hint is the
+fixed UI text `password.hint`; a changed rule is composed from `password.rule_*`.
+
+A session is checked against its validity on every request (age of the session file); expired files are removed on the
+next login.
+
+The rate limit applies at once: a lower `login_rate_limit_max` also locks whoever already has that many failed attempts in the
 window, a shorter window releases existing locks earlier. The session of a logged-in admin is not affected by a lock, so
 the values can still be corrected.
 
 `require_auth_for_read` – not affected, because the login page needs them: `GET /`, `/assets/`, `GET /api/me`, `POST /api/login` and
 `GET /api/_ui_texts` (texts of the UI only). **Also not affected: the files of the media library** – Apache delivers
 `/media/…` directly, without PHP; whoever knows the address of a file can fetch it.
+
+#### „Mediathek“
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `media_max_mb` | `20`, or `MEDIA_MAX_MB` from `config.php` | „Maximale Dateigröße“ per file of the media library in MB, `1` to `2048`. A saved value takes precedence over `config.php`. The PHP limits `upload_max_filesize`/`post_max_size` still apply if they are lower – the page then shows a note with the effective limit (`GET /api/_media/limits`). Files already uploaded are not touched. |
+| `media_thumbnail_px` | `200` | „Kantenlänge der Vorschaubilder“ in pixels, `50` to `1000`: thumbnails are created at most this wide and this high. Applies to images uploaded or replaced from then on (and to thumbnails that are still being caught up); existing thumbnails are **not** recreated. |
+| `media_title_max` | `255` | „Titel“, `20` to `1000` characters. |
+| `media_alt_max` | `1000` | „Alt-Text“, `50` to `10000` characters. |
+| `media_description_max` | `20000` | „Beschreibung“, `100` to `100000` characters. |
+| `media_tag_max` | `100` | „Tag-Name“, `10` to `255` characters. |
+
+The text lengths are checked when a medium or a tag is saved (`422`, message at the field). Longer texts that are already
+stored stay as they are; they only have to be shortened when that field is saved again.
+
+#### „Listen“
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `list_default_per_page` | `50` | „Zeilen je Seite“, `5` to `500`: rows of `GET /api/{entity}` without `per_page`, and the page size a list of the UI opens with. Must not exceed `list_max_per_page` (`422`). |
+| `list_max_per_page` | `500` | „Größte Seitengröße“, `100` to `5000`: largest `per_page` and largest number of `ids`; more is `422`. The choice „Zeilen je Seite“ of the lists offers 25/50/100/200 and the default, nothing above this value. |
+| `list_select_per_page` | `25` | „Zeilen je Seite im Auswahldialog“, `5` to `100`: page size of the search and selection dialog for relationships. |
+| `list_max_response_mb` | `0` | „Größte Listenantwort“ in MB, `0` to `256`: above this size of the raw data of one list page the API answers `413` (see [REST API](rest-api.md)). `0` = automatic: `LIST_MAX_BYTES` from `config.php` if defined, otherwise one tenth of the free `memory_limit`, at most 16 MB. A saved size takes precedence over `config.php`; a value above the memory PHP has available makes requests abort. |
+| `tasks_list_limit` | `500` | „Aufgaben je Liste“, `10` to `5000`: `GET /api/_tasks` and `GET /api/_tasks/mine` deliver at most this many tasks, newest first. |
+
+These values change the public REST API as well: a consuming frontend that relies on 50 rows without `per_page` or
+on `per_page=500` being allowed should pass `per_page` explicitly and stay within `list_max_per_page`.
+
+#### „System & Wartung“
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `schema_backup_keep` | `5`, or `SCHEMA_BACKUP_KEEP` from `config.php` | „Aufbewahrte Sicherungen“, `1` to `100`: backup pairs kept before schema changes (see [Deployment](deployment.md)). A saved value takes precedence over `config.php`; older backups are deleted on the next „Anwenden“, not when saving. |
+| `schema_backup_warn_mb` | `50`, or `SCHEMA_BACKUP_WARN_MB` from `config.php` | „Speicherplatz-Hinweis ab“ in MB, `1` to `102400`: from this database size on, System → Schema points out the disk space the backups take up. A saved value takes precedence over `config.php`. |
+| `maintenance_timeout_seconds` | `120` | „Wartungssperre gilt höchstens“ in seconds, `30` to `3600`: age from which the maintenance flag `data/migration.flag` counts as orphaned and is ignored (it stays behind if PHP aborts hard during a schema migration or a restore). Must not be shorter than a migration takes on the server – otherwise writes get through while the database is being rebuilt. |
+| `api_key_last_used_seconds` | `300` | „„Zuletzt verwendet“ aktualisieren alle“ in seconds, `0` to `86400`: `last_used_at` of an API key is rewritten at most this often. `0` = on every request (one write access per request). |
+
+While the maintenance flag is active, `PUT /api/_settings` is rejected with `503` like every other write access.
+
+#### „Import & Testdaten“
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `testdata_max_count` | `1000` | „Größte Anzahl je Entität“, `10` to `10000`: largest count per entity of one call of `POST /api/_testdata/generate`; more is `422`. Large amounts may hit the execution time limit of the server. |
+| `translations_csv_max_mb` | `2` | „Maximale Größe einer CSV-Datei“ in MB, `1` to `32`, for the translation import (uploaded content and files from `translations/`); larger is `422 too_large`. |
+
+A further setting is one more entry in `Settings::DEFINITIONS`, its field in the tab description in `SettingsPage.jsx`
+and its texts (`settings.<name>`, `settings.<name>_unit`, `settings.<name>_hint` in `i18n-strings.js` and `en.csv`).
 
 ### Rate limiting on login
 

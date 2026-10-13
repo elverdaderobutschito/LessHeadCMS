@@ -382,8 +382,8 @@ final class Cms
      * One page of the list: {data, total, page, per_page, total_pages}. Paging, sorting and filtering run in the
      * database (ListQuery); n:n lists, media and minimum count warnings are only loaded for the rows of this page.
      *
-     * Protection against oversized responses: per_page is limited (ListQuery::MAX_PER_PAGE). In addition, the rows are
-     * read one by one and their raw size is counted; if it exceeds Config::listMaxBytes(), the query aborts with 413 BEFORE
+     * Protection against oversized responses: per_page is limited (Settings::LIST_MAX_PER_PAGE). In addition, the rows are
+     * read one by one and their raw size is counted; if it exceeds Settings::listMaxBytes(), the query aborts with 413 BEFORE
      * the response is built from it - very wide rows (long texts) therefore cannot silently blow up the
      * memory.
      *
@@ -403,7 +403,7 @@ final class Cms
         }
         $q = new ListQuery($this->model, $e, $denied, $query, $conditions, function (string $other): ?array {
             return $this->access !== null && $this->access->entityDenied($other) ? null : $this->denied($this->model['entities'][$other]);
-        }, $entityNames);
+        }, $entityNames, Settings::get($this->pdo, Settings::LIST_DEFAULT_PER_PAGE), Settings::get($this->pdo, Settings::LIST_MAX_PER_PAGE));
         $from = ' FROM ' . SqlGenerator::q($e['table']) . ' e' . $q->where;
 
         $count = $this->pdo->prepare('SELECT COUNT(*)' . $from);
@@ -417,7 +417,7 @@ final class Cms
         $idStmt->execute($q->params);
         $pageIds = array_map('intval', $idStmt->fetchAll(PDO::FETCH_COLUMN));
         $stmt = $this->pdo->query('SELECT * FROM ' . SqlGenerator::q($e['table']) . ' WHERE "id" IN (' . ($pageIds ? implode(', ', $pageIds) : 'NULL') . ')');
-        $limit = Config::listMaxBytes();
+        $limit = Settings::listMaxBytes($this->pdo);
         $bytes = 0;
         $rows = [];
         while (($row = $stmt->fetch()) !== false) {
