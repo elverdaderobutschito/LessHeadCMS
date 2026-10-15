@@ -1,0 +1,51 @@
+@startuml CourseManagement
+
+package "Course Offering" {
+
+  class Course {
+    + id: int
+    + title: string {title}
+    + description: richtext
+    + price: decimal
+    + active: visibility
+  }
+
+  class Instructor {
+    + id: int
+    + name: string {title}
+  }
+
+  class Category {
+    + id: int
+    + name: string {title}
+  }
+
+  Course "n" --> "1" Category : belongs to
+  Course "n" --> "1" Instructor : taught by {cascade}
+  Category "n" --> "0..1" Category : subcategory of {cascade}
+
+}
+
+package "Member Management" {
+
+  class Member {
+    + id: int
+    + name: string {title}
+    + email: string
+    + member_since: date
+  }
+
+  class Booking {
+    + id: int
+    + booked_on: date {title}
+    + status: string {title}
+  }
+
+  Booking "n" --> "1" Member : booked by {cascade}
+
+}
+
+Booking "n" --> "1" Course : for course {cascade}
+Member "n" -- "n" Course : interested in {label}
+
+@enduml

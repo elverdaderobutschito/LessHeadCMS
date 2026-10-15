@@ -104,6 +104,21 @@ file replacement – entries already stored stay unchanged, so a frontend should
 `original_name`). `mime_type` is the standard type belonging to the extension, `kind` follows from it. A
 duration for video/audio deliberately does not exist (it would need e.g. ffprobe, usually not available on shared hosting).
 
+**Supported file formats** (fixed list in `src/Media.php`, not configurable – only the size limit is a setting). Every
+format was tested with a real file (`jpeg` only via `jpg`, same check): upload, recognised type and storage; ogg, doc,
+xls, ppt, xlsx and pptx additionally with download via the public URL byte for byte in the automated test
+`e2e/tests/media-extras.spec.js`.
+
+| Kind | Extensions | Stored `mime_type` | Notes |
+|---|---|---|---|
+| image | jpg, jpeg, png, gif, webp | `image/jpeg`, `image/png`, … | width/height read; thumbnail with GD |
+| image | svg | `image/svg+xml` | width/height from the attributes or `viewBox`; active content → `422 svg_unsafe` |
+| video | mp4, webm | `video/mp4`, `video/webm` | width/height read from the container |
+| audio | mp3, wav, ogg | `audio/mpeg`, `audio/wav`, `audio/ogg` | |
+| document | pdf, txt, csv | `application/pdf`, `text/plain`, `text/csv` | |
+| document | doc, xls, ppt | `application/msword`, `application/vnd.ms-excel`, `application/vnd.ms-powerpoint` | older libmagic versions report only `application/vnd.ms-office`/`application/cdfv2`; these are accepted as well |
+| document | docx, xlsx, pptx | the Office Open XML types | the ZIP must contain `word/`, `xl/` or `ppt/` respectively |
+
 **Thumbnails** (`src/Thumbnail.php`, GD): for raster images (jpg/jpeg/png/gif/webp), `media/<same name>_thumb.<same extension>`
 is additionally created on upload, at most 200 × 200 pixels (setting `media_thumbnail_px` for images uploaded from then on, [Settings](api-users.md#settings-api_settings-system--einstellungen)), aspect ratio kept, in the format of the
 original (PNG/WebP with alpha channel, GIF with a transparent colour; animated GIFs become the first frame). No

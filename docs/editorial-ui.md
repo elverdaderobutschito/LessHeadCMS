@@ -32,7 +32,7 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   and × for removing. „Mediathek durchsuchen“ opens a selection dialog as a tile grid with
   search, kind filter and integrated upload: a click on a tile adds the medium or removes it again (the dialog
   stays open), freshly uploaded files are selected immediately. In the form, media fields come after the normal
-  fields and before the n:n selections; in the list view they do not appear as a column.
+  fields and before the n:n selections; in the list view they are preview columns (see column selection below).
 * **Display label of referenced rows** (FK select options, n:n selection, list view): `<entity> #<id> – <text
   of the title_field>`, e.g. „Bestellung #3 – verpackt“, with several `{title}` fields combined comma-separated (e.g.
   „Bestellung #3 – 2026-09-23, verpackt“, see [PlantUML rules](plantuml-syntax.md)). If the row has no text (yet) in any

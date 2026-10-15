@@ -5,7 +5,8 @@ _Part of the [LessHeadCMS documentation](../README.md)._
 ## What this folder is
 
 This folder is the complete, ready-to-run application: copy it to a web server with PHP and it works. Nothing has to be
-built or installed. Requirements: PHP ≥ 7.4 with `pdo_sqlite`, Apache with `mod_rewrite` (`.htaccess`).
+built or installed. Requirements: PHP ≥ 7.4 with `pdo_sqlite`, Apache with `mod_rewrite` (`.htaccess`) – with nginx only (no
+Apache) see [nginx without Apache](#nginx-without-apache).
 
 ```
 ./
@@ -43,6 +44,127 @@ PHP only reads in `translations/`, write permissions are not needed there. `data
 and on `media/` (uploaded files of the media library) – the same as for `data/`; if `media/` is missing, PHP creates it itself
 on the first upload, including `.htaccess`. This folder never contains a real `config.php`; uploading it again therefore
 does not overwrite yours.
+
+## nginx without Apache
+
+The directory protection of LessHeadCMS lives in `.htaccess` files. Only Apache reads them – **nginx ignores
+`.htaccess` completely**: the files are in the folders, but have no effect. What matters is whether an Apache is involved:
+
+* **nginx as reverse proxy in front of Apache** (e.g. Webgo): every request still ends up at Apache, which applies the
+  `.htaccess` files. Nothing to do – check it anyway (see [Checking the protection](#checking-the-protection)).
+* **nginx only** (nginx + PHP-FPM, no Apache behind it): the protection has to be in the nginx configuration itself.
+  Without it, anyone can download `data/cms.sqlite` – the complete database including the password hashes of all users –
+  and the `.puml` files, workflow files and language files, and a `.php` file in `media/` would be executed (tested
+  with nginx 1.27 + PHP-FPM 8.2 without the block below: `200` for `data/cms.sqlite`, PHP in `media/` runs).
+
+### What the .htaccess files protect
+
+The nginx block below reproduces exactly this, no more and no less:
+
+| Path | With Apache |
+|---|---|
+| `data/` (database, `sessions/`, `schema-backups/`, lock) | not retrievable: the main `.htaccess` routes it to `index.php`, in addition `data/.htaccess` denies everything |
+| `schema/`, `schema/workflows/` | not retrievable (main `.htaccess`; `schema/workflows/.htaccess` denies everything) |
+| `translations/` | not retrievable (main `.htaccess`; `translations/.htaccess` denies everything and switches off script handlers) |
+| `src/`, `vendor/`, `config.php` | not retrievable and not executable directly (main `.htaccess`) |
+| `media/` | **public** by design (see "Media library files are public" under [Important notes](#important-notes)): files are served directly, but no directory listing, no script execution, executable or server-side interpreted extensions (`.php`, `.phtml`, `.phar`, `.cgi`, `.pl`, `.py`, `.sh`, `.asp`, `.jsp`, `.htaccess`, `.ini`, …) → `403`, `X-Content-Type-Options: nosniff`, SVG with `Content-Security-Policy: … sandbox` |
+| `assets/` | public, served directly |
+| everything else | to `index.php` |
+
+`media/` must therefore **not** be blocked as a whole – the media library and every website using its files
+would break.
+
+### nginx configuration
+
+For an installation in the docroot (in a subfolder, prefix every path, e.g. `/cms/data/` instead of `/data/` and
+`/cms/index.php` in `try_files`):
+
+```nginx
+# LessHeadCMS - same protection as the .htaccess files (installation in the docroot)
+
+# Not retrievable: database, sessions, backups, schema, workflow files, language files, PHP sources, config.php
+location ^~ /data/         { deny all; }
+location ^~ /schema/       { deny all; }
+location ^~ /translations/ { deny all; }
+location ^~ /src/          { deny all; }
+location ^~ /vendor/       { deny all; }
+location = /config.php     { deny all; }
+location ~ /\.ht           { deny all; }
+
+# Frontend: served directly
+location ^~ /assets/ {
+    try_files $uri =404;
+}
+
+# Media library: public, but no directory listing and never executed
+location ^~ /media/ {
+    autoindex off;
+    add_header X-Content-Type-Options "nosniff" always;
+    location ~* \.(php\d?|phtml|phar|pht|phps|cgi|pl|py|sh|shtml|asp|aspx|jsp|htaccess|htpasswd|ini)$ {
+        deny all;
+    }
+    location ~* \.svg$ {
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox" always;
+    }
+}
+
+# Everything else: index.php (like the RewriteRule in the main .htaccess)
+location / {
+    try_files $uri /index.php$is_args$args;
+}
+```
+
+* **`^~` is essential.** Hosters usually already have a `location ~ \.php$ { fastcgi_pass … }` for PHP. A regular
+  expression wins over a plain prefix `location` – without `^~`, `/src/….php` or a `.php` in `media/` would go to PHP
+  again. `^~` makes nginx stop at the prefix and never look at the PHP location for these paths.
+* **PHP itself** is not part of the block: `index.php` is handled by the hoster's existing PHP location. If the
+  configuration already has a `location /`, nginx refuses a second one ("duplicate location") – then put the
+  `try_files` line into the existing one instead.
+* **Security headers of the UI** (`X-Frame-Options`, `Referrer-Policy`, `Content-Security-Policy`) are a separate topic,
+  see "Security headers of the UI" under [Important notes](#important-notes).
+
+### Where the block goes – not into the project folder
+
+This block **cannot be uploaded as a file** into the LessHeadCMS folder. nginx reads its configuration only from the
+server's configuration files when it starts or reloads; an `nginx.conf` in the docroot is ignored like the `.htaccess`
+(and would only be another publicly readable file). The block has to go into the server or vhost configuration of the
+site:
+
+* **Own server / VPS:** into the `server { … }` block of the site, check with `nginx -t`, then reload nginx.
+* **Shared hosting with a control panel:** on shared hosting you normally cannot do this via file upload, only through
+  the hoster's interface – for example Plesk: *Websites & Domains → Apache & nginx Settings → Additional nginx
+  directives*. Other panels name it differently, if they offer it at all.
+* **Otherwise via the hoster's support:** send them the block and ask them to add it to the vhost of your domain.
+
+### If the hoster offers no way to add nginx directives
+
+* **Moving `data/` out of the webroot** would be the usual fallback, but is **not possible at the moment**: LessHeadCMS
+  always uses `data/`, `schema/` and `translations/` next to `index.php`, there is no setting for another path. A symlink
+  does not help either – nginx follows symlinks by default, `/data/cms.sqlite` stays retrievable.
+* Hence: **do not run LessHeadCMS on such hosting.** Choose hosting with Apache (or nginx in front of Apache) or one
+  where nginx directives can be added.
+
+### Checking the protection
+
+Whatever the setup – check it after the first deployment (and after every change of hoster or server configuration)
+before relying on it. `data/cms.sqlite` only exists after `/bootstrap`, so check afterwards:
+
+```sh
+# must answer 403 or 404 - never 200
+curl -I https://<host>/data/cms.sqlite
+curl -I https://<host>/schema/simplecms.puml      # or another .puml that is in schema/
+curl -I https://<host>/translations/en.csv
+curl -I https://<host>/src/Config.php
+curl -I https://<host>/media/test.php             # need not exist: the extension alone is enough for 403
+
+# must answer 200 with "X-Content-Type-Options: nosniff" - the media library is public
+curl -I https://<host>/media/<file name of an uploaded file>
+```
+
+With the nginx block above all five answer `403`; Apache answers `403` or `404` depending on the path (some are blocked
+by their folder's `.htaccess`, the rest is routed to `index.php`) – both are fine. A `200` on one of the first five means the protection
+is missing: take the installation offline until it is fixed.
 
 ## /bootstrap
 
@@ -325,9 +447,10 @@ active schema); no bootstrap call needed.
   area takes precedence); if the hoster's `upload_max_filesize`/`post_max_size` are lower,
   their value applies (the media library shows the effective limit). Thumbnails need GD (see [REST API](rest-api.md)
   "Thumbnails"); without GD the preview loads the original. Tags no longer in use are not removed automatically; delete them via „Tags verwalten“ in the media library.
-* **Apache only:** The `.htaccess` protects `data/`, `schema/`, `src/` and `vendor/` by routing everything except `/assets/` and
-  `/media/` through `index.php`. With nginx, access to these folders (above all `data/cms.sqlite`) must be blocked in the server configuration
-  – and for `media/` what `media/.htaccess` does there must be replicated (no script execution, no listing).
+* **`.htaccess` needs Apache:** The `.htaccess` files protect `data/`, `schema/`, `translations/`, `src/` and `vendor/` and keep
+  `media/` free of script execution. nginx ignores them: behind nginx as a reverse proxy in front of Apache (e.g. Webgo) they still
+  apply, with nginx only the same rules must be in the server configuration – the block, where it goes, what to do
+  if the hoster does not allow it and how to check it: see [nginx without Apache](#nginx-without-apache).
 * **Security headers of the UI:** The `.htaccess` sets on every HTML response (the page itself – not on the
   JSON API, `assets/` and `media/`) `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and a
   `Content-Security-Policy`: `default-src 'none'`, scripts, images and API calls only from the own address (images
