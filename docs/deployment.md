@@ -19,6 +19,7 @@ Apache) see [nginx without Apache](#nginx-without-apache).
 │   └── workflows/          workflow files *.lhwf (at runtime: via FTP or via System → Workflows; .htaccess blocks everything)
 ├── assets/                 editorial UI (index.html with its JavaScript and CSS bundles)
 ├── translations/           language files (CSV) for the import; bundled: en.csv (not public, .htaccess blocks everything)
+├── templates/              model templates: example diagrams *.puml with explanations, see templates/README.md (not used at runtime)
 ├── data/                   SQLite file, lock, sessions/ (at runtime, blocked via .htaccess)
 ├── media/                  files of the media library (at runtime, public; .htaccess blocks any script execution)
 ├── LICENSE                 license of LessHeadCMS (AGPL-3.0-or-later)
@@ -67,6 +68,7 @@ The nginx block below reproduces exactly this, no more and no less:
 | `schema/`, `schema/workflows/` | not retrievable (main `.htaccess`; `schema/workflows/.htaccess` denies everything) |
 | `translations/` | not retrievable (main `.htaccess`; `translations/.htaccess` denies everything and switches off script handlers) |
 | `src/`, `vendor/`, `config.php` | not retrievable and not executable directly (main `.htaccess`) |
+| `templates/` | not retrievable (main `.htaccess`); model templates to read or copy via FTP, not used at runtime |
 | `media/` | **public** by design (see "Media library files are public" under [Important notes](#important-notes)): files are served directly, but no directory listing, no script execution, executable or server-side interpreted extensions (`.php`, `.phtml`, `.phar`, `.cgi`, `.pl`, `.py`, `.sh`, `.asp`, `.jsp`, `.htaccess`, `.ini`, …) → `403`, `X-Content-Type-Options: nosniff`, SVG with `Content-Security-Policy: … sandbox` |
 | `assets/` | public, served directly |
 | everything else | to `index.php` |
@@ -82,10 +84,11 @@ For an installation in the docroot (in a subfolder, prefix every path, e.g. `/cm
 ```nginx
 # LessHeadCMS - same protection as the .htaccess files (installation in the docroot)
 
-# Not retrievable: database, sessions, backups, schema, workflow files, language files, PHP sources, config.php
+# Not retrievable: database, sessions, backups, schema, workflow files, language files, model templates, PHP sources, config.php
 location ^~ /data/         { deny all; }
 location ^~ /schema/       { deny all; }
 location ^~ /translations/ { deny all; }
+location ^~ /templates/    { deny all; }
 location ^~ /src/          { deny all; }
 location ^~ /vendor/       { deny all; }
 location = /config.php     { deny all; }

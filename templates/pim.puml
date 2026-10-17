@@ -1,0 +1,76 @@
+@startuml PIM
+' Model template: product information management (PIM).
+' A deliberately small, static product data model - see templates/pim.md for its purpose and simplifications.
+
+' Languages of the translated product texts (data, not the display languages of the UI)
+enum Sprache {
+  DE
+  EN
+  FR
+}
+
+package "Produkte" {
+  ' Product or variant. Content in the default language; translations live in Produkttext.
+  ' A variant is a product of its own that points to its master product via "Variante von".
+  class Produkt {
+    + titel: string {title}
+    + sku: string {unique}
+    + ean: string?
+    + kurzbeschreibung: text?
+    + beschreibung: richtext?
+    + preis: decimal?
+    + menge: decimal?
+    + einheit: string?
+    + farbe: string?
+    + groesse: string?
+    + bilder: media?
+    + aktiv: visibility
+  }
+
+  ' Translation of the product texts: at most one per product and language
+  class Produkttext {
+    + sprache: Sprache {title} {unique}
+    + titel: string {title}
+    + kurzbeschreibung: text?
+    + beschreibung: richtext?
+  }
+}
+
+package "Katalog" {
+  ' Category tree: a category without a parent is a root category
+  class Kategorie {
+    + name: string {title}
+    + beschreibung: text?
+    + bild: media?
+  }
+
+  class Marke {
+    + name: string {title} {unique}
+    + website: string?
+    + logo: media?
+  }
+
+  ' Product type ("Textil", "Elektronik", ...): one per product, independent of the category tree
+  class Klassifikation {
+    + code: string {unique}
+    + name: string {title}
+    + beschreibung: text?
+  }
+
+  ' Output channel (webshop, print catalogue, marketplace, ...)
+  class Kanal {
+    + name: string {title} {unique}
+    + beschreibung: text?
+  }
+}
+
+Produkt "n" --> "0..1" Produkt : Variante von {cascade}
+Produkt "n" -- "n" Produkt : verwandt mit {symmetric} {label}
+Produkttext "n" --> "1" Produkt : Text von {cascade} {unique}
+Produkt "n" -- "n" Kategorie : eingeordnet in {label}
+Kategorie "n" --> "0..1" Kategorie : Unterkategorie von
+Produkt "n" --> "0..1" Marke
+Produkt "n" --> "0..1" Klassifikation
+Produkt "n" -- "n" Kanal : veröffentlicht in {label}
+
+@enduml

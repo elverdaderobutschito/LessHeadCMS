@@ -38,6 +38,7 @@ a REST API and an editorial UI, ready to use.
 - [Webhooks (build hooks on transitions and saves)](docs/webhooks.md)
 - [Multilingual support](docs/multilingual.md)
 - [API users and API keys](docs/api-users.md)
+- [Model templates (example diagrams to read or copy into `schema/`)](templates/README.md)
 
 ## License
 

@@ -1,0 +1,33 @@
+@startuml SimpleCMS
+
+class Artikel {
+  + id: int
+  + titel: string
+  + untertitel: string?
+  + inhalt: richtext
+  + veroeffentlicht: visibility
+  + erstellt_am: date
+}
+
+class Kategorie {
+  + id: int
+  + name: string
+  + beschreibung: text?
+}
+
+class Autor {
+  + id: int
+  + name: string
+  + email: string?
+}
+
+class Tag {
+  + id: int
+  + name: string
+}
+
+Artikel "n" --> "1" Kategorie : gehört zu
+Artikel "n" --> "1" Autor : geschrieben von
+Artikel "n" -- "n" Tag : hat
+
+@enduml
