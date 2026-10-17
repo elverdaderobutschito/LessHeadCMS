@@ -46,8 +46,9 @@ namespace LessHeadCMS;
  *   records. For every consecutive pair there must be a transition. States outside the path are allowed.
  * - `from -> to : label { ... }`: transition. The label is unique within the same from-state (not globally).
  *   `allowed=` (required): `group:<name>` and/or `role:<name>`, separated by commas. `assign=` (optional): `group:<name>`,
- *   `user:<name>` or `initiator`. `action=` (optional, at most once per action type): `<type>:<value>`, so far only
- *   `set_visibility:true|false` (ACTIONS) - a further type is a further entry there.
+ *   `user:<name>` or `initiator`. `action=` (optional): `<type>:<value>` - `set_visibility:true|false` (ACTIONS, at
+ *   most once per transition) and `webhook:<name>` (one line per webhook, several allowed, each name at most once;
+ *   whether the webhook exists is only checked by the combined analysis, Webhooks::checkWorkflows()).
  * - Comments (' at the start of a line, /' ... '/) and @startuml/@enduml are skipped; everything else is a schema error.
  *
  * Result: [ 'ArticleWorkflow' => [
@@ -56,7 +57,7 @@ namespace LessHeadCMS;
  *     'flow' => ['draft', 'review'], 'initial' => 'draft',
  *     'transitions' => [ ['from', 'to', 'label', 'allowed' => [['type' => 'group', 'name' => 'redaktion'], ...],
  *         'assign' => null | ['type' => 'group'|'user', 'name'] | ['type' => 'initiator'],
- *         'actions' => [['type' => 'set_visibility', 'value' => true]] ] ],
+ *         'actions' => [['type' => 'set_visibility', 'value' => true], ['type' => 'webhook', 'value' => 'netlify']] ] ],
  * ] ]
  */
 final class WorkflowParser
@@ -64,8 +65,12 @@ final class WorkflowParser
     /** Suffix by which the main schema recognizes a workflow field type */
     public const SUFFIX = 'Workflow';
 
-    /** Action type => check/conversion of the value (null = invalid) */
+    /** Action type => check/conversion of the value (null = invalid); action=webhook:<name> has a free value, see property() */
     private const ACTIONS = ['set_visibility' => ['true' => true, 'false' => false]];
+    /** Action type that calls a webhook (System → Einstellungen → Webhooks) */
+    public const WEBHOOK = 'webhook';
+    /** Name of a webhook: letter first, then letters, digits, _ and - (the same rule as in Webhooks) */
+    public const WEBHOOK_NAME = '/^[A-Za-z][A-Za-z0-9_-]{0,49}$/';
 
     private const IDENT = '/^[A-Za-z_][A-Za-z0-9_]*$/';
     /** Transition label: letters (umlauts too), digits, _ - and spaces in between */
@@ -299,11 +304,15 @@ final class WorkflowParser
                 throw new SchemaException("$where: assign= erwartet group:<name>, user:<name> oder initiator ('$value').", $no);
             }
         } elseif ($key === 'action') {
+            if (preg_match('/^(\w+)\s*:\s*(.*)$/u', $value, $p) && strtolower($p[1]) === self::WEBHOOK) {
+                self::webhookAction($t, trim($p[2]), $where, $no);
+                return;
+            }
             if (!preg_match('/^(\w+)\s*:\s*(.*)$/u', $value, $p) || !isset(self::ACTIONS[strtolower($p[1])])) {
                 throw new SchemaException("$where: Unbekannte Aktion '$value' (erlaubt: "
                     . implode(', ', array_map(function ($type) {
                         return $type . ':' . implode('|', array_keys(self::ACTIONS[$type]));
-                    }, array_keys(self::ACTIONS))) . ').', $no);
+                    }, array_keys(self::ACTIONS))) . ', ' . self::WEBHOOK . ':<name>).', $no);
             }
             $type = strtolower($p[1]);
             $arg = strtolower(trim($p[2]));
@@ -319,6 +328,25 @@ final class WorkflowParser
         } else {
             throw new SchemaException("$where: Unbekannte Angabe '{$m[1]}=' (erlaubt: allowed=, assign=, action=).", $no);
         }
+    }
+
+    /**
+     * action=webhook:<name>: one line per webhook (a transition may call several), the same name twice is an error.
+     * Only the syntax of the name is checked here; whether the webhook exists, Webhooks::checkWorkflows() decides.
+     */
+    private static function webhookAction(array &$t, string $name, string $where, int $no): void
+    {
+        if (!preg_match(self::WEBHOOK_NAME, $name)) {
+            throw new SchemaException("$where: action=" . self::WEBHOOK . " erwartet den Namen eines Webhooks (Buchstaben, Ziffern, _ und -, "
+                . "mit einem Buchstaben beginnend, höchstens 50 Zeichen; '$name').", $no);
+        }
+        foreach ($t['actions'] as $a) {
+            if ($a['type'] === self::WEBHOOK && self::fold($a['value']) === self::fold($name)) {
+                throw new SchemaException("$where: action=" . self::WEBHOOK . ":$name ist doppelt angegeben.", $no);
+            }
+        }
+        $t['actions'][] = ['type' => self::WEBHOOK, 'value' => $name];
+        $t['lines']['action:' . self::WEBHOOK . ':' . self::fold($name)] = $no;
     }
 
     private static function closeTransition(array &$wf, array $t): void

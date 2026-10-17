@@ -57,6 +57,10 @@ final class SqlGenerator
                         . (($fk['on_delete'] ?? 'restrict') === 'cascade' ? ' ON DELETE CASCADE' : '');
                 }
             }
+            // tracking metadata (created_at/by, updated_at/by), set by Cms only - see RecordMeta
+            if (RecordMeta::applies($entity)) {
+                array_push($lines, ...RecordMeta::columnDefinitions());
+            }
             // Uniqueness ({unique} group, 1:1 columns, see uniqueGroups()). Cms checks beforehand itself to return a
             // comprehensible 409; the constraint also covers parallel requests and direct SQL.
             // NULL values count (SQL standard) as distinct here.

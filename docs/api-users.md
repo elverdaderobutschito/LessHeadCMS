@@ -167,7 +167,7 @@ saved has no row and keeps its default – the value that used to be fixed in th
 an existing installation behaves as before. Numbers are whole numbers (JSON integers, not strings); a stored value that
 is unusable (edited by hand, outside the range) counts as not stored.
 
-**The page** groups the settings in five tabs, the same building block as the rights management and the localization
+**The page** groups the settings in six tabs, the same building block as the rights management and the localization
 (`TabPage.jsx`); every tab has its own address and can be linked directly:
 
 | Tab | Address | Settings |
@@ -177,6 +177,7 @@ is unusable (edited by hand, outside the range) counts as not stored.
 | „Listen“ | `#/_settings/lists` | page sizes, size of a list response, task list |
 | „System & Wartung“ | `#/_settings/system` | schema backups, maintenance lock, API keys |
 | „Import & Testdaten“ | `#/_settings/tools` | test data, translation import |
+| „Webhooks“ | `#/_settings/webhooks` | the webhooks themselves (list, history, create/edit – see [Webhooks](webhooks.md)) and the timeout of their calls |
 
 The switch `require_auth_for_read` saves at once. Everything else – numbers and the checkboxes of the password rule – is
 saved per tab with „Speichern“; only the changed values are sent, so the other tabs stay untouched. The browser checks
@@ -247,6 +248,7 @@ on `per_page=500` being allowed should pass `per_page` explicitly and stay withi
 
 | Setting | Default | Effect |
 |---------|---------|--------|
+| `revisions_keep` | `5` | „Aufbewahrte Versionen je Datensatz“, `0` to `10000`: versions kept per record ([Record versions](record-versions.md)); older ones are deleted on the next save of the record. `0` = keep all. |
 | `schema_backup_keep` | `5`, or `SCHEMA_BACKUP_KEEP` from `config.php` | „Aufbewahrte Sicherungen“, `1` to `100`: backup pairs kept before schema changes (see [Deployment](deployment.md)). A saved value takes precedence over `config.php`; older backups are deleted on the next „Anwenden“, not when saving. |
 | `schema_backup_warn_mb` | `50`, or `SCHEMA_BACKUP_WARN_MB` from `config.php` | „Speicherplatz-Hinweis ab“ in MB, `1` to `102400`: from this database size on, System → Schema points out the disk space the backups take up. A saved value takes precedence over `config.php`. |
 | `maintenance_timeout_seconds` | `120` | „Wartungssperre gilt höchstens“ in seconds, `30` to `3600`: age from which the maintenance flag `data/migration.flag` counts as orphaned and is ignored (it stays behind if PHP aborts hard during a schema migration or a restore). Must not be shorter than a migration takes on the server – otherwise writes get through while the database is being rebuilt. |
@@ -260,6 +262,15 @@ While the maintenance flag is active, `PUT /api/_settings` is rejected with `503
 |---------|---------|--------|
 | `testdata_max_count` | `1000` | „Größte Anzahl je Entität“, `10` to `10000`: largest count per entity of one call of `POST /api/_testdata/generate`; more is `422`. Large amounts may hit the execution time limit of the server. |
 | `translations_csv_max_mb` | `2` | „Maximale Größe einer CSV-Datei“ in MB, `1` to `32`, for the translation import (uploaded content and files from `translations/`); larger is `422 too_large`. |
+
+#### „Webhooks“
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `webhook_timeout_seconds` | `5` | „Längste Wartezeit“ in seconds, `1` to `30`: the webhooks of one save, transition or deletion are called at the same time, and the request waits at most this long for their answers; a webhook that has not answered by then is recorded as a timeout in its history. The write itself is already committed and stays so (see [Webhooks](webhooks.md)). |
+
+Above the setting the tab shows the webhooks themselves (`GET/POST/PUT/DELETE /api/_webhooks`, admins only, see
+[Webhooks](webhooks.md)).
 
 A further setting is one more entry in `Settings::DEFINITIONS`, its field in the tab description in `SettingsPage.jsx`
 and its texts (`settings.<name>`, `settings.<name>_unit`, `settings.<name>_hint` in `i18n-strings.js` and `en.csv`).

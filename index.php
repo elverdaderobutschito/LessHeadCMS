@@ -16,6 +16,8 @@ use LessHeadCMS\Media;
 use LessHeadCMS\Permissions;
 use LessHeadCMS\PumlExporter;
 use LessHeadCMS\PumlParser;
+use LessHeadCMS\RecordMeta;
+use LessHeadCMS\Revisions;
 use LessHeadCMS\SchemaBackup;
 use LessHeadCMS\SchemaException;
 use LessHeadCMS\SchemaIds;
@@ -25,6 +27,7 @@ use LessHeadCMS\Settings;
 use LessHeadCMS\TestData;
 use LessHeadCMS\TranslationCsv;
 use LessHeadCMS\Users;
+use LessHeadCMS\Webhooks;
 use LessHeadCMS\Workflows;
 
 // Lokal mit `php -S`: vorhandene Dateien unter /assets/ und /media/ (Mediathek) direkt ausliefern.
@@ -177,7 +180,7 @@ Flight::route('DELETE /api/users/@id:[0-9]+', function () {
 // Pfad beginnt mit "_", eine Entität kann ihn ohnehin nicht belegen (Klassennamen dürfen nicht mit _ beginnen).
 
 Flight::route('POST /api/_testdata/generate', function () {
-    Http::adminApi(function (Users $users, PDO $pdo) {
+    Http::adminApi(function (Users $users, PDO $pdo, array $admin) {
         Maintenance::guard(); // schreibt Content - nicht während einer Schema-Migration
         $model = Database::loadModel($pdo);
         if ($model === null) {
@@ -186,7 +189,9 @@ Flight::route('POST /api/_testdata/generate', function () {
                 'message' => 'Datenbank noch nicht initialisiert – bitte /bootstrap?token=... aufrufen',
             ]);
         }
-        return [200, (new TestData(new Cms($pdo, $model), $pdo, $model))->generate(Http::body())];
+        RecordMeta::ensure($pdo, $model);
+        // mit dem aufrufenden Nutzer: er steht als Ersteller in den Systemfeldern created_by/updated_by (RecordMeta)
+        return [200, (new TestData(new Cms($pdo, $model, null, $admin), $pdo, $model))->generate(Http::body())];
     }, 'testdata');
 });
 
@@ -771,6 +776,43 @@ Flight::route('PUT /api/_settings', function () {
     });
 });
 
+// ------------------------------------------------------------------ Webhooks
+// System → Einstellungen → Webhooks, nur role = admin: Aufruf einer URL bei Workflow-Transitionen (action=webhook:<name>)
+// und/oder global beim Anlegen/Ändern/Löschen (Webhooks). GET liefert alle samt Verlauf der letzten Aufrufe und den
+// Transitionen der aktiven Workflow-Datei, die sie aufrufen. Body von POST/PUT: {name, url, token, events, entities}.
+function webhooksApi(callable $handler): void
+{
+    Http::adminApi(function (Users $users, PDO $pdo) use ($handler) {
+        Maintenance::guardWrite();
+        return $handler($pdo, Database::loadModel($pdo) ?? ['entities' => []]);
+    });
+}
+
+Flight::route('GET /api/_webhooks', function () {
+    webhooksApi(function (PDO $pdo, array $model) {
+        return [200, Webhooks::all($pdo, $model)];
+    });
+});
+
+Flight::route('POST /api/_webhooks', function () {
+    webhooksApi(function (PDO $pdo, array $model) {
+        return [201, Webhooks::create($pdo, $model, Http::body())];
+    });
+});
+
+Flight::route('PUT /api/_webhooks/@id:[0-9]+', function ($id) {
+    webhooksApi(function (PDO $pdo, array $model) use ($id) {
+        return [200, Webhooks::update($pdo, $model, (int) $id, Http::body())];
+    });
+});
+
+// 409, solange die aktive Workflow-Datei den Webhook über action=webhook aufruft
+Flight::route('DELETE /api/_webhooks/@id:[0-9]+', function ($id) {
+    webhooksApi(function (PDO $pdo, array $model) use ($id) {
+        return [200, Webhooks::delete($pdo, $model, (int) $id)];
+    });
+});
+
 // Eigene effektive Berechtigungen (jede Rolle, mit Session): Abweichungen vom Standard - gesperrte Entitäten und Felder,
 // freigegebene Systembereiche. Die Oberfläche blendet danach die System-Einträge der Sidebar ein.
 Flight::route('GET /api/_permissions/me', function () {
@@ -885,7 +927,29 @@ Flight::route('PUT /api/@entity/@id:[0-9]+', function ($entity, $id) {
 // (Cms::transition()); 404 für Entitäten ohne Workflow
 Flight::route('POST /api/@entity/@id:[0-9]+/transition', function ($entity, $id) {
     Http::api(function (Cms $cms) use ($entity, $id) {
-        return [200, $cms->transition($entity, (int) $id, Http::body()['transition'] ?? null)];
+        $body = Http::body();
+        return [200, $cms->transition($entity, (int) $id, $body['transition'] ?? null, $body[Revisions::REASON_KEY] ?? null)];
+    });
+});
+
+// Versionen eines Datensatzes (Revisions): Verlauf und einzelne Version nur mit Session (Entwürfe, Nutzernamen), Rechte wie
+// beim Datensatz; Wiederherstellen wie PUT (Aktion "Bearbeiten"), erzeugt eine neue Version
+Flight::route('GET /api/@entity/@id:[0-9]+/revisions', function ($entity, $id) {
+    Http::api(function (Cms $cms) use ($entity, $id) {
+        return [200, $cms->revisions($entity, (int) $id)];
+    });
+});
+
+Flight::route('GET /api/@entity/@id:[0-9]+/revisions/@version:[0-9]+', function ($entity, $id, $version) {
+    Http::api(function (Cms $cms) use ($entity, $id, $version) {
+        return [200, $cms->revision($entity, (int) $id, (int) $version)];
+    });
+});
+
+// Body optional {"_reason": "..."}
+Flight::route('POST /api/@entity/@id:[0-9]+/revisions/@version:[0-9]+/restore', function ($entity, $id, $version) {
+    Http::api(function (Cms $cms) use ($entity, $id, $version) {
+        return [200, $cms->restore($entity, (int) $id, (int) $version, Http::body())];
     });
 });
 

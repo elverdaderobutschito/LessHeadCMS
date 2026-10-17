@@ -48,7 +48,8 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   true}]` – **only** for entities with a media field, the `_schema` of all others stays unchanged. The API delivers per
   field a list of media objects (see [REST API](rest-api.md)) and accepts IDs when writing. The field is inherited like any other
   (`extends`) and checked for name collisions (field of the same name, FK column, n:n list). **Schema errors:**
-  `{title}` or `{unique}` on a media field, `id: media`, a class `Media`/`Media_Tags`/`Media_Tag_Links`
+  `{title}` or `{unique}` on a media field, `id: media`, a reserved field name (`created_at`, `created_by`,
+  `updated_at`, `updated_by` – see "Reserved field names"), a class `Media`/`Media_Tags`/`Media_Tag_Links`
   (reserved), `enum Media` (name of the base type), a link table that coincides with a class, an n:n link table
   or that of another media field (e.g. class `Kurs_Galerie_Media` next to `Kurs.galerie`). Existing
   diagrams without `media` yield the same tables and the same `_schema`, unchanged.
@@ -64,6 +65,14 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   field values, no server-side aggregation) `REAL` is deliberately sufficient.
 * `id` → `INTEGER PRIMARY KEY AUTOINCREMENT`; if it is missing, it is added. If it is given, then only as `id: int`
   (another type or `id: int?` is a schema error instead of being silently skipped).
+* **Reserved field names `created_at`, `created_by`, `updated_at`, `updated_by`** (any spelling): every entity table gets
+  these four system fields automatically – time and user of creation and last change, set by the CMS, not declared in the
+  diagram (see [Record metadata](record-metadata.md)). A field or media field of this name is a schema error („… Der Name
+  ist für die automatischen Systemfelder reserviert …“), also when inherited. Similar names (`erstellt_am`, `created`)
+  stay free. An older installation with such a field keeps working (that entity has no system fields) until the field is
+  renamed with `{renamed_from:created_at}`. Likewise reserved: the field name `_reason` (reason for a change when saving,
+  see [Record versions](record-versions.md)), the class name `LH_Revision` (table of the versions) and the class names
+  `LH_Webhook`/`LH_Webhook_Call` (tables of the [webhooks](webhooks.md)) – each in any spelling; `Webhook` stays free.
 * **Required fields:** without an addition a field is required (`NOT NULL`, the API validates), a `?` directly after the type makes it
   optional: `+ titel: string` (required), `+ untertitel: string?` (optional). Applies to all types (`text?`, `richtext?`, `int?`, `bool?`, `date?`).
   For `bool`, "required" only means that the value must be sent (`false` is valid).

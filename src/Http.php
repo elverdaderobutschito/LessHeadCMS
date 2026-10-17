@@ -84,6 +84,7 @@ final class Http
                 ]);
             }
             $pdo = Database::connect();
+            RecordMeta::ensure($pdo, $model); // installations from before the tracking metadata (once)
             $method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
             if ($method !== 'GET' && $method !== 'HEAD') {
                 $user = Auth::requireSession($pdo);
@@ -164,6 +165,7 @@ final class Http
                 ]);
             }
             $pdo = Database::connect();
+            RecordMeta::ensure($pdo, $model);
             $user = Auth::requireSession($pdo);
             $access = Permissions::access($pdo, $user, $model);
             if ($systable !== null && $access !== null && !$access->systable($systable)) {

@@ -136,6 +136,7 @@ final class Bootstrap
                     Database::setMeta($pdo, 'schema_json', json_encode($model, JSON_UNESCAPED_UNICODE));
                     Database::setMeta($pdo, 'schema_source', $source);
                     SchemaIds::ensure($pdo); // stable IDs of all elements (visual schema editor)
+                    RecordMeta::markDone($pdo); // the tables already have the tracking metadata columns
                     $pdo->commit();
                 } catch (\Throwable $e) {
                     if ($pdo->inTransaction()) {
@@ -151,6 +152,12 @@ final class Bootstrap
                 }
                 SchemaIds::ensure($pdo); // installations from before the stable IDs get them added here
                 $result = ['status' => 'up_to_date'];
+                // installations from before the tracking metadata: add the columns (otherwise the first API call does it)
+                $model = Database::loadModel($pdo);
+                $added = $model !== null ? RecordMeta::ensure($pdo, $model) : [];
+                if ($added) {
+                    $result['record_meta_added'] = $added;
+                }
             } else {
                 return [
                     'status'  => 'migration_needed',

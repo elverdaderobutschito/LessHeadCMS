@@ -75,7 +75,11 @@ permissions of these groups themselves and permissions of the user themselves.
   required relationship in the meantime – this does not change the denial situation.
 * `deny` on a **field** (`scope: field` – field, media field or relationship, i.e. FK column or n:n list): it is missing in
   `_schema` and in every row (key removed, not `null`); a value sent along in `POST`/`PUT` is discarded without
-  an error, the stored value stays. `deny` on a required field or `id` is rejected (`422`). A field
+  an error, the stored value stays. `deny` on a required field or `id` is rejected (`422`). The record metadata
+  (`created_at`, `created_by`, `updated_at`, `updated_by`, see [Record metadata](record-metadata.md)) are no targets at
+  all: always visible with a session, never editable, like `id`. The history of a record ([Record versions](record-versions.md))
+  follows the same rules: a denied field is missing in every version and is never restored; restoring needs the action
+  „Bearbeiten“. A field
   of an abstract class applies in all subclasses.
 * **System area**: denied as soon as there is a `deny` anywhere; otherwise allowed if there is at least one `allow`.
   An **explicit** denial (`deny`) on `media` is rejected as long as the same owner has access to an entity

@@ -65,6 +65,8 @@ final class Settings
     public const LIST_MAX_RESPONSE_MB = 'list_max_response_mb';
     /** GET /api/_tasks and /api/_tasks/mine deliver at most this many tasks, see Workflows. */
     public const TASKS_LIST_LIMIT = 'tasks_list_limit';
+    /** Versions kept per record (Revisions); 0 = all. Older ones are deleted on the next save of the record. */
+    public const REVISIONS_KEEP = 'revisions_keep';
     /** Backup pairs kept before schema changes, see SchemaBackup. */
     public const SCHEMA_BACKUP_KEEP = 'schema_backup_keep';
     /** From this database size (MB) on, System -> Schema points out the storage needed for the backups. */
@@ -77,6 +79,8 @@ final class Settings
     public const TESTDATA_MAX_COUNT = 'testdata_max_count';
     /** Size limit of a CSV file of the translation import in MB, see TranslationCsv. */
     public const TRANSLATIONS_CSV_MAX_MB = 'translations_csv_max_mb';
+    /** Longest wait (seconds) for the calls of the webhooks of one save/transition/deletion, see Webhooks. */
+    public const WEBHOOK_TIMEOUT_SECONDS = 'webhook_timeout_seconds';
 
     /**
      * name => ['bool', default] or ['int', default, min, max]. Default null: the value from config.php (or its own
@@ -106,12 +110,14 @@ final class Settings
         self::LIST_SELECT_PER_PAGE            => ['int', 25, 5, 100],
         self::LIST_MAX_RESPONSE_MB            => ['int', 0, 0, 256],
         self::TASKS_LIST_LIMIT                => ['int', Workflows::TASK_LIMIT, 10, 5000],
+        self::REVISIONS_KEEP                  => ['int', 5, 0, 10000],
         self::SCHEMA_BACKUP_KEEP              => ['int', null, 1, 100],
         self::SCHEMA_BACKUP_WARN_MB           => ['int', null, 1, 102400],
         self::MAINTENANCE_TIMEOUT_SECONDS     => ['int', Maintenance::MAX_AGE, 30, 3600],
         self::API_KEY_LAST_USED_SECONDS       => ['int', ApiKeys::LAST_USED_INTERVAL, 0, 86400],
         self::TESTDATA_MAX_COUNT              => ['int', TestData::MAX_COUNT, 10, 10000],
         self::TRANSLATIONS_CSV_MAX_MB         => ['int', TranslationCsv::MAX_BYTES / 1048576, 1, 32],
+        self::WEBHOOK_TIMEOUT_SECONDS         => ['int', Webhooks::TIMEOUT, 1, 30],
     ];
 
     /**

@@ -11,22 +11,22 @@ class ComposerStaticInit857cf5dbd548f21ded1bf0f285ece630
     );
 
     public static $prefixLengthsPsr4 = array (
-        'f' =>
+        'f' => 
         array (
             'flight\\' => 7,
         ),
-        'L' =>
+        'L' => 
         array (
             'LessHeadCMS\\' => 12,
         ),
     );
 
     public static $prefixDirsPsr4 = array (
-        'flight\\' =>
+        'flight\\' => 
         array (
             0 => __DIR__ . '/..' . '/mikecao/flight/flight',
         ),
-        'LessHeadCMS\\' =>
+        'LessHeadCMS\\' => 
         array (
             0 => __DIR__ . '/../..' . '/src',
         ),
@@ -35,17 +35,41 @@ class ComposerStaticInit857cf5dbd548f21ded1bf0f285ece630
     public static $classMap = array (
         'Composer\\InstalledVersions' => __DIR__ . '/..' . '/composer/InstalledVersions.php',
         'Flight' => __DIR__ . '/..' . '/mikecao/flight/flight/Flight.php',
+        'LessHeadCMS\\Access' => __DIR__ . '/../..' . '/src/Access.php',
         'LessHeadCMS\\ApiException' => __DIR__ . '/../..' . '/src/ApiException.php',
+        'LessHeadCMS\\ApiKeys' => __DIR__ . '/../..' . '/src/ApiKeys.php',
         'LessHeadCMS\\Auth' => __DIR__ . '/../..' . '/src/Auth.php',
         'LessHeadCMS\\Bootstrap' => __DIR__ . '/../..' . '/src/Bootstrap.php',
         'LessHeadCMS\\Cms' => __DIR__ . '/../..' . '/src/Cms.php',
+        'LessHeadCMS\\ColumnPrefs' => __DIR__ . '/../..' . '/src/ColumnPrefs.php',
         'LessHeadCMS\\Config' => __DIR__ . '/../..' . '/src/Config.php',
         'LessHeadCMS\\Database' => __DIR__ . '/../..' . '/src/Database.php',
+        'LessHeadCMS\\Download' => __DIR__ . '/../..' . '/src/Download.php',
         'LessHeadCMS\\Http' => __DIR__ . '/../..' . '/src/Http.php',
+        'LessHeadCMS\\Languages' => __DIR__ . '/../..' . '/src/Languages.php',
+        'LessHeadCMS\\ListQuery' => __DIR__ . '/../..' . '/src/ListQuery.php',
+        'LessHeadCMS\\Maintenance' => __DIR__ . '/../..' . '/src/Maintenance.php',
+        'LessHeadCMS\\Media' => __DIR__ . '/../..' . '/src/Media.php',
+        'LessHeadCMS\\Permissions' => __DIR__ . '/../..' . '/src/Permissions.php',
+        'LessHeadCMS\\PumlExporter' => __DIR__ . '/../..' . '/src/PumlExporter.php',
         'LessHeadCMS\\PumlParser' => __DIR__ . '/../..' . '/src/PumlParser.php',
+        'LessHeadCMS\\RecordMeta' => __DIR__ . '/../..' . '/src/RecordMeta.php',
+        'LessHeadCMS\\RenameMarker' => __DIR__ . '/../..' . '/src/RenameMarker.php',
+        'LessHeadCMS\\Revisions' => __DIR__ . '/../..' . '/src/Revisions.php',
+        'LessHeadCMS\\SchemaBackup' => __DIR__ . '/../..' . '/src/SchemaBackup.php',
         'LessHeadCMS\\SchemaException' => __DIR__ . '/../..' . '/src/SchemaException.php',
+        'LessHeadCMS\\SchemaIds' => __DIR__ . '/../..' . '/src/SchemaIds.php',
+        'LessHeadCMS\\SchemaIndexes' => __DIR__ . '/../..' . '/src/SchemaIndexes.php',
+        'LessHeadCMS\\SchemaMigration' => __DIR__ . '/../..' . '/src/SchemaMigration.php',
+        'LessHeadCMS\\Settings' => __DIR__ . '/../..' . '/src/Settings.php',
         'LessHeadCMS\\SqlGenerator' => __DIR__ . '/../..' . '/src/SqlGenerator.php',
+        'LessHeadCMS\\TestData' => __DIR__ . '/../..' . '/src/TestData.php',
+        'LessHeadCMS\\Thumbnail' => __DIR__ . '/../..' . '/src/Thumbnail.php',
+        'LessHeadCMS\\TranslationCsv' => __DIR__ . '/../..' . '/src/TranslationCsv.php',
         'LessHeadCMS\\Users' => __DIR__ . '/../..' . '/src/Users.php',
+        'LessHeadCMS\\Webhooks' => __DIR__ . '/../..' . '/src/Webhooks.php',
+        'LessHeadCMS\\WorkflowParser' => __DIR__ . '/../..' . '/src/WorkflowParser.php',
+        'LessHeadCMS\\Workflows' => __DIR__ . '/../..' . '/src/Workflows.php',
         'flight\\Engine' => __DIR__ . '/..' . '/mikecao/flight/flight/Engine.php',
         'flight\\commands\\AiGenerateInstructionsCommand' => __DIR__ . '/..' . '/mikecao/flight/flight/commands/AiGenerateInstructionsCommand.php',
         'flight\\commands\\AiInitCommand' => __DIR__ . '/..' . '/mikecao/flight/flight/commands/AiInitCommand.php',

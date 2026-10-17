@@ -83,9 +83,10 @@ final class TestData
     /** @var array<string,int[]> only while a table is being filled: FK column with a minimum count => parent rows without a row */
     private $lacking = [];
 
+    /** Generated records call no webhooks (otherwise every global webhook once per record), see Cms::withoutWebhooks() */
     public function __construct(Cms $cms, PDO $pdo, array $model)
     {
-        $this->cms = $cms;
+        $this->cms = $cms->withoutWebhooks();
         $this->pdo = $pdo;
         $this->model = $model;
     }

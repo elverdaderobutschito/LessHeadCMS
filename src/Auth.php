@@ -109,6 +109,8 @@ final class Auth
         $mediaCreated = (bool) Media::ensureTables($pdo);
         // API keys (role = 'api'); otherwise ApiKeys creates table and column itself on the first use
         $apiKeysCreated = ApiKeys::ensure($pdo);
+        // versions of the records; otherwise Revisions creates the table itself on the first save
+        $revisionsCreated = Revisions::ensure($pdo);
 
         $adminCreated = false;
         if ((int) $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn() === 0) {
@@ -126,6 +128,7 @@ final class Auth
             'user_column_prefs_table_created' => $prefsCreated,
             'media_tables_created'         => $mediaCreated,
             'api_keys_table_created'       => $apiKeysCreated,
+            'revisions_table_created'      => $revisionsCreated,
             'admin_created'                => $adminCreated,
         ];
         if ($adminCreated) {

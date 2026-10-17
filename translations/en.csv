@@ -85,6 +85,9 @@ ui_text,form.workflow_final,This record is in a final state. No further workflow
 ui_text,form.workflow_jump,↓ Go to workflow actions
 ui_text,form.workflow_preview,The record starts in this state once it has been created. Workflow actions become available after saving.
 ui_text,form.workflow_none_allowed,There are currently no workflow actions available to you for this record.
+ui_text,form.meta_aria,System fields of the record
+ui_text,form.reason,Reason for the change (optional)
+ui_text,form.reason_placeholder,e.g. typo fixed
 ui_text,list.new,Create new
 ui_text,list.loading,Loading…
 ui_text,list.count,{shown} of {total} entries
@@ -120,6 +123,45 @@ ui_text,list.pager_last,Last page
 ui_text,list.pager_jump,Go to page
 ui_text,list.pager_go,Go
 ui_text,list.pager_per_page,Rows per page
+ui_text,meta.created_at,Created at
+ui_text,meta.created_by,Created by
+ui_text,meta.updated_at,Last modified at
+ui_text,meta.updated_by,Last modified by
+ui_text,meta.unknown,unknown
+ui_text,history.open,History
+ui_text,history.title,History: {entity} #{id}
+ui_text,history.loading,Loading …
+ui_text,history.empty,No versions yet – the history starts with the next save.
+ui_text,history.versions_aria,Versions
+ui_text,history.col_a,A
+ui_text,history.col_b,B
+ui_text,history.col_version,Version
+ui_text,history.col_at,Time
+ui_text,history.col_by,By
+ui_text,history.col_action,Kind
+ui_text,history.col_reason,Reason
+ui_text,history.col_changed,Changed fields
+ui_text,history.pick_a,Compare version {version} as A (older state)
+ui_text,history.pick_b,Compare version {version} as B (newer state)
+ui_text,history.action_create,Created
+ui_text,history.action_update,Saved
+ui_text,history.action_transition,Transition “{label}”
+ui_text,history.action_restore,Restored from version {version}
+ui_text,history.action_link,Link changed via #{id}
+ui_text,history.nothing_changed,none
+ui_text,history.restore,Restore
+ui_text,history.restore_confirm,Make version {version} the new current state? Unsaved input in the form is lost. The history is kept.
+ui_text,history.restore_reason,Reason for a restore (optional)
+ui_text,history.compare,Comparison: version {a} → version {b}
+ui_text,history.compare_first,Version {b} (oldest version kept)
+ui_text,history.only_changed,Changed fields only
+ui_text,history.diff_aria,Differences
+ui_text,history.col_field,Field
+ui_text,history.version_n,Version {version}
+ui_text,history.no_differences,No differences.
+ui_text,history.medium,Medium #{id}
+ui_text,history.restored,Version {version} restored (new version {new}).
+ui_text,history.skipped,“{field}” not taken over: {reason}
 ui_text,field.please_select,– please select –
 ui_text,field.search,Search {entity}
 ui_text,field.add,Create new {entity}
@@ -900,6 +942,10 @@ ui_text,settings.schema_backup_keep_hint,"The database is backed up before every
 ui_text,settings.schema_backup_warn_mb,Disk space notice from
 ui_text,settings.schema_backup_warn_mb_unit,MB
 ui_text,settings.schema_backup_warn_mb_hint,"From this database size on, System → Schema points out the disk space the backups take up together. Default: 50 (or SCHEMA_BACKUP_WARN_MB from config.php), allowed: {min} to {max}."
+ui_text,settings.group_revisions,Record versions
+ui_text,settings.revisions_keep,Versions kept per record
+ui_text,settings.revisions_keep_unit,versions
+ui_text,settings.revisions_keep_hint,"Every save creates a version; this many are kept per record, older ones are deleted on the next save of the record. 0 = keep all. Default: 5, allowed: {min} to {max}."
 ui_text,settings.group_maintenance,Maintenance
 ui_text,settings.maintenance_timeout_seconds,Maintenance lock lasts at most
 ui_text,settings.maintenance_timeout_seconds_unit,seconds
@@ -916,3 +962,62 @@ ui_text,settings.group_translations_csv,Translation import
 ui_text,settings.translations_csv_max_mb,Maximum size of a CSV file
 ui_text,settings.translations_csv_max_mb_unit,MB
 ui_text,settings.translations_csv_max_mb_hint,"The import under System → Localization → Translations rejects larger language files (uploaded files and files from translations/). Default: 2, allowed: {min} to {max}."
+ui_text,settings.tab_webhooks,Webhooks
+ui_text,settings.group_webhooks,Calling the webhooks
+ui_text,settings.webhook_timeout_seconds,Longest wait
+ui_text,settings.webhook_timeout_seconds_unit,seconds
+ui_text,settings.webhook_timeout_seconds_hint,"The webhooks of a save, a transition or a deletion are called at the same time; the CMS waits at most this long for their answers and then records a missing answer as a timeout in the history. The save itself is already done at that point and stays so – the editor only waits correspondingly longer. Default: 5, allowed: {min} to {max}."
+ui_text,webhooks.heading,Webhooks
+ui_text,webhooks.intro,"On certain events the CMS calls the stored address (POST with JSON: event, entity, ID, version, hash) – e.g. a build hook of Netlify or an own generator. No content is sent along, the target system fetches it itself via the API. A failed call blocks nothing, it only appears in the history."
+ui_text,webhooks.loading,Loading …
+ui_text,webhooks.empty,No webhooks set up yet.
+ui_text,webhooks.table_aria,Webhooks
+ui_text,webhooks.col_name,Name
+ui_text,webhooks.col_url,Target URL
+ui_text,webhooks.col_triggers,Triggers
+ui_text,webhooks.col_last,Last call
+ui_text,webhooks.trigger_workflow,Workflow {workflow}: transition “{transition}” ({from} → {to})
+ui_text,webhooks.trigger_global,Global: {events} – {entities}
+ui_text,webhooks.entities_all,all entities
+ui_text,webhooks.entities_none,no entity (selection empty)
+ui_text,webhooks.trigger_none,Only via action=webhook:{name} in a workflow file (currently not used anywhere)
+ui_text,webhooks.event_created,Create
+ui_text,webhooks.event_updated,Update
+ui_text,webhooks.event_deleted,Delete
+ui_text,webhooks.badge_ok,OK
+ui_text,webhooks.badge_failed,Failed
+ui_text,webhooks.never_called,never
+ui_text,webhooks.history,History ({count})
+ui_text,webhooks.edit,Edit
+ui_text,webhooks.delete,Delete
+ui_text,webhooks.history_empty,No calls yet.
+ui_text,webhooks.history_aria,History of {name}
+ui_text,webhooks.col_at,Time
+ui_text,webhooks.col_event,Event
+ui_text,webhooks.col_record,Record
+ui_text,webhooks.col_result,Result
+ui_text,webhooks.col_duration,Duration
+ui_text,webhooks.result_ok,Success (HTTP {status})
+ui_text,webhooks.result_http,Failed: HTTP {status}
+ui_text,webhooks.duration,{ms} ms
+ui_text,webhooks.delete_confirm,Delete webhook “{name}” including its history?
+ui_text,webhooks.deleted,Webhook “{name}” deleted.
+ui_text,webhooks.created,Webhook “{name}” created.
+ui_text,webhooks.saved,Webhook “{name}” saved.
+ui_text,webhooks.add_heading,New webhook
+ui_text,webhooks.edit_heading,Edit webhook “{name}”
+ui_text,webhooks.name,Name
+ui_text,webhooks.name_hint,"Reference for action=webhook:<name> in workflow files. Letters, digits, _ and -, starting with a letter."
+ui_text,webhooks.url,Target URL
+ui_text,webhooks.token,Token
+ui_text,webhooks.token_generate,Generate token
+ui_text,webhooks.token_hint,Sent with every call in the header X-LessHeadCMS-Token so that the target system recognizes the call as genuine. Freely editable – the same token may be used in several webhooks. Empty = no header.
+ui_text,webhooks.global_heading,Trigger globally on
+ui_text,webhooks.scope_all,all entities
+ui_text,webhooks.scope_some,selected entities only
+ui_text,webhooks.entities_aria,Entities
+ui_text,webhooks.global_hint,"Independent of workflows: creating, updating (transitions and restores too) or deleting a record. Without a selection the webhook is only triggered via workflows."
+ui_text,webhooks.workflow_hint,"In a workflow file, {action} in a transition triggers this webhook – in addition to the settings above."
+ui_text,webhooks.add_submit,Create webhook
+ui_text,webhooks.edit_submit,Save
+ui_text,webhooks.edit_cancel,Cancel

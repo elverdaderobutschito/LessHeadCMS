@@ -50,6 +50,7 @@ workflow ArticleWorkflow {
   review -> published : veroeffentlichen {
     allowed=group:chefredaktion, role:Chef vom Dienst
     action=set_visibility:true
+    action=webhook:netlify
   }
   review -> draft : zurueckgeben {
     allowed=group:chefredaktion
@@ -66,11 +67,17 @@ workflow ArticleWorkflow {
 | `from -> to : label {` | Transition. The label is unique per source state (not globally) and may contain letters, digits, `_`, `-` and spaces. |
 | `allowed=` | Required. `group:<name>` and/or `role:<name>`, separated by commas. Admins may execute every transition. |
 | `assign=` | Optional. `group:<name>`, `user:<login name>` or `initiator` (whoever started the workflow of this record). Creates a task. |
-| `action=` | Optional. So far only `set_visibility:true` / `set_visibility:false` (sets the `visibility` field of the class). |
+| `action=` | Optional. `set_visibility:true` / `set_visibility:false` (sets the `visibility` field of the class; at most once per transition) and `webhook:<name>` (calls the webhook of that name, see [Webhooks](webhooks.md); one line per webhook, several allowed, each name at most once, case-insensitive). |
 
 The file is checked in two stages: `WorkflowParser` purely structurally and without a database (unknown state, flow pair
 without a transition, missing `allowed=`, …), then the **combined analysis** against database and main schema: does every
-named group, role and user exist? Does the main schema match?
+named group, role and user exist? Does every webhook named in `action=webhook:<name>` exist (System → Einstellungen →
+Webhooks)? Does the main schema match? The parser only checks the form of a webhook name (letter first, then letters,
+digits, `_` and `-`, at most 50 characters); a name without a webhook is `422 schema_error` „… Webhook 'netlify' aus
+action= gibt es nicht. Bitte unter System → Einstellungen → Webhooks anlegen …“ with the lines of all missing names.
+`webhook:` is a new action type next to `set_visibility` - there is no overlap with existing `action=` values, and
+webhook names live in their own namespace (they never appear in the diagram, so they cannot collide with class or field
+names).
 
 ## Workflow field in the main schema
 
@@ -133,13 +140,17 @@ offers: `401` without a session, `403` for a denied entity, `404` for entities w
 `422` for an unknown label, `409 invalid_state` if the transition does not start from the current state, `403` if the
 user has none of the groups/roles from `allowed=` (roles count directly and via groups; admins always). On success, in one
 transaction: set the state, execute `action=`, set the open tasks of the record to `done`, create a new
-task for `assign=`. Response: `{record, transition: {label, from, to}, task}`.
+task for `assign=`, write a version of the record (`action: "transition"` with the label, optional `"_reason"` in the
+body – see [Record versions](record-versions.md)). Response: `{record, transition: {label, from, to}, task}`. After the
+commit the webhooks are called: every `action=webhook:<name>` of the transition with the event `<entity>.<target state>`
+(technical state name, e.g. `article.published`), plus the webhooks that fire globally on "update" for this entity – a
+failed call never undoes the transition (see [Webhooks](webhooks.md)).
 
 **Errors with a line reference:** if a schema error is caused by a specific line of the workflow file, the response
 (`422 schema_error`, for "check" as well as for "apply") states it in structured form in addition to the message text: `workflow_line` (the
 first, decisive line) and `workflow_lines` (all, without duplicates). This applies to structural errors of the file (the parser
 aborts at the first one, so exactly one line), to missing groups/roles/users (all affected `allowed=`/`assign=`
-lines in the order of the message) and to `action=set_visibility` without a `visibility` field of the class. Errors that concern the
+lines in the order of the message), to missing webhooks (all affected `action=webhook:` lines) and to `action=set_visibility` without a `visibility` field of the class. Errors that concern the
 whole file (e.g. a workflow used by the schema is missing) do not have the keys. System → Workflows
 then puts the cursor at the start of the first line, brings it into the visible area and highlights all lines named
 in red; the message at the top gets the button „Zeile n anzeigen“. The highlighting applies to the checked text and

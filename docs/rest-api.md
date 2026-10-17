@@ -8,12 +8,22 @@ _Part of the [LessHeadCMS documentation](../README.md)._
 | Method  | Path                    | Access        | Description                                             |
 |---------|-------------------------|---------------|---------------------------------------------------------|
 | GET     | `/api`                  | public        | list of the entities                                    |
-| GET     | `/api/{entity}/_schema` | public        | `package` (name of the `package` block or `null`), field name, type (for `enum` additionally `enum_values`), `required`, `foreign_key` (target table, `title_field`, `label`, `on_delete`, `one_to_one`), `many_to_many` (`name`, target table, `title_field`, `label`, `show_label`, `symmetric`), `unique_fields` (`{unique}` group), only for media fields additionally `media` (`name`, `type: "media"`, `required`) |
+| GET     | `/api/{entity}/_schema` | public        | `package` (name of the `package` block or `null`), field name, type (for `enum` additionally `enum_values`), `required`, `foreign_key` (target table, `title_field`, `label`, `on_delete`, `one_to_one`), `many_to_many` (`name`, target table, `title_field`, `label`, `show_label`, `symmetric`), `unique_fields` (`{unique}` group), only for media fields additionally `media` (`name`, `type: "media"`, `required`), `system_fields` (record metadata `created_at`/`created_by`/`updated_at`/`updated_by`, see [Record metadata](record-metadata.md); public without the two user fields) |
 | GET     | `/api/{entity}`         | public        | records, **always paginated** (default: page 1 with 50 rows) – see "Lists: paging, sorting, filtering" |
 | GET     | `/api/{entity}/{id}`    | public        | one record                                              |
 | POST    | `/api/{entity}`         | **session**   | create (JSON body) → 201                                |
 | PUT     | `/api/{entity}/{id}`    | **session**   | change; only fields sent are changed                    |
 | DELETE  | `/api/{entity}/{id}`    | **session**   | delete → `{"deleted": id}`, with `{cascade}` additionally `"cascade_deleted": {"<table>": n}` |
+| GET     | `/api/{entity}/{id}/revisions` | **session** | versions of the record, newest first – see [Record versions](record-versions.md) |
+| GET     | `/api/{entity}/{id}/revisions/{version}` | **session** | one version with its snapshot |
+| POST    | `/api/{entity}/{id}/revisions/{version}/restore` | **session** | take over an older version as a new version → `{record, version, restored_from, skipped}` |
+
+`POST`, `PUT`, a workflow transition and a restore accept an optional `"_reason"` in the body (reason for the change, at
+most 1000 characters), stored with the new version ([Record versions](record-versions.md)).
+
+After a successful `POST`, `PUT`, restore, workflow transition or `DELETE` the configured webhooks are called (System →
+Einstellungen → Webhooks, see [Webhooks](webhooks.md)): synchronously, at most `webhook_timeout_seconds` (default 5 s)
+longer. Their result never changes the response – a failed call only appears in the history of the webhook.
 
 ## Lists: paging, sorting, filtering
 
@@ -30,9 +40,9 @@ _Part of the [LessHeadCMS documentation](../README.md)._
 |---|---|
 | `page` | page from 1 (default 1). A page past the end delivers `data: []`, not an error |
 | `per_page` | rows per page, 1 to **500** (default 50). More → `422` with a message, **no** silent capping. Both numbers are the defaults of the settings `list_max_per_page` and `list_default_per_page` ([Settings](api-users.md#settings-api_settings-system--einstellungen)) |
-| `sort`, `order` | field of the entity (also `id` and FK columns; not n:n, not a media field), `order=asc`/`desc`. Empty values come last in both directions, ties are resolved by the `id`. Text case-insensitive, umlauts like their base letter, numbers in the text numerically; FK column by the label of the target row; richtext by plain text. Without `sort`: by `id` |
-| `filter[field]` | depending on the kind of field: **string/text/richtext** substring, case-insensitive (richtext in the plain text without Markdown); **FK column, n:n list** substring of the label `<entity> #<id> – <title_field>` – `<entity>` matches both in the spelling the caller sees (translation of their display language; public API: display text of the default language) and with the name from the diagram; **enum** one of the values, several separated by commas; **bool/visibility** `true`/`false` (`false` also matches empty); **int/decimal/date/id** `filter[field][from]` and/or `filter[field][to]`, bounds inclusive |
-| `eq[field]` | exact value (for FK columns the id of the target row); empty = field is empty |
+| `sort`, `order` | field of the entity (also `id`, FK columns and the record metadata `created_at`/`created_by`/`updated_at`/`updated_by`; not n:n, not a media field), `order=asc`/`desc`. Empty values come last in both directions, ties are resolved by the `id`. Text case-insensitive, umlauts like their base letter, numbers in the text numerically; FK column by the label of the target row; richtext by plain text. Without `sort`: by `id` |
+| `filter[field]` | depending on the kind of field: **string/text/richtext** substring, case-insensitive (richtext in the plain text without Markdown); **FK column, n:n list** substring of the label `<entity> #<id> – <title_field>` – `<entity>` matches both in the spelling the caller sees (translation of their display language; public API: display text of the default language) and with the name from the diagram; **enum** one of the values, several separated by commas; **bool/visibility** `true`/`false` (`false` also matches empty); **int/decimal/date/id** `filter[field][from]` and/or `filter[field][to]`, bounds inclusive; **created_at/updated_at** like date (`YYYY-MM-DD` = whole day in UTC) or an exact UTC time `YYYY-MM-DD HH:MM:SS`; **created_by/updated_by** substring of the user's name or username (with a session only) |
+| `eq[field]` | exact value (for FK columns the id of the target row, for `created_by`/`updated_by` the user id); empty = field is empty |
 | `ids` | only these rows, separated by commas (at most 500, setting `list_max_per_page`) |
 | `q` | substring across all fields except text/richtext/bool, including FK and n:n labels |
 | `for`, `for_id` | `for=<entity>.<field>`: only rows that are **selectable** as a value of this relationship (FK column or n:n list pointing to this entity); `for_id` = the row of `<entity>` currently being edited (missing when creating). Excluded are, for a self-reference, the row itself and all its descendants, for 1:1 the target rows already taken by another row, for n:n to the own entity the row itself. The exclusions are part of the query: `total` and every page only count selectable rows. This is how dropdown and selection dialog of the UI query; saving checks the same rules independently (`422`/`409`) |

@@ -99,6 +99,9 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   horizontally: separator line on the left, plus a shadow as long as there is still content beneath it on the right; below 720 px width
   the buttons are stacked. The list view uses the whole window width next to the sidebar (`.view-wide`);
   forms, users and test data stay at a content width of at most 1044 px.
+* **History of a record:** „Verlauf“ in the header of the edit form lists all versions (time, user, kind, reason, changed
+  fields), compares two of them field by field (long texts as a line diff) and restores an older one as a new version.
+  Above the save buttons, „Änderungsgrund (optional)“ is stored with the new version. See [Record versions](record-versions.md).
 * **Column selection of the list view**: without a selection of your own, every list shows
   at most **5 columns** (plus actions): `id`, then the `title_field` fields (`{title}` markers in
   diagram order, without a marker the one field of the guessing heuristic), then the remaining columns in
@@ -110,7 +113,9 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   zurücksetzen“ opens a list of all columns with checkboxes; any number can be shown or hidden,
   `id` and the actions column always stay visible. „Standard wiederherstellen“ discards your own selection. Every
   change is saved on the server immediately, **per user and entity** (`/api/_prefs/columns/{entity}`, table
-  `user_column_prefs`), so it applies on every device/browser and is separate between users. Sorting and filters
+  `user_column_prefs`), so it applies on every device/browser and is separate between users. At the end of the list
+  come the system fields „Angelegt am/von“ and „Zuletzt geändert am/von“ (not in the default selection, sortable and
+  filterable, times in the browser's time zone; see [Record metadata](record-metadata.md)). Sorting and filters
   only affect visible columns; when a column is hidden, its filter and sorting are dropped. The selection dialog
   (🔍) still shows all columns.
 * **Search/select (🔍):** Next to it, same size/same placement, a second button opens a selection dialog with

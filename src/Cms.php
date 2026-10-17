@@ -45,6 +45,8 @@ final class Cms
     private $user;
     /** @var array|null roles/groups of the user for workflow transitions (Workflows::memberships()), only on demand */
     private $memberships = null;
+    /** @var bool call the webhooks after a write (Webhooks::fire()); off for the test data generator */
+    private $webhooks = true;
 
     /**
      * @param Access|null $access roles and permissions (Permissions::access()): denied entities do not exist for this caller
@@ -64,6 +66,16 @@ final class Cms
         $this->model = $model;
         $this->access = $access;
         $this->user = $user;
+    }
+
+    /**
+     * Writes of this instance call no webhooks - for bulk writes like the test data generator, which would otherwise
+     * call the global webhooks once per generated record.
+     */
+    public function withoutWebhooks(): self
+    {
+        $this->webhooks = false;
+        return $this;
     }
 
     /** The stored schema model (for Media: which media fields exist) */
@@ -185,6 +197,11 @@ final class Cms
                 ];
             }, $min);
         }
+        // tracking metadata (RecordMeta): always present, never editable, outside the field permissions like the id;
+        // without a session without created_by/updated_by (usernames are not published)
+        if (RecordMeta::applies($e)) {
+            $schema['system_fields'] = RecordMeta::fields($this->user !== null);
+        }
         return $schema;
     }
 
@@ -213,10 +230,13 @@ final class Cms
      * one of the roles/groups from allowed= or is an admin (403). Then in one transaction: set the state,
      * execute action=set_visibility, complete the open tasks of the record, create a new one for assign=.
      *
+     * The transition creates a version of the record (Revisions, action transition) with the optional reason.
+     *
      * @param mixed $label value of {"transition": ...}
+     * @param mixed $reason value of {"_reason": ...} (optional)
      * @return array{record:array,transition:array,task:?array}
      */
-    public function transition(string $table, int $id, $label): array
+    public function transition(string $table, int $id, $label, $reason = null): array
     {
         $e = $this->entity($table);
         $field = Workflows::fieldOf($e);
@@ -254,19 +274,23 @@ final class Cms
                 . "'{$named[0]['label']}' ist im Zustand '$state' nicht möglich (nur von '"
                 . implode("', '", array_column($named, 'from')) . "' aus)"]);
         }
+        $reason = Revisions::reason($reason);
         $this->memberships = $this->memberships ?? Workflows::memberships($this->pdo, $this->user);
         if (!Workflows::permitted($this->memberships, $t)) {
             throw new ApiException(403, ['error' => 'forbidden', 'transition' => $t['label'],
                 'message' => "Keine Berechtigung für die Transition '{$t['label']}'"]);
         }
         $set = [$field['name'] => $t['to']];
+        if (RecordMeta::applies($e)) {
+            $set += RecordMeta::updateValues($this->user); // a transition changes the record
+        }
         $visibility = $this->visibilityField($e['table']);
         foreach ($t['actions'] as $action) {
             if ($action['type'] === 'set_visibility' && $visibility !== null) {
                 $set[$visibility] = $action['value'] ? 1 : 0;
             }
         }
-        return $this->transaction(function () use ($e, $id, $field, $state, $set, $t) {
+        $result = $this->transaction(function () use ($e, $id, $field, $state, $set, $t, $reason) {
             $sql = implode(', ', array_map(function ($c) {
                 return SqlGenerator::q($c) . ' = ?';
             }, array_keys($set)));
@@ -279,12 +303,17 @@ final class Cms
                     . 'anderem geändert. Bitte neu laden.']);
             }
             $task = Workflows::recordTransition($this->pdo, $e['table'], $id, $t, $this->user);
-            return [
-                'record'     => array_diff_key($this->fetchRow($e, $id), $this->denied($e)),
+            $row = $this->fetchRow($e, $id);
+            $version = Revisions::record($this->pdo, $e, $id, $row, 'transition', $this->user, ['reason' => $reason, 'transition' => $t['label']]);
+            return [[
+                'record'     => array_diff_key($row, $this->denied($e)),
                 'transition' => ['label' => $t['label'], 'from' => $t['from'], 'to' => $t['to']],
                 'task'       => $task,
-            ];
+            ], $version];
         });
+        // after the commit: action=webhook of the transition ("<entity>.<to>"), global webhooks on update
+        $this->fireWebhooks($e, $id, 'updated', $result[1], $t);
+        return $result[0];
     }
 
     /**
@@ -401,7 +430,9 @@ final class Cms
         if ($visibility !== null && !$includeDrafts) {
             $conditions[] = 'e.' . SqlGenerator::q($visibility) . ' = 1';
         }
-        $q = new ListQuery($this->model, $e, $denied, $query, $conditions, function (string $other): ?array {
+        // public API: the user fields of the tracking metadata do not exist (neither sortable nor filterable)
+        $hidden = $this->user === null ? array_fill_keys(RecordMeta::USER_FIELDS, true) : [];
+        $q = new ListQuery($this->model, $e, $denied + $hidden, $query, $conditions, function (string $other): ?array {
             return $this->access !== null && $this->access->entityDenied($other) ? null : $this->denied($this->model['entities'][$other]);
         }, $entityNames, Settings::get($this->pdo, Settings::LIST_DEFAULT_PER_PAGE), Settings::get($this->pdo, Settings::LIST_MAX_PER_PAGE));
         $from = ' FROM ' . SqlGenerator::q($e['table']) . ' e' . $q->where;
@@ -440,7 +471,7 @@ final class Cms
                 $ordered[] = $rows[$id];
             }
         }
-        $rows = $ordered;
+        $rows = $this->presentMeta($e, $ordered);
         $ids = array_column($rows, 'id');
         $in = $ids ? implode(', ', array_map('intval', $ids)) : 'NULL';
 
@@ -523,6 +554,7 @@ final class Cms
         if ($workflow !== null) {
             $input[$workflow['name']] = $this->model['workflows'][$workflow['workflow']]['initial'] ?? null;
         }
+        $reason = Revisions::reasonOf($e, $input);
         $errors = [];
         $values = $this->collectValues($e, $input, true, $errors);
         $links = $this->collectLinks($e, $input, $errors);
@@ -532,25 +564,41 @@ final class Cms
         }
         $this->rejectDuplicate($e, $values, null);
 
-        return $this->transaction(function () use ($e, $values, $links, $media, $denied) {
-            if ($values) {
-                $cols = implode(', ', array_map([SqlGenerator::class, 'q'], array_keys($values)));
-                $marks = implode(', ', array_fill(0, count($values), '?'));
+        [$row, $id, $version] = $this->transaction(function () use ($e, $values, $links, $media, $denied, $reason) {
+            // tracking metadata: set by the system only (values sent along are not even read, see collectValues())
+            $row = $values + (RecordMeta::applies($e) ? RecordMeta::createValues($this->user) : []);
+            if ($row) {
+                $cols = implode(', ', array_map([SqlGenerator::class, 'q'], array_keys($row)));
+                $marks = implode(', ', array_fill(0, count($row), '?'));
                 $stmt = $this->pdo->prepare('INSERT INTO ' . SqlGenerator::q($e['table']) . " ($cols) VALUES ($marks)");
-                $stmt->execute(array_values($values));
+                $stmt->execute(array_values($row));
             } else {
                 $this->pdo->exec('INSERT INTO ' . SqlGenerator::q($e['table']) . ' DEFAULT VALUES');
             }
             $id = (int) $this->pdo->lastInsertId();
             $this->syncLinks($e, $id, $links);
             $this->syncMedia($e, $id, $media);
-            return array_diff_key($this->fetchRow($e, $id), $denied);
+            $row = $this->fetchRow($e, $id);
+            $version = Revisions::record($this->pdo, $e, $id, $row, 'create', $this->user, ['reason' => $reason]); // version 1
+            $this->recordSymmetricPartners($e, $id, null, $row);
+            return [array_diff_key($row, $denied), $id, $version];
         }, $e, $values);
+        $this->fireWebhooks($e, $id, 'created', $version);
+        return $row;
     }
 
     public function update(string $table, int $id, array $input): array
     {
-        $e = $this->entity($table);
+        return $this->updateRecord($this->entity($table), $id, $input, 'update', [])[0];
+    }
+
+    /**
+     * PUT and restore: change the record and write a version ($action update or restore, $extra e.g. restored_from).
+     *
+     * @return array{0:array,1:int} record (without denied fields), new version number
+     */
+    private function updateRecord(array $e, int $id, array $input, string $action, array $extra): array
+    {
         $this->requireAction($e, 'update');
         $current = $this->fetchRow($e, $id);
         if ($current === null) {
@@ -558,6 +606,7 @@ final class Cms
         }
         $denied = $this->denied($e);
         $input = array_diff_key($input, $denied); // denied fields: the stored value stays
+        $extra['reason'] = Revisions::reasonOf($e, $input);
         $errors = [];
         // workflow field: never changeable via PUT (only the unchanged value may come along) - that is what transition() is for
         $workflow = Workflows::fieldOf($e);
@@ -579,18 +628,174 @@ final class Cms
         // PUT is partial: fields of the group that were not sent keep their stored value
         $this->rejectDuplicate($e, $values + $current, $id);
 
-        return $this->transaction(function () use ($e, $id, $values, $links, $media, $denied) {
-            if ($values) {
+        $result = $this->transaction(function () use ($e, $id, $values, $links, $media, $denied, $action, $extra, $current) {
+            // every save counts as a change (also with only n:n/media or unchanged values): updated_at/by
+            $row = $values + (RecordMeta::applies($e) ? RecordMeta::updateValues($this->user) : []);
+            if ($row) {
                 $set = implode(', ', array_map(function ($c) {
                     return SqlGenerator::q($c) . ' = ?';
-                }, array_keys($values)));
+                }, array_keys($row)));
                 $stmt = $this->pdo->prepare('UPDATE ' . SqlGenerator::q($e['table']) . " SET $set WHERE \"id\" = ?");
-                $stmt->execute(array_merge(array_values($values), [$id]));
+                $stmt->execute(array_merge(array_values($row), [$id]));
             }
             $this->syncLinks($e, $id, $links);
             $this->syncMedia($e, $id, $media);
-            return array_diff_key($this->fetchRow($e, $id), $denied);
+            $row = $this->fetchRow($e, $id);
+            $version = Revisions::record($this->pdo, $e, $id, $row, $action, $this->user, $extra);
+            $this->recordSymmetricPartners($e, $id, $current, $row);
+            return [array_diff_key($row, $denied), $version];
         }, $e, $values + $current);
+        $this->fireWebhooks($e, $id, 'updated', $result[1]); // PUT and restore
+        return $result;
+    }
+
+    // ---------------------------------------------------------------- Versions (Revisions)
+
+    /**
+     * GET /api/{entity}/{id}/revisions: versions of a record, newest first (Revisions::all()). Needs a session (the
+     * history shows drafts and usernames); the same read rights as the record: entity denied -> 403, denied fields are
+     * missing in every snapshot and in "changed".
+     */
+    public function revisions(string $table, int $id): array
+    {
+        $e = $this->historyEntity($table, $id);
+        return ['versions' => Revisions::all($this->pdo, $e['table'], $id, $this->denied($e))];
+    }
+
+    /** GET /api/{entity}/{id}/revisions/{version}: one version with its snapshot (rights as revisions()) */
+    public function revision(string $table, int $id, int $version): array
+    {
+        $e = $this->historyEntity($table, $id);
+        $rev = Revisions::one($this->pdo, $e['table'], $id, $version, $this->denied($e));
+        if ($rev === null) {
+            throw new ApiException(404, ['error' => 'revision_not_found', 'message' => "Version $version gibt es nicht (mehr)"]);
+        }
+        return $rev;
+    }
+
+    /**
+     * POST /api/{entity}/{id}/revisions/{version}/restore: take over the state of an older version as a new version
+     * (action restore, restored_from = $version) - the history stays as it is. Rights like PUT (update action; denied fields
+     * keep their value). created_at/created_by stay, updated_at/updated_by change (RecordMeta).
+     *
+     * What cannot be taken over is skipped and reported ('skipped': [{field, reason}]) instead of failing the restore:
+     * the workflow state (only via transitions), an FK whose target row no longer exists (the current value stays), linked
+     * rows or media that no longer exist (left out of the list), and values the current schema rejects (e.g. after a type
+     * change or a new required field) - the latter by one retry without the fields the validation names.
+     *
+     * @return array{record:array,version:int,restored_from:int,skipped:array}
+     */
+    public function restore(string $table, int $id, int $version, array $input): array
+    {
+        $e = $this->historyEntity($table, $id);
+        $this->requireAction($e, 'update');
+        $rev = Revisions::one($this->pdo, $e['table'], $id, $version, []);
+        if ($rev === null) {
+            throw new ApiException(404, ['error' => 'revision_not_found', 'message' => "Version $version gibt es nicht (mehr)"]);
+        }
+        $snapshot = $rev['snapshot'];
+        $current = $this->fetchRow($e, $id);
+        $denied = $this->denied($e);
+        $workflow = Workflows::fieldOf($e);
+        $data = [];
+        $skipped = [];
+        foreach ($e['fields'] as $f) {
+            $name = $f['name'];
+            if ($f['primary'] || !array_key_exists($name, $snapshot) || isset($denied[$name])) {
+                continue;
+            }
+            $value = $snapshot[$name];
+            if ($workflow !== null && $name === $workflow['name']) {
+                if ($value !== $current[$name]) {
+                    $skipped[] = ['field' => $name, 'reason' => 'Der Workflow-Status ändert sich nur über eine Transition.'];
+                }
+                continue;
+            }
+            $fk = $f['foreign_key'];
+            if ($fk && $value !== null && $this->fetchIds($fk['table'], 'id', [(int) $value]) === []) {
+                $skipped[] = ['field' => $name, 'reason' => $this->model['entities'][$fk['table']]['name'] . " #$value gibt es nicht mehr."];
+                continue;
+            }
+            $data[$name] = $value;
+        }
+        foreach ($e['many_to_many'] as $m) {
+            if (!array_key_exists($m['name'], $snapshot) || isset($denied[$m['name']])) {
+                continue;
+            }
+            $ids = array_map('intval', (array) $snapshot[$m['name']]);
+            $exist = $this->fetchIds($m['table'], 'id', $ids);
+            $data[$m['name']] = array_values(array_intersect($ids, $exist));
+            if ($gone = array_values(array_diff($ids, $exist))) {
+                $skipped[] = ['field' => $m['name'], 'reason' => $this->model['entities'][$m['table']]['name'] . ' #'
+                    . implode(', #', $gone) . ' gibt es nicht mehr.'];
+            }
+        }
+        foreach ($e['media'] ?? [] as $m) {
+            if (!array_key_exists($m['name'], $snapshot) || isset($denied[$m['name']])) {
+                continue;
+            }
+            $ids = array_map('intval', (array) $snapshot[$m['name']]);
+            $exist = $this->fetchIds('media', 'id', $ids);
+            $data[$m['name']] = array_values(array_filter($ids, function ($v) use ($exist) {
+                return in_array($v, $exist, true);
+            }));
+            if ($gone = array_values(array_diff($ids, $exist))) {
+                $skipped[] = ['field' => $m['name'], 'reason' => 'Medium #' . implode(', #', $gone) . ' gibt es nicht mehr.'];
+            }
+        }
+        $data[Revisions::REASON_KEY] = $input[Revisions::REASON_KEY] ?? null;
+        $extra = ['restored_from' => $version];
+        try {
+            [$row, $new] = $this->updateRecord($e, $id, $data, 'restore', $extra);
+        } catch (ApiException $ex) {
+            $bad = $ex->status === 422 ? array_intersect_key($ex->payload['errors'] ?? [], $data) : [];
+            unset($bad[Revisions::REASON_KEY]);
+            if (!$bad) {
+                throw $ex;
+            }
+            foreach ($bad as $name => $message) {
+                $skipped[] = ['field' => $name, 'reason' => 'Passt nicht zum aktuellen Schema: ' . (is_string($message) ? $message : json_encode($message, JSON_UNESCAPED_UNICODE))];
+            }
+            [$row, $new] = $this->updateRecord($e, $id, array_diff_key($data, $bad), 'restore', $extra);
+        }
+        return ['record' => $row, 'version' => $new, 'restored_from' => $version, 'skipped' => $skipped];
+    }
+
+    /**
+     * {symmetric} n:n: rows added to or removed from the list of $id show the change in their own list as well - a version
+     * for each of them (action link), see Revisions. $before null = new row.
+     */
+    private function recordSymmetricPartners(array $e, int $id, ?array $before, array $after): void
+    {
+        $partners = [];
+        foreach ($e['many_to_many'] as $m) {
+            if (!empty($m['symmetric'])) {
+                $old = $before[$m['name']] ?? [];
+                $new = $after[$m['name']] ?? [];
+                $partners += array_fill_keys(array_merge(array_diff($old, $new), array_diff($new, $old)), true);
+            }
+        }
+        unset($partners[$id]);
+        ksort($partners);
+        foreach (array_keys($partners) as $partner) {
+            $row = $this->fetchRow($e, (int) $partner);
+            if ($row !== null) {
+                Revisions::record($this->pdo, $e, (int) $partner, $row, 'link', $this->user, ['linked_from' => $id]);
+            }
+        }
+    }
+
+    /** Entity + existing record for the history; needs a session (401) */
+    private function historyEntity(string $table, int $id): array
+    {
+        $e = $this->entity($table);
+        if ($this->user === null) {
+            throw new ApiException(401, ['error' => 'unauthorized', 'message' => 'Anmeldung erforderlich']);
+        }
+        if ($this->fetchIds($e['table'], 'id', [$id]) === []) {
+            throw new ApiException(404, ['error' => 'not_found', 'message' => 'Datensatz nicht gefunden']);
+        }
+        return $e;
     }
 
     /**
@@ -713,6 +918,7 @@ final class Cms
             }
             foreach ($doomed as $t => $set) {
                 Workflows::forgetRecords($this->pdo, $t, array_keys($set)); // tasks of the deleted rows
+                Revisions::forgetRecords($this->pdo, $t, array_keys($set)); // and their versions
             }
             $this->pdo->commit();
         } catch (\Throwable $ex) {
@@ -729,10 +935,28 @@ final class Cms
         }
 
         unset($doomed[$e['table']][$id]);
-        return array_filter(array_map('count', $doomed));
+        $cascaded = array_filter(array_map('count', $doomed));
+        // only the deleted record itself fires; rows deleted along via {cascade} are named as counts per table
+        $this->fireWebhooks($e, $id, 'deleted', null, null, $cascaded ? ['cascade_deleted' => $cascaded] : []);
+        return $cascaded;
     }
 
     // ---------------------------------------------------------------- Internal
+
+    /**
+     * Webhooks of a write that has been committed (Webhooks::fire()). The hash is formed from the record as the public API
+     * delivers it (a Cms without user and permissions) - regardless of who saved it and who fetches it later.
+     */
+    private function fireWebhooks(array $e, int $id, string $kind, ?int $version, ?array $transition = null, array $extra = []): void
+    {
+        if (!$this->webhooks) {
+            return;
+        }
+        $public = $kind === 'deleted' ? null : function () use ($e, $id): ?array {
+            return (new self($this->pdo, $this->model))->fetchRow($e, $id);
+        };
+        Webhooks::fire($this->pdo, $e['table'], $id, $kind, $version, $public, $transition, $extra);
+    }
 
     private function entity(string $table): array
     {
@@ -958,7 +1182,7 @@ final class Cms
         if ($row === false) {
             return null;
         }
-        $row = $this->castRow($e, $row);
+        $row = $this->presentMeta($e, [$this->castRow($e, $row)])[0];
         foreach ($e['many_to_many'] as $m) {
             $junction = SqlGenerator::q($m['junction']);
             $own = SqlGenerator::q($m['own_column']);
@@ -1136,6 +1360,15 @@ final class Cms
             'existing_id'   => $existing,
             'errors'        => array_fill_keys($visible, $fieldError),
         ];
+    }
+
+    /**
+     * Tracking metadata in API form (RecordMeta::present): user fields as {id, username, name}, without a session
+     * removed. Entities without tracking metadata (field of the same name, older installation) stay unchanged.
+     */
+    private function presentMeta(array $e, array $rows): array
+    {
+        return RecordMeta::applies($e) ? RecordMeta::present($this->pdo, $rows, $this->user !== null) : $rows;
     }
 
     /** Depending on the PHP version, pdo_sqlite returns strings or native types; unified here. */

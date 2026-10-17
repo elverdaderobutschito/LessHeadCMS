@@ -205,13 +205,15 @@ final class PumlParser
      * UI route #/media) and the stable IDs/the diagram layout of the schema editor (schema_ids, schema_layout,
      * see SchemaIds), multilingual support (languages, translations, user_language_prefs, see Languages) as well as roles and
      * permissions (roles, groups, permissions, group_roles, user_roles, user_groups, see Permissions) and the tasks of the
-     * workflows (lh_task, see Workflows; deliberately with a prefix - "tasks" stays available as a class name) and the
-     * API keys (api_keys, see ApiKeys).
+     * workflows (lh_task, see Workflows; deliberately with a prefix - "tasks" stays available as a class name), the
+     * API keys (api_keys, see ApiKeys), the versions of the records (lh_revision, see Revisions) and the webhooks
+     * (lh_webhook, lh_webhook_call, see Webhooks).
      */
     public const RESERVED = [
         'users', 'login', 'logout', 'me', 'testdata', 'login_attempts', 'user_column_prefs', 'media', 'media_tags',
         'media_tag_links', 'schema_ids', 'schema_layout', 'languages', 'translations', 'user_language_prefs',
-        'roles', 'groups', 'permissions', 'group_roles', 'user_roles', 'user_groups', 'lh_task', 'api_keys',
+        'roles', 'groups', 'permissions', 'group_roles', 'user_roles', 'user_groups', 'lh_task', 'api_keys', 'lh_revision',
+        'lh_webhook', 'lh_webhook_call',
     ];
 
     private const IDENT = '/^[A-Za-z_][A-Za-z0-9_]*$/';
@@ -1170,6 +1172,15 @@ final class PumlParser
             }
             if (isset($seen[strtolower($field)])) {
                 throw new SchemaException("Feld '$field' in Klasse '$name' doppelt definiert.");
+            }
+            if (RecordMeta::isReserved($field)) {
+                throw new SchemaException("Feld '$field' in Klasse '$name': Der Name ist für die automatischen Systemfelder "
+                    . 'reserviert (' . implode(', ', RecordMeta::FIELDS) . '; Zeitpunkt und Nutzer von Anlage und letzter Änderung '
+                    . 'setzt das System selbst). Bitte umbenennen, z. B. erstellt_am.');
+            }
+            if (strtolower($field) === Revisions::REASON_KEY) {
+                throw new SchemaException("Feld '$field' in Klasse '$name': Der Name ist für den Änderungsgrund beim Speichern "
+                    . 'reserviert (Versionen). Bitte umbenennen.');
             }
             $seen[strtolower($field)] = true;
             if ($isTitle) {

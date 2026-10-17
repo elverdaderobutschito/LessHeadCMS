@@ -28,7 +28,8 @@ namespace LessHeadCMS;
  *
  *   page        page from 1 (default 1); a page past the end returns an empty list
  *   per_page    rows per page, 1 to MAX_PER_PAGE (default DEFAULT_PER_PAGE)
- *   sort        field of the entity (also id and FK columns; not n:n, not a media field), order = asc | desc.
+ *   sort        field of the entity (also id, FK columns and the tracking metadata created_at/created_by/updated_at/
+ *               updated_by, see RecordMeta; not n:n, not a media field), order = asc | desc.
  *               Empty values come last in both directions, ties are resolved by the id. Text: case-insensitive,
  *               umlauts like their base letter, numbers in the text numerically ("Hafen 2" before "Hafen 12"); FK
  *               column: by the label of the target row (title_field). Without sort: by id.
@@ -41,6 +42,8 @@ namespace LessHeadCMS;
  *                 enum                   one of the values, several separated by commas (exact)
  *                 bool/visibility        true | false (false also matches empty)
  *                 int/decimal/id/date    filter[f][from] and/or filter[f][to], bounds inclusive
+ *                 created_at/updated_at  like date (JJJJ-MM-TT = whole day in UTC) or exact UTC time JJJJ-MM-TT HH:MM:SS
+ *                 created_by/updated_by  substring of the user's name or username (with a session only)
  *   eq[f]       exact value of a field (also an FK column: the id of the target row); empty value = field is empty
  *   ids         only these rows (separated by commas, at most MAX_PER_PAGE)
  *   q           substring across all fields except text/richtext/bool, including the labels of FK columns
@@ -192,6 +195,14 @@ final class ListQuery
                 return $f;
             }
         }
+        // tracking metadata (RecordMeta): sortable and filterable like a field, not part of the model
+        if (in_array($name, RecordMeta::FIELDS, true) && RecordMeta::applies($this->entity)) {
+            foreach (RecordMeta::fields() as $f) {
+                if ($f['name'] === $name) {
+                    return $f + ['primary' => false, 'foreign_key' => null];
+                }
+            }
+        }
         return null;
     }
 
@@ -326,6 +337,10 @@ final class ListQuery
                 return 'bool';
             case 'enum':
                 return 'enum';
+            case 'datetime': // created_at/updated_at (RecordMeta)
+                return 'date';
+            case 'user': // created_by/updated_by (RecordMeta)
+                return 'user';
             default:
                 return $f['primary'] ? 'number' : 'text';
         }
@@ -360,13 +375,17 @@ final class ListQuery
                 if ($v === '') {
                     continue;
                 }
-                $ok = is_string($v) && ($kind === 'date' ? (bool) preg_match('/^\d{4}-\d{2}-\d{2}$/', $v) : is_numeric($v));
+                // datetime (created_at/updated_at, UTC "YYYY-MM-DD HH:MM:SS"): a date is a whole UTC day, an exact
+                // time a point in time (the list view sends the bounds of the days in the user's time zone this way)
+                $exact = $f['type'] === 'datetime' && is_string($v) && preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $v);
+                $ok = is_string($v) && ($kind === 'date' ? $exact || preg_match('/^\d{4}-\d{2}-\d{2}$/', $v) : is_numeric($v));
                 if (!$ok) {
-                    $this->errors["{$key}[$bound]"] = $kind === 'date' ? 'Datum JJJJ-MM-TT erwartet' : 'Zahl erwartet';
+                    $this->errors["{$key}[$bound]"] = $kind === 'date'
+                        ? 'Datum JJJJ-MM-TT erwartet' . ($f['type'] === 'datetime' ? ' (oder JJJJ-MM-TT HH:MM:SS in UTC)' : '') : 'Zahl erwartet';
                     continue;
                 }
                 $this->params[] = $kind === 'date' ? $v : $v + 0;
-                $parts[] = "$col $op ?";
+                $parts[] = ($f['type'] === 'datetime' && !$exact ? "SUBSTR($col, 1, 10)" : $col) . " $op ?";
             }
             // as in the UI: with a range, empty values drop out
             return $parts ? "$col IS NOT NULL AND " . ($kind === 'date' ? "$col <> '' AND " : '') . implode(' AND ', $parts) : null;
@@ -394,6 +413,11 @@ final class ListQuery
         if ($kind === 'fk') {
             return $this->fkContains($f, $value);
         }
+        if ($kind === 'user') {
+            // name or username of the user, as in the cell
+            return "$col IN (SELECT u.\"id\" FROM \"users\" u WHERE " . $this->contains('u."name"', $value) . ' OR '
+                . $this->contains('u."username"', $value) . ')';
+        }
         return $this->contains($f['type'] === 'richtext' ? "lhc_plain($col)" : "CAST($col AS TEXT)", $value);
     }
 
@@ -416,7 +440,7 @@ final class ListQuery
             }
             return $value === 'true' ? "$col = 1" : "($col IS NULL OR $col = 0)";
         }
-        if ($kind === 'number' || $kind === 'fk') {
+        if ($kind === 'number' || $kind === 'fk' || $kind === 'user') {
             if (!is_numeric($value)) {
                 $this->errors["eq[$name]"] = 'Zahl erwartet';
                 return null;
@@ -526,6 +550,10 @@ final class ListQuery
         $kind = self::kind($f);
         if ($kind === 'fk') {
             $expr = 'lhc_sortkey(' . $this->fkSortExpr($f) . ')';
+            $empty = "$col IS NULL";
+        } elseif ($kind === 'user') {
+            // by the displayed name (name, otherwise username)
+            $expr = "lhc_sortkey((SELECT CASE WHEN u.\"name\" <> '' THEN u.\"name\" ELSE u.\"username\" END FROM \"users\" u WHERE u.\"id\" = $col))";
             $empty = "$col IS NULL";
         } elseif ($kind === 'text' || $kind === 'enum') {
             $expr = $f['type'] === 'richtext' ? "lhc_sortkey(lhc_plain($col))" : "lhc_sortkey($col)";

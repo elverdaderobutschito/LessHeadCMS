@@ -12,6 +12,7 @@ a REST API and an editorial UI, ready to use.
 - Multilingual content and UI
 - Fine-grained roles & permissions, including read-only API keys for headless frontends
 - Workflow/approval states with tasks
+- Webhooks: trigger a build (e.g. Netlify) on workflow transitions or on create/update/delete
 - Runs on plain PHP shared hosting — no Composer or root access needed at runtime
 
 ## Quick start
@@ -31,7 +32,10 @@ a REST API and an editorial UI, ready to use.
 - [REST API reference](docs/rest-api.md)
 - [Editorial UI](docs/editorial-ui.md)
 - [Roles and permissions](docs/roles-and-permissions.md)
+- [Record metadata (created/updated at/by)](docs/record-metadata.md)
+- [Record versions (history, comparison, restore)](docs/record-versions.md)
 - [Workflows](docs/workflows.md)
+- [Webhooks (build hooks on transitions and saves)](docs/webhooks.md)
 - [Multilingual support](docs/multilingual.md)
 - [API users and API keys](docs/api-users.md)
 

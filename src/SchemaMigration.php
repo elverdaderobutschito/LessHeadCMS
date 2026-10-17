@@ -246,6 +246,7 @@ final class SchemaMigration
         $positions = $defs ? WorkflowParser::positions((string) $this->workflow['source']) : [];
         if ($defs) {
             Workflows::checkPrincipals($this->pdo, $defs, $positions); // groups/roles/users from allowed=/assign= (422 schema_error)
+            Webhooks::checkWorkflows($this->pdo, $defs, $positions); // webhooks from action=webhook:<name> (422 schema_error)
         }
         try {
             $new = PumlParser::parse($source, $defs);
@@ -287,6 +288,12 @@ final class SchemaMigration
             array_push($p['changes'], ...$id['mapChanges'][$t1]);
             $this->checkColumns($t1, $e1, $t0, $e0, $cols, $p);
             $keep = $t0 === $t1 && ($oldDdl[$t1] ?? null) === $statements[$t1] && self::identity($cols);
+            // tracking metadata (RecordMeta): not part of the model, carried over unchanged on a rebuild
+            if (RecordMeta::applies($e1)) {
+                foreach (RecordMeta::FIELDS as $name) {
+                    $cols[$name] = ['from' => RecordMeta::applies($e0) ? $name : null];
+                }
+            }
             $p['ops'][] = ['table' => $t1, 'ddl' => $statements[$t1], 'source' => $t0, 'cols' => $cols, 'keep' => $keep,
                 'kind' => 'entity', 'entity' => $e1];
         }
@@ -1335,6 +1342,8 @@ final class SchemaMigration
             $this->updateColumnPrefs($plan);
             Workflows::store($pdo, $this->workflows() !== null ? $this->workflow['file'] : null, $this->workflow['source']);
             Workflows::migrateTasks($pdo, $plan['entityMap'], $plan['model']);
+            Revisions::migrate($pdo, $plan, $this->old); // versions: renamed entities/fields/lists along, removed ones away
+            Webhooks::migrate($pdo, $plan['entityMap']); // entity selection of the webhooks follows renamed entities
             Database::setMeta($pdo, 'schema_hash', hash('sha256', $source));
             Database::setMeta($pdo, 'schema_json', json_encode($plan['model'], JSON_UNESCAPED_UNICODE));
             Database::setMeta($pdo, 'schema_source', $source);
@@ -1435,6 +1444,9 @@ final class SchemaMigration
                 continue; // entity removed
             }
             $map = ($plan['colMaps'][$t1] ?? []) + array_flip($plan['listMaps'][$t1] ?? []);
+            if (RecordMeta::applies($plan['model']['entities'][$t1])) {
+                $map += array_combine(RecordMeta::FIELDS, RecordMeta::FIELDS); // tracking metadata columns stay selected
+            }
             $cols = json_decode((string) $r['visible_columns'], true);
             $cols = array_values(array_unique(array_filter(array_map(function ($c) use ($map) {
                 return $map[$c] ?? null;
