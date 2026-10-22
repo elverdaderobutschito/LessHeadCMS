@@ -142,6 +142,9 @@ final class Cms
             if (isset($f['workflow'])) {
                 $field['workflow'] = $this->describeWorkflow($f);
             }
+            if (array_key_exists('section', $f)) {
+                $field['section'] = $f['section']; // only for classes with sections, see below
+            }
             $fields[] = $field;
         }
         $many = [];
@@ -161,7 +164,8 @@ final class Cms
                 // {symmetric} self-reference: the list contains the links of both directions (see fetchRow)
                 'symmetric'   => !empty($m['symmetric']),
             ] + (!empty($m['filter_by']) && $this->filterVisible($e, $target, $m['filter_by'])
-                ? ['filter_by' => $m['filter_by']] : []); // {filter_by}, see above
+                ? ['filter_by' => $m['filter_by']] : []) // {filter_by}, see above
+                + (array_key_exists('section', $m) ? ['section' => $m['section']] : []);
         }
         $schema = [
             'entity'       => $e['name'],
@@ -183,8 +187,20 @@ final class Cms
         }));
         if ($media) {
             $schema['media'] = array_map(function ($m) {
-                return ['name' => $m['name'], 'type' => 'media', 'required' => $m['required']];
+                return ['name' => $m['name'], 'type' => 'media', 'required' => $m['required']]
+                    + (array_key_exists('section', $m) ? ['section' => $m['section']] : []);
             }, $media);
+        }
+        // Display order of all fields, media fields and n:n lists as in the diagram (see PumlParser::finishOrder()); for
+        // models stored before this option derived as fields, n:n, media
+        $schema['field_order'] = array_values(array_diff(self::fieldOrder($e), array_keys($denied)));
+        // Form sections (separator lines with a title) - only for classes that have some, and only sections that still
+        // contain a visible entry; 'section' per entry of fields/media/many_to_many (relation fields: null)
+        if (!empty($e['sections'])) {
+            $used = array_column(array_merge($fields, $many, $schema['media'] ?? []), 'section');
+            $schema['sections'] = array_values(array_filter($e['sections'], function ($title) use ($used) {
+                return in_array($title, $used, true);
+            }));
         }
         // Incoming n:1 relationships with a minimum count ("every invoice has at least one line item") - only for entities
         // that have some. name is the identifier that appears in _min_warnings for rows without a related row.
@@ -203,6 +219,21 @@ final class Cms
             $schema['system_fields'] = RecordMeta::fields($this->user !== null);
         }
         return $schema;
+    }
+
+    /**
+     * field_order of an entity (all names of fields, media and many_to_many in display order); models stored before
+     * 2026-10-21 do not know the key - then the previous order fields, n:n, media.
+     *
+     * @return string[]
+     */
+    public static function fieldOrder(array $e): array
+    {
+        return $e['field_order'] ?? array_merge(
+            array_column($e['fields'], 'name'),
+            array_column($e['many_to_many'], 'name'),
+            array_column($e['media'] ?? [], 'name')
+        );
     }
 
     /**

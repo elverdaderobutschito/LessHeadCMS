@@ -1,5 +1,11 @@
 @startuml CourseManagement
 
+enum Status {
+  BOOKED
+  PAID
+  OPEN
+}
+
 package "Course Offering" {
 
   class Course {
@@ -38,7 +44,7 @@ package "Member Management" {
   class Booking {
     + id: int
     + booked_on: date {title}
-    + status: string {title}
+    + status: Status {title}
   }
 
   Booking "n" --> "1" Member : booked by {cascade}

@@ -287,7 +287,8 @@ final class SchemaMigration
             $p['colMaps'][$t1] = $id['colMaps'][$t1];
             array_push($p['changes'], ...$id['mapChanges'][$t1]);
             $this->checkColumns($t1, $e1, $t0, $e0, $cols, $p);
-            $keep = $t0 === $t1 && ($oldDdl[$t1] ?? null) === $statements[$t1] && self::identity($cols);
+            // only the order of the columns may differ (fields sorted differently in the diagram, see sameDdl())
+            $keep = $t0 === $t1 && self::sameDdl($oldDdl[$t1] ?? null, $statements[$t1]) && self::identity($cols);
             // tracking metadata (RecordMeta): not part of the model, carried over unchanged on a rebuild
             if (RecordMeta::applies($e1)) {
                 foreach (RecordMeta::FIELDS as $name) {
@@ -407,6 +408,14 @@ final class SchemaMigration
                             'text' => "Ich bestätige, dass $n Medien-Verknüpfung(en) von {$e0['name']}.{$md0['name']} verloren gehen."];
                     }
                 }
+            }
+        }
+
+        // display order and form sections: only the model changes (no table, see sameDdl())
+        foreach ($new['entities'] as $t1 => $e1) {
+            $t0 = $p['entityMap'][$t1];
+            if ($t0 !== null) {
+                $this->orderChanges($p, $e1, $old['entities'][$t0], $id['colMaps'][$t1] ?? [], $p['listMaps'][$t1] ?? []);
             }
         }
 
@@ -1518,6 +1527,120 @@ final class SchemaMigration
             }
         }
         return array_values(array_unique($t));
+    }
+
+    /**
+     * Notices for a changed display order (field_order) and changed form sections of an entity - pure model changes.
+     * The order is compared via the names of the old model (renamed fields/lists count as the same entry); an old model
+     * from before field_order gets no order notice (otherwise every entity would report one after the update).
+     *
+     * @param array<string,string> $colMap old column => new field name
+     * @param array<string,string> $listMap new n:n/media name => old name
+     */
+    private function orderChanges(array &$p, array $e1, array $e0, array $colMap, array $listMap): void
+    {
+        $toNew = $colMap + array_flip($listMap);
+        $sectionOf = function (array $e, array $rename): array {
+            $out = [];
+            foreach (array_merge($e['fields'], $e['media'] ?? [], $e['many_to_many']) as $x) {
+                $out[$rename[$x['name']] ?? $x['name']] = $x['section'] ?? null;
+            }
+            return $out;
+        };
+        $s0 = $e0['sections'] ?? [];
+        $s1 = $e1['sections'] ?? [];
+        $added = array_values(array_diff($s1, $s0));
+        $removed = array_values(array_diff($s0, $s1));
+        $parts = [];
+        if (count($added) === 1 && count($removed) === 1 && array_search($added[0], $s1, true) === array_search($removed[0], $s0, true)) {
+            $parts[] = "Abschnitt '{$removed[0]}' umbenannt in '{$added[0]}'";
+            $renamedSection = [$removed[0] => $added[0]];
+        } else {
+            if ($added) {
+                $parts[] = 'neuer Abschnitt ' . implode(', ', array_map(function ($t) {
+                    return "'$t'";
+                }, $added));
+            }
+            if ($removed) {
+                $parts[] = 'Abschnitt ' . implode(', ', array_map(function ($t) {
+                    return "'$t'";
+                }, $removed)) . ' entfernt';
+            }
+            if (!$added && !$removed && $s0 !== $s1) {
+                $parts[] = 'Reihenfolge der Abschnitte geändert';
+            }
+            $renamedSection = [];
+        }
+        if (isset($e0['field_order'])) {
+            $old = array_map(function ($n) use ($toNew) {
+                return $toNew[$n] ?? $n;
+            }, $e0['field_order']);
+            $common = array_values(array_intersect($old, $e1['field_order']));
+            $moved = $common !== array_values(array_intersect($e1['field_order'], $common));
+            // section assignment of the entries present in both (a renamed section does not count as a move)
+            $sec0 = $sectionOf($e0, $toNew);
+            $sec1 = $sectionOf($e1, []);
+            foreach ($common as $n) {
+                $was = $sec0[$n] ?? null;
+                if (array_key_exists($n, $sec1) && ($renamedSection[$was] ?? $was) !== $sec1[$n]) {
+                    $moved = true;
+                }
+            }
+            if ($moved) {
+                $parts[] = 'Reihenfolge bzw. Abschnittszuordnung der Felder geändert';
+            }
+        }
+        if ($parts) {
+            $p['changes'][] = self::change('field_order', 'info', "Klasse {$e1['name']}: " . implode('; ', $parts)
+                . ' (nur Formular und Liste, die Tabelle bleibt unverändert).');
+        }
+    }
+
+    /**
+     * Same table structure apart from the order of the column definitions? The column definitions and table constraints of
+     * the CREATE TABLE statement (top-level comma-separated parts) are compared as a set - every part exactly (type,
+     * NOT NULL, DEFAULT, CHECK with the enum values, FOREIGN KEY, UNIQUE with its column order). Reordered fields in the
+     * diagram therefore keep the table; the physical column order may then differ from field_order, nothing depends on it
+     * (all reads and copies go by column name).
+     */
+    private static function sameDdl(?string $old, string $new): bool
+    {
+        if ($old === null) {
+            return false;
+        }
+        if ($old === $new) {
+            return true;
+        }
+        $parts = function (string $ddl): ?array {
+            if (!preg_match('/^(CREATE TABLE\s+"(?:[^"]|"")*"\s*)\((.*)\)$/s', $ddl, $m)) {
+                return null;
+            }
+            $items = [];
+            $depth = 0;
+            $quote = null;
+            $cur = '';
+            foreach (str_split($m[2]) as $ch) {
+                if ($quote !== null) {
+                    $quote = $ch === $quote ? null : $quote; // "" / '' inside a quote: closes and reopens, same result
+                } elseif ($ch === '"' || $ch === "'") {
+                    $quote = $ch;
+                } elseif ($ch === '(') {
+                    $depth++;
+                } elseif ($ch === ')') {
+                    $depth--;
+                } elseif ($ch === ',' && $depth === 0) {
+                    $items[] = trim($cur);
+                    $cur = '';
+                    continue;
+                }
+                $cur .= $ch;
+            }
+            $items[] = trim($cur);
+            sort($items);
+            return [trim($m[1]), $items];
+        };
+        $a = $parts($old);
+        return $a !== null && $a === $parts($new);
     }
 
     /** Columns without rename, conversion, backfill and without new columns? */

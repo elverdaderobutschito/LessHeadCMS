@@ -1,0 +1,375 @@
+@startuml OpenImmoMakler
+' Modellvorlage: Website eines Immobilienmaklers mit Objektdaten nach OpenImmo 1.2.7 (Immobilie, Kontaktperson, Anbieter).
+' Beschreibung, Aufbau und bewusste Vereinfachungen: immobilienmakler-openimmo.md
+
+enum Nutzungsart {
+  WOHNEN
+  GEWERBE
+  ANLAGE
+  WAZ
+}
+
+enum Vermarktungsart {
+  KAUF
+  MIETE_PACHT
+  ERBPACHT
+  LEASING
+}
+
+enum Objektart {
+  ZIMMER
+  WOHNUNG
+  HAUS
+  GRUNDSTUECK
+  BUERO_PRAXEN
+  EINZELHANDEL
+  GASTGEWERBE
+  HALLEN_LAGER_PROD
+  LAND_UND_FORSTWIRTSCHAFT
+  PARKEN
+  SONSTIGE
+  FREIZEITIMMOBILIE_GEWERBLICH
+  ZINSHAUS_RENDITEOBJEKT
+}
+
+enum ObjektartTyp {
+  ZIMMER
+  DACHGESCHOSS
+  MAISONETTE
+  LOFT_STUDIO_ATELIER
+  PENTHOUSE
+  TERRASSEN
+  ETAGE
+  ERDGESCHOSS
+  SOUTERRAIN
+  APARTMENT
+  FERIENWOHNUNG
+  GALERIE
+  ROHDACHBODEN
+  ATTIKAWOHNUNG
+  KEINE_ANGABE
+  REIHENHAUS
+  REIHENEND
+  REIHENMITTEL
+  REIHENECK
+  DOPPELHAUSHAELFTE
+  EINFAMILIENHAUS
+  STADTHAUS
+  BUNGALOW
+  VILLA
+  RESTHOF
+  BAUERNHAUS
+  LANDHAUS
+  SCHLOSS
+  ZWEIFAMILIENHAUS
+  MEHRFAMILIENHAUS
+  FERIENHAUS
+  BERGHUETTE
+  CHALET
+  STRANDHAUS
+  LAUBE_DATSCHE_GARTENHAUS
+  APARTMENTHAUS
+  BURG
+  HERRENHAUS
+  FINCA
+  RUSTICO
+  FERTIGHAUS
+  WOHNEN
+  GEWERBE
+  INDUSTRIE
+  LAND_FORSTWIRSCHAFT
+  FREIZEIT
+  GEMISCHT
+  GEWERBEPARK
+  SONDERNUTZUNG
+  SEELIEGENSCHAFT
+  BUEROFLAECHE
+  BUEROHAUS
+  BUEROZENTRUM
+  LOFT_ATELIER
+  PRAXIS
+  PRAXISFLAECHE
+  PRAXISHAUS
+  AUSSTELLUNGSFLAECHE
+  COWORKING
+  SHARED_OFFICE
+  LADENLOKAL
+  EINZELHANDELSLADEN
+  VERBRAUCHERMARKT
+  EINKAUFSZENTRUM
+  KAUFHAUS
+  FACTORY_OUTLET
+  KIOSK
+  VERKAUFSFLAECHE
+  GASTRONOMIE
+  GASTRONOMIE_UND_WOHNUNG
+  PENSIONEN
+  HOTELS
+  WEITERE_BEHERBERGUNGSBETRIEBE
+  BAR
+  CAFE
+  DISCOTHEK
+  RESTAURANT
+  RAUCHERLOKAL
+  EINRAUMLOKAL
+  HALLE
+  INDUSTRIEHALLE
+  LAGER
+  LAGERFLAECHEN
+  LAGER_MIT_FREIFLAECHE
+  HOCHREGALLAGER
+  SPEDITIONSLAGER
+  PRODUKTION
+  WERKSTATT
+  SERVICE
+  FREIFLAECHEN
+  KUEHLHAUS
+  LANDWIRTSCHAFTLICHE_BETRIEBE
+  BAUERNHOF
+  AUSSIEDLERHOF
+  GARTENBAU
+  ACKERBAU
+  WEINBAU
+  VIEHWIRTSCHAFT
+  JAGD_UND_FORSTWIRTSCHAFT
+  TEICH_UND_FISCHWIRTSCHAFT
+  SCHEUNEN
+  REITERHOEFE
+  SONSTIGE_LANDWIRTSCHAFTSIMMOBILIEN
+  ANWESEN
+  JAGDREVIER
+  STELLPLATZ
+  CARPORT
+  DOPPELGARAGE
+  DUPLEX
+  TIEFGARAGE
+  BOOTSLIEGEPLATZ
+  EINZELGARAGE
+  PARKHAUS
+  TIEFGARAGENSTELLPLATZ
+  PARKPLATZ_STROM
+  TANKSTELLE
+  KRANKENHAUS
+  SONSTIGE
+  SPORTANLAGEN
+  VERGNUEGUNGSPARKS_UND_CENTER
+  FREIZEITANLAGE
+  WOHN_UND_GESCHAEFTSHAUS
+  GESCHAEFTSHAUS
+  BUEROGEBAEUDE
+  SB_MAERKTE
+  EINKAUFSCENTREN
+  WOHNANLAGEN
+  VERBRAUCHERMAERKTE
+  INDUSTRIEANLAGEN
+  PFLEGEHEIM
+  SANATORIUM
+  SENIORENHEIM
+  BETREUTES_WOHNEN
+}
+
+enum Verkaufsstatus {
+  OFFEN
+  RESERVIERT
+  VERKAUFT
+}
+
+enum Unterkellert {
+  JA
+  NEIN
+  TEIL
+}
+
+enum Zustand {
+  ERSTBEZUG
+  TEIL_VOLLRENOVIERUNGSBED
+  NEUWERTIG
+  TEIL_VOLLSANIERT
+  TEIL_VOLLRENOVIERT
+  TEIL_SANIERT
+  VOLL_SANIERT
+  SANIERUNGSBEDUERFTIG
+  BAUFAELLIG
+  NACH_VEREINBARUNG
+  MODERNISIERT
+  GEPFLEGT
+  ROHBAU
+  ENTKERNT
+  ABRISSOBJEKT
+  PROJEKTIERT
+}
+
+enum EpassArt {
+  BEDARF
+  VERBRAUCH
+}
+
+enum EpassJahrgang {
+  V_2008
+  V_2014
+  ohne
+  nicht_noetig
+  bei_besichtigung
+}
+
+enum EpassGebaeudeart {
+  wohn
+  nichtwohn
+}
+
+package "Immobilien" {
+  class Immobilie {
+      + objekttitel: string? {title}
+      + objektnr_extern: string {unique}
+      + objektnr_intern: string?
+      + openimmo_obid: string?
+      + stand_vom: date?
+      + veroeffentlicht: visibility
+      + slug: string?
+      -- Kategorie & Status --
+      + nutzungsart: Nutzungsart?
+      + vermarktungsart: Vermarktungsart?
+      + objektart: Objektart?
+      + objektart_typ: ObjektartTyp?
+      + verkaufsstatus: Verkaufsstatus?
+      + status_detail: string?
+      + verfuegbar_ab: string?
+      -- Lage --
+      + plz: string?
+      + ort: string?
+      + strasse: string?
+      + hausnummer: string?
+      + regionaler_zusatz: string?
+      + etage: int?
+      + anzahl_etagen: int?
+      + breitengrad: decimal?
+      + laengengrad: decimal?
+      + adresse_freigeben: bool?
+      + distanz_bus: decimal?
+      + distanz_us_bahn: decimal?
+      + distanz_fernbahnhof: decimal?
+      + distanz_autobahn: decimal?
+      + distanz_flughafen: decimal?
+      -- Preise --
+      + kaufpreis: decimal?
+      + kaufpreis_auf_anfrage: bool?
+      + kaltmiete: decimal?
+      + nettokaltmiete: decimal?
+      + warmmiete: decimal?
+      + nebenkosten: decimal?
+      + heizkosten_enthalten: bool?
+      + kaution: decimal?
+      + kaution_text: string?
+      + hausgeld: decimal?
+      + aussen_courtage: string?
+      + aussen_courtage_mit_mwst: bool?
+      + provisionspflichtig: bool?
+      + courtage_hinweis: text?
+      + garage_anzahl: int?
+      + garage_kaufpreis: decimal?
+      + garage_miete: decimal?
+      + tiefgarage_anzahl: int?
+      + tiefgarage_kaufpreis: decimal?
+      + tiefgarage_miete: decimal?
+      -- Flächen --
+      + wohnflaeche: decimal?
+      + nutzflaeche: decimal?
+      + grundstuecksflaeche: decimal?
+      + anzahl_zimmer: decimal?
+      + anzahl_schlafzimmer: decimal?
+      + anzahl_badezimmer: decimal?
+      + anzahl_balkone: decimal?
+      + anzahl_terrassen: decimal?
+      + balkon_terrasse_flaeche: decimal?
+      + anzahl_stellplaetze: int?
+      -- Ausstattung --
+      + bad_wanne: bool?
+      + bad_dusche: bool?
+      + bad_fenster: bool?
+      + gaeste_wc: bool?
+      + boden_parkett: bool?
+      + boden_fliesen: bool?
+      + boden_laminat: bool?
+      + einbaukueche: bool?
+      + offene_kueche: bool?
+      + heizung_zentral: bool?
+      + heizung_etage: bool?
+      + heizung_fussboden: bool?
+      + heizung_fern: bool?
+      + heizungsart_text: string?
+      + personenaufzug: bool?
+      + barrierefrei: bool?
+      + kamin: bool?
+      + gartennutzung: bool?
+      + wintergarten: bool?
+      + abstellraum: bool?
+      + unterkellert: Unterkellert?
+      + stellplatz_garage: bool?
+      + stellplatz_tiefgarage: bool?
+      + stellplatz_carport: bool?
+      + stellplatz_freiplatz: bool?
+      -- Zustand --
+      + baujahr: string?
+      + letzte_modernisierung: string?
+      + zustand: Zustand?
+      -- Energieausweis --
+      + epass_art: EpassArt?
+      + epass_jahrgang: EpassJahrgang?
+      + epass_gebaeudeart: EpassGebaeudeart?
+      + epass_ausstelldatum: date?
+      + epass_gueltig_bis: date?
+      + epass_baujahr: string?
+      + epass_primaerenergietraeger: string?
+      + epass_verbrauchskennwert: decimal?
+      + epass_endenergiebedarf: decimal?
+      + epass_mit_warmwasser: bool?
+      + epass_wertklasse: string?
+      -- Texte --
+      + dreizeiler: text?
+      + objektbeschreibung: richtext?
+      + ausstattung_beschreibung: richtext?
+      + lage_beschreibung: richtext?
+      + sonstige_angaben: richtext?
+      -- Medien --
+      + titelbild: media?
+      + bilder: media?
+      + grundrisse: media?
+      + dokumente: media?
+  }
+
+}
+
+package "Stammdaten" {
+  class Kontaktperson {
+      + anrede: string?
+      + titel: string?
+      + vorname: string?
+      + name: string {title}
+      + firma: string?
+      + position: string?
+      + personennummer: string?
+      -- Kontakt --
+      + email_direkt: string?
+      + email_zentrale: string?
+      + tel_durchwahl: string?
+      + tel_zentrale: string?
+      + tel_handy: string?
+      + foto: media?
+  }
+
+  class Anbieter {
+      + firma: string? {title}
+      + openimmo_anid: string? {unique}
+      + anbieternr: string?
+      + lizenzkennung: string?
+      + impressum: text?
+      + logo: media?
+  }
+
+}
+
+Immobilie "n" --> "1" Anbieter {cascade}
+Immobilie "n" --> "0..1" Kontaktperson : Ansprechpartner
+Kontaktperson "n" --> "1" Anbieter {cascade}
+
+@enduml

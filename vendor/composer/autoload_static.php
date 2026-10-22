@@ -11,22 +11,22 @@ class ComposerStaticInit857cf5dbd548f21ded1bf0f285ece630
     );
 
     public static $prefixLengthsPsr4 = array (
-        'f' => 
+        'f' =>
         array (
             'flight\\' => 7,
         ),
-        'L' => 
+        'L' =>
         array (
             'LessHeadCMS\\' => 12,
         ),
     );
 
     public static $prefixDirsPsr4 = array (
-        'flight\\' => 
+        'flight\\' =>
         array (
             0 => __DIR__ . '/..' . '/mikecao/flight/flight',
         ),
-        'LessHeadCMS\\' => 
+        'LessHeadCMS\\' =>
         array (
             0 => __DIR__ . '/../..' . '/src',
         ),
@@ -45,6 +45,7 @@ class ComposerStaticInit857cf5dbd548f21ded1bf0f285ece630
         'LessHeadCMS\\Config' => __DIR__ . '/../..' . '/src/Config.php',
         'LessHeadCMS\\Database' => __DIR__ . '/../..' . '/src/Database.php',
         'LessHeadCMS\\Download' => __DIR__ . '/../..' . '/src/Download.php',
+        'LessHeadCMS\\FieldOrderUpgrade' => __DIR__ . '/../..' . '/src/FieldOrderUpgrade.php',
         'LessHeadCMS\\Http' => __DIR__ . '/../..' . '/src/Http.php',
         'LessHeadCMS\\Languages' => __DIR__ . '/../..' . '/src/Languages.php',
         'LessHeadCMS\\ListQuery' => __DIR__ . '/../..' . '/src/ListQuery.php',

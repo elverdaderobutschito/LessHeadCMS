@@ -270,6 +270,14 @@ The active diagram of an **already populated** installation can be edited as tex
    backups cannot be retrieved over the web. Older backups from before the database copies
    (`20261001-143000_<file>.puml`) also appear in the list and count towards the retention.
 
+**Field order of installations from before 2026-10-21** (`src/FieldOrderUpgrade.php`): their stored model does not know
+`field_order` yet. On the first request after the update the server parses the stored text of the active schema once
+more and adds the display order and form sections to the stored model - only if no migration is pending (the text
+matches the stored hash, `/bootstrap` stays `up_to_date`), the text parses and the generated tables are exactly the
+existing ones. Beforehand it writes a backup pair like before „Anwenden“ (above). Done once (`_meta`
+`field_order_upgrade` = `done`, or `skipped` if a condition was not met - then the order follows with the next
+„Anwenden“); the outcome is written to the PHP error log („[LessHeadCMS] Feldreihenfolge … nachgerüstet“).
+
 **Restoring a backup (System → Schema → „Vorhandene Sicherungen“ → „Wiederherstellen“):** The dialog states the
 time and what gets lost (all changes since then: content, schema, users and passwords, media library entries,
 diagram layout); it is only enabled after typing **`WIEDERHERSTELLEN`** (`POST /api/_schema/restore`, the
@@ -363,6 +371,8 @@ only its own fields, `extends`, `package`, `title_fields`, `unique_fields`, `med
 written, `label`, `show_label`, `cascade`, `unique`, `symmetric`, `own_column`, `junction`), `enums[]` and `warnings[]`.
 Every object has a `key` (derived from the name: `entity:kurs`, `field:kurs.titel`, `media:kurs.galerie`,
 `relation:kurs.dozent_id` or, for n:n, `relation:<linktable>`, `enum:status` – changes on renaming) and,
+per class additionally `field_order` (own fields and media fields in the order of the class body) and `sections` (own
+separator lines with a title; every field/media field carries `section`, `null` = before the first own separator line);
 via `/api/_schema/model`, a **stable `id`** (UUID) that survives renames; `PumlParser::modelJson()` itself sets
 `id` = key. Comments,
 formatting and purely decorative statements are lost; the latter (`title`, `skinparam`, `note`, colours like `#FFAAAA` on class/

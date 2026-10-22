@@ -158,6 +158,10 @@ final class Bootstrap
                 if ($added) {
                     $result['record_meta_added'] = $added;
                 }
+                // installations from before field_order: add the display order to the stored model (once, see there)
+                if ($model !== null) {
+                    FieldOrderUpgrade::ensure($pdo, $model);
+                }
             } else {
                 return [
                     'status'  => 'migration_needed',

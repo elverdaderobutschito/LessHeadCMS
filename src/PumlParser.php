@@ -86,6 +86,14 @@ namespace LessHeadCMS;
  * Schema errors: self-reference without a label, `{symmetric}` on anything but an n:n self-reference. `{symmetric}` can
  * be combined with `{label}`. Linking a row to itself is a data error (422 in Cms), not a schema error.
  *
+ * Separator lines with a title in a class body (`-- Preise --`, likewise `==`, `..`, `__`, see sectionTitle()): form sections
+ * since 2026-10-21 (before, separator lines were ignored; one without a title still is). Fields before the first one form
+ * the head area, media fields belong to the section they are written in, relation fields to none. Inheritance copies the
+ * sections of the base; own fields before the first own separator line continue its last section. Schema errors: the same
+ * title twice in a class (case-insensitive, also after extends), a section without fields (the id does not count). The
+ * model gets 'sections'/'section' only for classes with sections; 'field_order' (display order of form and list: the class
+ * body as written, then the relations in line order) always - no table depends on either (see finishOrder()).
+ *
  * `package "Name" { ... }` blocks around classes: purely a display grouping in the sidebar (entities[].package), no
  * structural separation - class names stay unique project-wide, table names do not change. Classes outside
  * any package have package = null. Nested packages are a schema error.
@@ -164,6 +172,12 @@ namespace LessHeadCMS;
  *           not evaluated anywhere and not exposed; in older models the key is missing),
  *       'media' => [ ['name' => 'galerie', 'junction' => 'kurs_galerie_media', 'own_column' => 'kurs_id', 'required' => true] ]
  *           (media fields in diagram order; in older stored models the key is missing = none),
+ *       'field_order' => ['id', 'titel', 'galerie', ..., 'ort_id', 'tag_ids'] (all names of fields, media and
+ *           many_to_many: the class body as written, then the relation fields in the order of the relation lines;
+ *           see finishOrder(); in models stored before 2026-10-21 the key is missing = fields, many_to_many, media),
+ *       'sections' => ['Preise', ...] (only for classes with separator lines with a title, see sectionTitle();
+ *           then every entry of fields (except the id), media and many_to_many has 'section' => title|null:
+ *           null = head area before the first section, and always for relation fields),
  *   ] ],
  *   'junctions' => [ ['table','left','right','left_column','right_column','label','symmetric'] ],
  *   'enums' => [ 'Status' => ['OFFEN', 'VERSANDT', ...] ] (all declared ones, unused ones too; in older models the key is missing),
@@ -250,10 +264,15 @@ final class PumlParser
      *   'entities' => [ ['id' => 'entity:kurs', 'name', 'table', 'package' => string|null, 'abstract' => bool,
      *       'extends' => 'Basis'|null (name as declared), 'renamed_from' => string|null,
      *       'fields' => [ ['id' => 'field:kurs.titel', 'name', 'type' (base type or 'enum'), 'enum_name' => string|null,
-     *           'sql_type', 'required', 'primary', 'title', 'unique', 'renamed_from' => string|null] ] (own fields without
-     *           FK columns and media; the id only for classes without extends - for subclasses it comes from the base),
+     *           'sql_type', 'required', 'primary', 'title', 'unique', 'renamed_from' => string|null,
+     *           'section' => string|null] ] (own fields without FK columns and media; the id only for classes without
+     *           extends - for subclasses it comes from the base),
      *       'title_fields' => [...], 'unique_fields' => [...] (own fields; {unique} on relations is stored there),
-     *       'media' => [ ['id' => 'media:kurs.galerie', 'name', 'required', 'renamed_from'] ] ] ],
+     *       'media' => [ ['id' => 'media:kurs.galerie', 'name', 'required', 'renamed_from', 'section'] ],
+     *       'field_order' => ['id', 'titel', 'galerie', ...] (own fields and media fields in the order of the class body),
+     *       'sections' => ['Preise', ...] (own separator lines with a title; 'section' of a field = the section it is
+     *           written in, null = before the first own separator line - for a subclass the internal model assigns
+     *           those to the last section of the base) ] ],
      *   'relations' => [ ['id', 'kind' => 'n1'|'one_to_one'|'nn', 'from_entity', 'to_entity', 'from_multiplicity',
      *       'to_multiplicity', 'label', 'show_label', 'cascade', 'unique', 'symmetric', 'own_column' (FK column in
      *       from_entity, null for nn), 'junction' (nn only), 'renamed_from' => string|null,
@@ -282,7 +301,7 @@ final class PumlParser
                 if ($f['type'] === self::MEDIA_TYPE) {
                     $media[] = [
                         'id' => 'media:' . $fid, 'name' => $f['name'], 'required' => $f['required'],
-                        'renamed_from' => $f['renamed_from'] ?? null,
+                        'renamed_from' => $f['renamed_from'] ?? null, 'section' => $f['section'] ?? null,
                     ];
                     continue;
                 }
@@ -291,7 +310,7 @@ final class PumlParser
                     'sql_type' => $f['sql_type'], 'required' => $f['required'], 'primary' => $f['primary'],
                     'title' => in_array($f['name'], $c['title_fields'], true),
                     'unique' => in_array($f['name'], $c['unique_fields'], true),
-                    'renamed_from' => $f['renamed_from'] ?? null,
+                    'renamed_from' => $f['renamed_from'] ?? null, 'section' => $f['section'] ?? null,
                 ] + (isset($f['workflow']) ? ['workflow' => true] : []); // workflow field: enum_name = name of the workflow
             }
             $entities[] = [
@@ -302,6 +321,8 @@ final class PumlParser
                 'renamed_from' => $c['renamed_from'] ?? null,
                 'fields' => $fields, 'title_fields' => $c['title_fields'], 'unique_fields' => $c['unique_fields'],
                 'media' => $media,
+                // order of the own body entries (fields and media fields interleaved) and the own section titles
+                'field_order' => array_column($own, 'name'), 'sections' => $c['sections'],
             ];
         }
         $relations = [];
@@ -677,7 +698,15 @@ final class PumlParser
             }
         }
 
+        // body order (fields and media fields interleaved, as written) before the media fields move to their own list
+        $bodyOrder = [];
+        foreach ($entities as $t => $e) {
+            $bodyOrder[$t] = array_column(array_filter($e['fields'], function ($f) {
+                return $f['foreign_key'] === null;
+            }), 'name');
+        }
         $mediaJunctions = self::extractMediaFields($entities);
+        self::finishOrder($entities, $bodyOrder, $relations);
 
         // Name collision entity <-> link table, and two link tables of the same name (possible if a link table
         // renamed after its label later on, see applyRelation, hits the name of another one)
@@ -790,13 +819,50 @@ final class PumlParser
                 $junctions[$junction] = "{$e['name']}.{$f['name']}";
                 $e['media'][] = [
                     'name' => $f['name'], 'junction' => $junction, 'own_column' => $table . '_id', 'required' => $f['required'],
-                ] + (isset($f['renamed_from']) ? ['renamed_from' => $f['renamed_from']] : []);
+                ] + (isset($f['renamed_from']) ? ['renamed_from' => $f['renamed_from']] : [])
+                    + (array_key_exists('section', $f) ? ['section' => $f['section']] : []);
                 unset($e['fields'][$i]);
             }
             $e['fields'] = array_values($e['fields']);
         }
         unset($e);
         return $junctions;
+    }
+
+    /**
+     * field_order of every entity: the body entries (fields incl. id and media fields) in diagram order, then the relation
+     * fields (FK columns and n:n lists mixed) in the order of the relation lines - the display order of form, list and
+     * _schema. 'sections' and 'section' (fields, media, many_to_many; relation fields always null) only stay for classes
+     * with sections, so the model of all other classes stays the same apart from field_order.
+     *
+     * @param array<string,string[]> $bodyOrder table => body entries in diagram order
+     * @param array $relations per relation line, see applyRelation()
+     */
+    private static function finishOrder(array &$entities, array $bodyOrder, array $relations): void
+    {
+        $tail = [];
+        foreach ($relations as $r) {
+            // n:n names are only final now (a later sibling relationship can still rename them, see applyRelation)
+            $tail[$r['from']][] = $r['kind'] === 'nn' ? $entities[$r['from']]['many_to_many'][$r['index']]['name'] : $r['column'];
+        }
+        foreach ($entities as $t => &$e) {
+            $e['field_order'] = array_merge($bodyOrder[$t], $tail[$t] ?? []);
+            $has = !empty($e['sections']);
+            foreach (['fields', 'media', 'many_to_many'] as $list) {
+                foreach ($e[$list] as &$x) {
+                    if (!$has || !empty($x['primary'])) {
+                        unset($x['section']);
+                    } else {
+                        $x['section'] = $x['section'] ?? null;
+                    }
+                }
+                unset($x);
+            }
+            if (!$has) {
+                unset($e['sections']);
+            }
+        }
+        unset($e);
     }
 
     /**
@@ -850,6 +916,10 @@ final class PumlParser
             foreach ($c['fields'] as $f) {
                 $c['origin'][strtolower($f['name'])] = $c['name'];
             }
+            $c['section_origin'] = []; // section title in lower case => class it comes from (likewise)
+            foreach ($c['sections'] as $title) {
+                $c['section_origin'][mb_strtolower($title, 'UTF-8')] = $c['name'];
+            }
             if ($c['extends'] !== null) {
                 $bt = strtolower($c['extends']);
                 if (!isset($classes[$bt])) {
@@ -881,6 +951,26 @@ final class PumlParser
                         );
                     }
                 }
+                // Sections: those of the base first; own fields before the first own separator line continue the last
+                // section of the base - exactly as if they were written directly below it
+                if ($base['sections']) {
+                    $last = $base['sections'][count($base['sections']) - 1];
+                    foreach ($own as &$f) {
+                        if ($f['section'] === null) {
+                            $f['section'] = $last;
+                        }
+                    }
+                    unset($f);
+                }
+                foreach ($c['sections'] as $title) {
+                    $l = mb_strtolower($title, 'UTF-8');
+                    if (isset($base['section_origin'][$l])) {
+                        throw new SchemaException("Abschnitt '$title' in Klasse '{$c['name']}' doppelt (bereits geerbt von "
+                            . "'{$base['section_origin'][$l]}'). Bitte den Abschnitt anders benennen.");
+                    }
+                }
+                $c['sections'] = array_merge($base['sections'], $c['sections']);
+                $c['section_origin'] += $base['section_origin'];
                 $c['fields'] = array_merge($base['fields'], $own); // the id of the base is already at the front there
                 $c['title_fields'] = array_merge($base['title_fields'], $c['title_fields']);
                 $c['unique_fields'] = array_merge($base['unique_fields'], $c['unique_fields']);
@@ -900,7 +990,7 @@ final class PumlParser
         foreach (array_keys($classes) as $table) {
             $c = $resolve($table, []);
             if (!$c['abstract']) {
-                unset($c['origin'], $c['abstract']);
+                unset($c['origin'], $c['section_origin'], $c['abstract']);
                 $entities[$table] = $c;
             }
         }
@@ -1068,9 +1158,32 @@ final class PumlParser
         $seen = [];
         $titleFields = []; // order = diagram order, see {title} marker below
         $uniqueFields = []; // {unique} fields; FK columns with {unique} are added by applyRelation()
+        $sections = []; // titles of the separator lines with a title, in diagram order (see sectionTitle())
+        $section = null; // current section; null = head area before the first separator line with a title
+        $sectionFields = 0; // fields of the current section so far (a section without fields is a schema error)
+        $sectionOf = []; // field name => section (only fields after a separator line with a title)
         foreach (explode("\n", $body) as $bodyLine => $line) {
             $line = trim($line);
-            if ($line === '' || $line[0] === "'" || preg_match('/^(--|\.\.|==|__)/', $line)) {
+            if ($line === '' || $line[0] === "'") {
+                continue;
+            }
+            if (preg_match('/^(--|\.\.|==|__)/', $line)) {
+                $title = self::sectionTitle($line);
+                if ($title === null) {
+                    continue; // separator line without a title: no meaning, as before
+                }
+                if ($section !== null && $sectionFields === 0) {
+                    throw new SchemaException(self::emptySection($name, $section));
+                }
+                foreach ($sections as $other) {
+                    if (mb_strtolower($other, 'UTF-8') === mb_strtolower($title, 'UTF-8')) {
+                        throw new SchemaException("Abschnitt '$title' in Klasse '$name' doppelt (jeder Abschnittstitel nur "
+                            . 'einmal je Klasse).');
+                    }
+                }
+                $sections[] = $title;
+                $section = $title;
+                $sectionFields = 0;
                 continue;
             }
             if (strpos($line, '(') !== false) {
@@ -1203,7 +1316,11 @@ final class PumlParser
                     'name' => 'id', 'type' => 'int', 'sql_type' => 'INTEGER',
                     'primary' => true, 'required' => false, 'foreign_key' => null,
                 ];
-                continue;
+                continue; // the id belongs to no section (it is not a form field)
+            }
+            $sectionFields++;
+            if ($section !== null) {
+                $sectionOf[$field] = $section;
             }
             if ($workflow !== null) {
                 $fields[] = [
@@ -1228,6 +1345,18 @@ final class PumlParser
             ] + ($renamedFrom !== null ? ['renamed_from' => $renamedFrom] : []);
         }
 
+        if ($section !== null && $sectionFields === 0) {
+            throw new SchemaException(self::emptySection($name, $section));
+        }
+        // 'section' is carried along with the field (inheritance, media extraction) and only stays in the model for
+        // classes with sections, see finishOrder()
+        foreach ($fields as &$f) {
+            if (!$f['primary']) {
+                $f['section'] = $sectionOf[$f['name']] ?? null;
+            }
+        }
+        unset($f);
+
         $visibility = array_column(array_filter($fields, function ($f) {
             return $f['type'] === 'visibility';
         }), 'name');
@@ -1246,7 +1375,31 @@ final class PumlParser
             'name' => $name, 'table' => $table, 'fields' => $fields, 'many_to_many' => [], 'title_fields' => $titleFields,
             'unique_fields' => $uniqueFields,
             'package' => null, // is set in parse() if the class is inside a package block
+            'sections' => $sections,
         ];
+    }
+
+    /**
+     * Title of a separator line in a class body (`-- Preise --`, likewise `== T ==`, `.. T ..`, `__ T __`; the delimiter
+     * may be longer than two characters): the text between the delimiters, trimmed. null = separator line without a title
+     * (`--` alone, `-- Titel` without a closing delimiter, `-- -- --`) - it has no meaning, as before 2026-10-21. A title may itself
+     * contain the delimiter (`-- A -- B --` = "A -- B"); the line only ends with the last delimiter. Public for
+     * PumlExporter::check() (a title from the diagram editor must read back unchanged).
+     */
+    public static function sectionTitle(string $line): ?string
+    {
+        if (!preg_match('/^([-=._])\1+\s*(.*?)\s*\1{2,}$/u', $line, $m)) {
+            return null;
+        }
+        $title = trim($m[2]);
+        // only delimiter characters (`-- -- --`, a purely decorative double line) is not a title either
+        return preg_match('/^[\s\-=._]*$/', $title) ? null : $title;
+    }
+
+    private static function emptySection(string $class, string $section): string
+    {
+        return "Abschnitt '$section' in Klasse '$class' hat keine Felder (die Trennlinie steht direkt vor einer weiteren "
+            . 'Trennlinie mit Titel oder vor "}"). Bitte Felder ergänzen oder die Trennlinie entfernen.';
     }
 
     /**

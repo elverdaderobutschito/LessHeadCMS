@@ -135,18 +135,15 @@ final class ColumnPrefs
     }
 
     /**
-     * @return string[] all columns of the list view: field names, then the n:n names, then the media fields (each in diagram
-     *         order), then the tracking metadata (created_at, created_by, updated_at, updated_by)
+     * @return string[] all columns of the list view in diagram order (_schema.field_order), then the tracking metadata
+     *         (created_at, created_by, updated_at, updated_by)
      */
     private function columnNames(string $entity): array
     {
         $schema = $this->cms->describe($entity);
-        return array_merge(
-            array_column($schema['fields'], 'name'),
-            array_column($schema['many_to_many'], 'name'),
-            array_column($schema['media'] ?? [], 'name'),
-            array_column($schema['system_fields'] ?? [], 'name')
-        );
+        // diagram order (field_order: fields and media fields as in the class body, then the relations), then the
+        // tracking metadata
+        return array_merge($schema['field_order'], array_column($schema['system_fields'] ?? [], 'name'));
     }
 
     /**

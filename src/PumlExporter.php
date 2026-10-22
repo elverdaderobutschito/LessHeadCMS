@@ -33,6 +33,10 @@ namespace LessHeadCMS;
  * shared package block - several blocks of the same name result in one group anyway), then the relationships in
  * model order. The order of classes, fields and relationships determines the column and table order, so it
  * is kept. Relationships are always written forwards (from_entity first, for n:1/1:1 with "-->").
+ *
+ * Class body: fields and media fields in the order of field_order (media fields at their position), grouped by form
+ * section - every section as `-- <title> --` in front of its first field; a section without fields is left out (see
+ * body()). The round-trip guarantee therefore includes order and sections.
  */
 final class PumlExporter
 {
@@ -107,11 +111,48 @@ final class PumlExporter
                     }
                 }
             }
+            // sections and field_order: missing in model JSON from before 2026-10-21 (= no sections, fields then media)
+            $sections = [];
+            foreach (array_key_exists('sections', $e) ? $list('sections', $e, $where) : [] as $title) {
+                if (!is_string($title) || !self::validSection($title)) {
+                    $errors[] = "$where: ungültiger Abschnittstitel " . json_encode($title, JSON_UNESCAPED_UNICODE)
+                        . ' (einzeilig, nicht leer, ohne { und }).';
+                    continue;
+                }
+                if (isset($sections[mb_strtolower($title, 'UTF-8')])) {
+                    $errors[] = "$where: Abschnitt '$title' doppelt.";
+                }
+                $sections[mb_strtolower($title, 'UTF-8')] = $title;
+            }
+            $section = function (array $in) use (&$errors, $where, $sections): void {
+                $v = $in['section'] ?? null;
+                if ($v !== null && (!is_string($v) || !in_array($v, $sections, true))) {
+                    $errors[] = "$where: Feld '" . (is_string($in['name'] ?? null) ? $in['name'] : '?') . "' gehört zu einem "
+                        . 'unbekannten Abschnitt ' . json_encode($v, JSON_UNESCAPED_UNICODE) . '.';
+                }
+            };
+            $names = [];
+            foreach (array_merge(is_array($e['fields'] ?? null) ? $e['fields'] : [], is_array($e['media'] ?? null) ? $e['media'] : []) as $x) {
+                if (is_array($x) && is_string($x['name'] ?? null)) {
+                    $names[] = $x['name'];
+                }
+            }
+            if (array_key_exists('field_order', $e)) {
+                $order = $list('field_order', $e, $where);
+                $sorted = $order;
+                $known = $names;
+                sort($sorted);
+                sort($known);
+                if ($sorted !== $known) {
+                    $errors[] = "$where: 'field_order' muss genau die Namen der Felder und Medien-Felder enthalten.";
+                }
+            }
             foreach ($list('fields', $e, $where) as $f) {
                 if (!is_array($f)) {
                     $errors[] = "$where: Feld als Objekt erwartet.";
                     continue;
                 }
+                $section($f);
                 $text($f, 'name', $where, self::IDENT);
                 $text($f, 'type', $where, self::IDENT);
                 if (($f['type'] ?? null) === 'enum') {
@@ -128,6 +169,7 @@ final class PumlExporter
                 $text($m, 'name', $where, self::IDENT);
                 $text($m, 'renamed_from', $where, self::IDENT, true);
                 $flag($m, 'required', $where);
+                $section($m);
             }
         }
         foreach ($list('relations', $model, 'Model') as $i => $r) {
@@ -154,6 +196,55 @@ final class PumlExporter
             }
         }
         return $errors;
+    }
+
+    /**
+     * Section title from outside: one line, not empty, without "{"/"}" and control characters, and it must read back
+     * unchanged as the separator line `-- <title> --` that toPuml() writes (e.g. no surrounding spaces; a "--" inside the
+     * title does not end the line early, see PumlParser::sectionTitle()).
+     */
+    private static function validSection(string $title): bool
+    {
+        return preg_match('/^[^\x00-\x1F\x7F{}]+$/u', $title) === 1 && PumlParser::sectionTitle("-- $title --") === $title;
+    }
+
+    /**
+     * Body entries of an entity in writing order: fields and media fields (media: 'media' => true) in the order of
+     * field_order - missing in model JSON from before 2026-10-21: fields, then media fields. Grouped by section: first the
+     * entries without a section, then every section in the order of 'sections' (within each the order of field_order),
+     * so a field newly added in the editor or an inconsistent order never lands in the wrong section. A section without
+     * entries (e.g. its last field was deleted in the diagram editor) simply produces no separator line.
+     */
+    private static function body(array $e): array
+    {
+        $entries = [];
+        foreach ($e['fields'] as $f) {
+            $entries[$f['name']] = $f;
+        }
+        foreach ($e['media'] as $m) {
+            $entries[$m['name']] = $m + ['media' => true];
+        }
+        $order = array_values(array_unique(array_merge(array_values(array_filter($e['field_order'] ?? [], function ($n) use ($entries) {
+            return is_string($n) && isset($entries[$n]);
+        })), array_keys($entries))));
+        $groups = ['' => []]; // '' = head area (a section title is never empty)
+        foreach ($e['sections'] ?? [] as $title) {
+            $groups[$title] = [];
+        }
+        $previous = '';
+        foreach ($order as $name) {
+            $entry = $entries[$name];
+            $section = $entry['section'] ?? null;
+            if (!empty($entry['primary'])) {
+                $section = $previous; // an explicit id belongs to no section: it stays where it is written
+            } elseif ($section === null || !isset($groups[$section])) {
+                $section = '';
+            }
+            $entry['section'] = $section === '' ? null : $section;
+            $groups[$section][] = $entry;
+            $previous = $section;
+        }
+        return array_merge(...array_values($groups));
     }
 
     public static function toPuml(array $model): string
@@ -187,7 +278,17 @@ final class PumlExporter
                 . ($e['extends'] !== null ? ' extends ' . $e['extends'] : '')
                 . (($e['renamed_from'] ?? null) !== null ? ' {renamed_from:' . $e['renamed_from'] . '}' : '');
             $out[] = $head . ' {';
-            foreach ($e['fields'] as $f) {
+            $section = null;
+            foreach (self::body($e) as $f) {
+                if (($f['section'] ?? null) !== null && $f['section'] !== $section) {
+                    $section = $f['section'];
+                    $out[] = "  -- $section --";
+                }
+                if (!empty($f['media'])) {
+                    $out[] = "  + {$f['name']}: " . PumlParser::MEDIA_TYPE . ($f['required'] ? '' : '?')
+                        . (($f['renamed_from'] ?? null) !== null ? ' {renamed_from:' . $f['renamed_from'] . '}' : '');
+                    continue;
+                }
                 $type = $f['type'] === 'enum' ? $f['enum_name'] : $f['type'];
                 $markers = '';
                 if (in_array($f['name'], $e['title_fields'], true)) {
@@ -202,10 +303,6 @@ final class PumlExporter
                 // the id is never optional ("required" is internally false there)
                 $optional = !$f['required'] && empty($f['primary']) ? '?' : '';
                 $out[] = "  + {$f['name']}: $type$optional$markers";
-            }
-            foreach ($e['media'] as $m) {
-                $out[] = "  + {$m['name']}: " . PumlParser::MEDIA_TYPE . ($m['required'] ? '' : '?')
-                    . (($m['renamed_from'] ?? null) !== null ? ' {renamed_from:' . $m['renamed_from'] . '}' : '');
             }
             $out[] = '}';
             $out[] = '';

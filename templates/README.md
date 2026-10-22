@@ -7,11 +7,12 @@ for and which LessHeadCMS concept it shows.
 | Template | In one sentence | Concept |
 |---|---|---|
 | [simplecms](simplecms.md) | Articles with category, author and tags – the default schema of LessHeadCMS. | Getting started: types, required/optional, n:1, n:n |
-| [kursverwaltung](kursverwaltung.md) | Courses, instructors, members and bookings of a club or school. | Delete behaviour (`{cascade}` vs. restrict), category tree, `{title}` |
+| [kursverwaltung](kursverwaltung.md) | Courses, instructors, members and bookings of a club or school. | Delete behaviour (`{cascade}` vs. restrict), category tree, `{title}`, `enum` |
 | [course-management](course-management.md) | The same course model with English names, grouped into two sidebar areas. | `package` blocks |
 | [wordpress-like](wordpress-like.md) | Posts, pages, categories, tags and authors of a website. | Media field, restrict everywhere |
 | [wordpress-like-abstract](wordpress-like-abstract.md) | The same website with the shared fields of posts and pages written once. | `abstract class` and `extends` |
 | [pim](pim.md) | Products with variants, translations, images, categories, brands and channels. | Product data, multilingual content, `{symmetric}`, `{unique}` |
+| [immobilienmakler-openimmo](immobilienmakler-openimmo.md) | Listings, contact persons and agency of a real estate website, fields after OpenImmo. | Form sections (separator lines), large optional models, media fields by group |
 
 ## Trying a template
 

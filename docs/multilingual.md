@@ -75,6 +75,18 @@ are translated by phase 2 (see below, all fixed frontend texts). **Not** transla
   „Nur unübersetzte anzeigen“ (applies to the active tab) only shows rows without a stored translation in the chosen
   language, hides groups without a gap and expands the others. A group disappears after saving as soon as
   no gap is left. Switching it off restores the remembered collapse state.
+  „Alle aufklappen“ / „Alle zuklappen“ (from two groups on) expands or collapses all groups shown in the active tab with one
+  click; in the full view this is remembered like a single click, in a filtered view not.
+* **Search (both tabs):** the field „Suchen“ finds rows by key (UI texts), original text (German source text or derived
+  label, also the name in the diagram) and stored translation, case-insensitive, in **all** groups including collapsed
+  ones. It applies about 200 ms after the last keystroke, shows the number of hits („3 Treffer“, per tab also at the tab
+  in brackets), hides groups without a hit and expands the others. It combines with „Nur unübersetzte anzeigen“.
+  Collapsing a group in the hit view is not remembered; emptying the field restores the remembered state. Unsaved input
+  is not searched, so a row does not disappear while one is typing in it.
+* **Only expanded groups are rendered.** A collapsed group has no rows in the page at all (with over 1000 UI texts the
+  page stays fast). The browser search (Ctrl+F) therefore only finds text in expanded groups – use the search field for
+  everything else. Unsaved input is kept when a group is collapsed or hidden by the search and is saved with
+  „Speichern“ as usual.
 * **Display override of the default language:** Names in the diagram must stay ASCII-safe (column names), for instance
   `veroeffentlicht` → derived „Veroeffentlicht“. In System → Übersetzungen the default language can therefore be selected as well
   („Deutsch (de) – Original“). There you override the derived label („Veröffentlicht“), only for

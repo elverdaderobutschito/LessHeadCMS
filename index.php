@@ -9,6 +9,7 @@ use LessHeadCMS\Cms;
 use LessHeadCMS\ColumnPrefs;
 use LessHeadCMS\Config;
 use LessHeadCMS\Database;
+use LessHeadCMS\FieldOrderUpgrade;
 use LessHeadCMS\Http;
 use LessHeadCMS\Languages;
 use LessHeadCMS\Maintenance;
@@ -190,6 +191,7 @@ Flight::route('POST /api/_testdata/generate', function () {
             ]);
         }
         RecordMeta::ensure($pdo, $model);
+        $model = FieldOrderUpgrade::ensure($pdo, $model);
         // mit dem aufrufenden Nutzer: er steht als Ersteller in den Systemfeldern created_by/updated_by (RecordMeta)
         return [200, (new TestData(new Cms($pdo, $model, null, $admin), $pdo, $model))->generate(Http::body())];
     }, 'testdata');

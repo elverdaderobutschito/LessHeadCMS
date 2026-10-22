@@ -17,7 +17,7 @@ course is deleted?“.
 | `Kategorie` | Category tree (e.g. Sport → Yoga): a category without a parent is a root category. |
 | `Kursleiter` | Who teaches the course. |
 | `Mitglied` | A member: `name`, `email`, `mitglied_seit` (date). |
-| `Buchung` | A member books a course: `gebucht_am` (date) and `status` (free text). |
+| `Buchung` | A member books a course: `gebucht_am` (date) and `status` (`GEBUCHT`, `BEZAHLT` or `OFFEN`, see below). |
 
 | Relationship | Kind | When the target is deleted |
 |---|---|---|
@@ -39,8 +39,12 @@ course is deleted?“.
 * **Labels become column names.** „geleitet von“ → column `geleitet_von_kursleiter_id`; the label is also the field
   label in the form.
 * **`{title}`.** It decides how a row is shown in dropdowns and lists. `Buchung` has two `{title}` fields, so a booking
-  appears as „23.09.2026, bezahlt“ (the date in the date format of the display language).
+  appears as „23.09.2026, BEZAHLT“ (the date in the date format of the display language).
 * **n:n with `{label}`.** „interessiert an“ is shown in the form instead of the plain class name „Kurs“.
+* **`enum` as a value range.** `enum Status { GEBUCHT, BEZAHLT, OFFEN }` limits `status` to these three values: the form
+  shows a dropdown in this order, the API rejects other values (`422`), and the database checks them as well. An enum
+  field can carry `{title}` like a text field. The values can be given readable labels per language in System →
+  Lokalisierung → Übersetzungen („bezahlt“) without changing the diagram.
 * **Types `decimal` and `date`.** `preis` accepts decimal numbers, `gebucht_am` and `mitglied_seit` a date picker.
 
 See the [PlantUML rules](../docs/plantuml-syntax.md) for all details.

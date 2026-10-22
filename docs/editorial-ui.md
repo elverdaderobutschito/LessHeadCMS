@@ -10,7 +10,28 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   sent on. The filtering happens in the browser from the rows loaded anyway and applies to every entity with a self-reference.
 
 * Forms are generated generically from `/api/{entity}/_schema` (text, textarea, Toast editor, checkbox, date, number, select,
-  media tiles).
+  media tiles). **Field order = diagram order** (`_schema.field_order`): the class body as written - media fields at
+  their position, not at the end -, then the relation fields (FK selects and n:n lists) in the order of the relation lines.
+  The `id` is not shown; the tracking metadata (created/updated at/by) stay above the form. The inline form („+“ next to
+  a relationship) uses the same order, without sections.
+* **Form sections** (separator lines with a title in the diagram, e.g. `-- Preise --`, see
+  [PlantUML rules](plantuml-syntax.md)): the fields before the first separator line form the head area without a heading,
+  which is always open and cannot be collapsed; every section is a **collapsible block** with a heading (the title as
+  written in the diagram); the relation fields follow in a last block „Verknüpfungen“. **Sections start collapsed**; the
+  toggle in the heading works with mouse and keyboard (`aria-expanded`). Which sections are open is remembered per user
+  and entity in the browser – whoever leaves a section open finds it open next time (not on the server; without a
+  remembered state, in a private window or with blocked storage, sections start collapsed). A collapsed section with
+  **empty required fields** says so discreetly in its heading („Pflichtfelder: 2“) and with a `*` at its entry in the jump
+  bar (the number in tooltip and screen reader label) – when creating as well as when
+  editing, only fields that are still empty count (a required medium included; checkboxes never, `false` is a value).
+  From 3 groups on, a **jump bar** at the top of the form („Allgemein · Preise · Flächen · … · Verknüpfungen“) stays
+  visible while scrolling (sticky) and wraps on narrow screens; a click opens that section (the others stay as they are)
+  and scrolls to it. Next to it (with at least 2 sections) the button **„Alle aufklappen“ / „Alle zuklappen“**, also
+  remembered. **Errors on saving:** every block with an error opens
+  automatically, its heading and its jump entry show the number of errors („2 Fehler“), and the page scrolls to the first
+  error - this applies to the browser check of an empty required field as well as to the server's field errors (e.g. a
+  missing required medium). A required field can never stay hidden in a collapsed block. Deliberately no tabs (errors in
+  a hidden tab are too easily overlooked). Classes without separator lines look as before.
 * **Media library** („Mediathek“, system section; admins, otherwise only with the system area `media`, see [Roles and permissions](roles-and-permissions.md)): global collection, independent of the
   diagram, of all uploaded files (images, videos, audio, documents) as a table with preview (image or symbol with
   extension – for raster images the thumbnail generated on the server, a click opens the original), title/file name/kind/size, alt text, description, dimensions (read from the file),
@@ -105,7 +126,8 @@ _Part of the [LessHeadCMS documentation](../README.md)._
 * **Column selection of the list view**: without a selection of your own, every list shows
   at most **5 columns** (plus actions): `id`, then the `title_field` fields (`{title}` markers in
   diagram order, without a marker the one field of the guessing heuristic), then the remaining columns in
-  diagram order (fields incl. FK, then n:n, then media fields) until 5 are reached; if the entity has
+  diagram order (`_schema.field_order`: the class body as written, media fields at their position, then the relations in
+  the order of the relation lines; until 2026-10-21: fields incl. FK, then n:n, then media fields) until 5 are reached; if the entity has
   fewer, all appear. **Media fields** (`media`) are preview columns: up to 3 thumbnails side by side (images
   as a thumbnail, video/audio/document as a symbol with the extension), beyond that „+n weitere“; they count like any other
   column but can be neither sorted nor filtered.

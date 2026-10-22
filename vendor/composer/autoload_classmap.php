@@ -18,6 +18,7 @@ return array(
     'LessHeadCMS\\Config' => $baseDir . '/src/Config.php',
     'LessHeadCMS\\Database' => $baseDir . '/src/Database.php',
     'LessHeadCMS\\Download' => $baseDir . '/src/Download.php',
+    'LessHeadCMS\\FieldOrderUpgrade' => $baseDir . '/src/FieldOrderUpgrade.php',
     'LessHeadCMS\\Http' => $baseDir . '/src/Http.php',
     'LessHeadCMS\\Languages' => $baseDir . '/src/Languages.php',
     'LessHeadCMS\\ListQuery' => $baseDir . '/src/ListQuery.php',

@@ -8,7 +8,7 @@ _Part of the [LessHeadCMS documentation](../README.md)._
 | Method  | Path                    | Access        | Description                                             |
 |---------|-------------------------|---------------|---------------------------------------------------------|
 | GET     | `/api`                  | public        | list of the entities                                    |
-| GET     | `/api/{entity}/_schema` | public        | `package` (name of the `package` block or `null`), field name, type (for `enum` additionally `enum_values`), `required`, `foreign_key` (target table, `title_field`, `label`, `on_delete`, `one_to_one`), `many_to_many` (`name`, target table, `title_field`, `label`, `show_label`, `symmetric`), `unique_fields` (`{unique}` group), only for media fields additionally `media` (`name`, `type: "media"`, `required`), `system_fields` (record metadata `created_at`/`created_by`/`updated_at`/`updated_by`, see [Record metadata](record-metadata.md); public without the two user fields) |
+| GET     | `/api/{entity}/_schema` | public        | `package` (name of the `package` block or `null`), field name, type (for `enum` additionally `enum_values`), `required`, `foreign_key` (target table, `title_field`, `label`, `on_delete`, `one_to_one`), `many_to_many` (`name`, target table, `title_field`, `label`, `show_label`, `symmetric`), `unique_fields` (`{unique}` group), only for media fields additionally `media` (`name`, `type: "media"`, `required`), `field_order` (display order, see below), only for classes with form sections `sections` and `section` per entry, `system_fields` (record metadata `created_at`/`created_by`/`updated_at`/`updated_by`, see [Record metadata](record-metadata.md); public without the two user fields) |
 | GET     | `/api/{entity}`         | public        | records, **always paginated** (default: page 1 with 50 rows) – see "Lists: paging, sorting, filtering" |
 | GET     | `/api/{entity}/{id}`    | public        | one record                                              |
 | POST    | `/api/{entity}`         | **session**   | create (JSON body) → 201                                |
@@ -202,6 +202,20 @@ the respective target table) is always an **array** of field names, e.g. `["stat
 `["bestelldatum", "status"]` – also in the (still most common) case of a single field, for a uniform
 form instead of "sometimes string, sometimes array". Order = diagram order of the `{title}` markers, or one element with the
 automatic heuristic (see [PlantUML rules](plantuml-syntax.md)).
+
+**`field_order` in `_schema`** (at the top level, since 2026-10-21): all names from `fields` (including `id`), `media`
+and `many_to_many` in the order of the diagram - the class body as written (media fields at their position), then the
+relation fields (FK columns and n:n lists mixed) in the order of the relation lines; for a subclass the inherited fields
+come first. The lists `fields`, `media` and `many_to_many` themselves stay unchanged (FK columns at the end of `fields`,
+media fields only in `media`). Fields hidden by field permissions are missing from `field_order` too. Example:
+`"field_order": ["id", "titel", "bilder", "beschreibung", "preis", "ort_id", "tag_ids"]`.
+
+**`sections` / `section` in `_schema`** (only for classes with separator lines with a title, e.g. `-- Preise --`, see
+[PlantUML rules](plantuml-syntax.md); the `_schema` of every other entity stays unchanged): `sections` at the top level
+lists the section titles in diagram order (only sections that still contain a visible entry), and every entry of
+`fields` (except `id`), `media` and `many_to_many` carries `"section": "Preise"` or `null` (head area before the first
+section; relation fields are always `null` - the editorial UI shows them in the block „Verknüpfungen“). The REST output
+of the records knows nothing about sections.
 
 **`unique_fields` in `_schema`** (at the top level): the `{unique}` group of the entity as a list of column names, e.g.
 `["bestellung_id", "variante_id"]` (first fields in diagram order, then FK columns in relation order), `[]`

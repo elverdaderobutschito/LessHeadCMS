@@ -83,6 +83,15 @@ ui_text,form.workflow_run_busy,Running …
 ui_text,form.workflow_done,Transition “{label}” done. New status: {state}.
 ui_text,form.workflow_final,This record is in a final state. No further workflow transitions are defined.
 ui_text,form.workflow_jump,↓ Go to workflow actions
+ui_text,form.section_general,General
+ui_text,form.section_relations,Relations
+ui_text,form.section_errors,Errors: {count}
+ui_text,form.section_expand,Expand
+ui_text,form.section_collapse,Collapse
+ui_text,form.section_jump_aria,Form sections
+ui_text,form.section_required,Required: {count}
+ui_text,form.section_expand_all,Expand all
+ui_text,form.section_collapse_all,Collapse all
 ui_text,form.workflow_preview,The record starts in this state once it has been created. Workflow actions become available after saving.
 ui_text,form.workflow_none_allowed,There are currently no workflow actions available to you for this record.
 ui_text,form.meta_aria,System fields of the record
@@ -530,6 +539,12 @@ ui_text,translations_ui.option_default,{name} ({code}) – original
 ui_text,translations_ui.count_translated,{done} of {total} translated
 ui_text,translations_ui.count_override,{done} of {total} with override
 ui_text,translations_ui.only_missing,Show untranslated only
+ui_text,translations_ui.search,Search
+ui_text,translations_ui.search_placeholder,"Key, original text or translation"
+ui_text,translations_ui.search_hits,{count} matches
+ui_text,translations_ui.search_none,No matches for “{query}”.
+ui_text,translations_ui.expand_all,Expand all
+ui_text,translations_ui.collapse_all,Collapse all
 ui_text,translations_ui.tabs_aria,Section
 ui_text,translations_ui.tab_schema,Schema elements
 ui_text,translations_ui.tab_ui,Fixed UI texts

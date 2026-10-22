@@ -13,11 +13,12 @@ the editorial sidebar should show them in meaningful groups.
 | Package (sidebar group) | Classes |
 |---|---|
 | „Course Offering“ | `Course` (`title`, `description`, `price`, `active`), `Instructor`, `Category` (tree) |
-| „Member Management“ | `Member` (`name`, `email`, `member_since`), `Booking` (`booked_on`, `status`) |
+| „Member Management“ | `Member` (`name`, `email`, `member_since`), `Booking` (`booked_on`, `status`: `BOOKED`, `PAID` or `OPEN`) |
 
 The relationships and their delete behaviour are the same as in [Kursverwaltung](kursverwaltung.md): `{cascade}` from
 instructor to course and from course and member to booking, a category tree with `{cascade}`, and an n:n „interested in“
-with `{label}`.
+with `{label}`. The booking status is an `enum Status` here as well (`BOOKED`, `PAID`, `OPEN` – in Kursverwaltung
+`GEBUCHT`, `BEZAHLT`, `OFFEN`); the enum block stands outside the packages, since enums are not grouped in the sidebar.
 
 ## Concepts it shows
 

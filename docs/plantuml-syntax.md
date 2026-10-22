@@ -73,6 +73,46 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   renamed with `{renamed_from:created_at}`. Likewise reserved: the field name `_reason` (reason for a change when saving,
   see [Record versions](record-versions.md)), the class name `LH_Revision` (table of the versions) and the class names
   `LH_Webhook`/`LH_Webhook_Call` (tables of the [webhooks](webhooks.md)) – each in any spelling; `Webhook` stays free.
+* **Order = form order:** the order of the lines in the class body determines the order of the fields everywhere in
+  the editorial UI (form, list columns, „Spalten“ dialog, version history) and in `_schema.field_order` - media fields
+  included, exactly where they are written. Relation fields (n:1, 1:1, n:n) are not part of the class body: they follow
+  after all body fields, among themselves in the order of the relation lines (FK and n:n mixed). With `extends` the
+  fields of the base come first (see Inheritance). Note: until 2026-10-21 media fields always came last and FK columns
+  before all n:n lists. Reordering fields never rebuilds a table (only the model changes, „Änderungen prüfen“ shows an
+  `info` entry); the diagram editor keeps the order.
+* **Separator lines = form sections** (since 2026-10-21; until then separator lines were ignored):
+  ```
+  class Immobilie {
+    + objekttitel: string? {title}
+    + objektnr_extern: string {unique}
+    -- Preise --
+    + kaufpreis: decimal?
+    + hausgeld: decimal?
+    -- Energieausweis --
+    + epass_art: EpassArt?
+    + epass_skala: media?
+  }
+  ```
+  * A **separator line with a title** in the class body starts a section; all four PlantUML forms work: `-- Titel --`,
+    `== Titel ==`, `.. Titel ..`, `__ Titel __` (the delimiter may be longer, e.g. `--- Titel ---`). The title may contain
+    spaces, umlauts, `&` and even the delimiter itself (`-- A -- B --` = „A -- B“); it is trimmed and shown as written.
+  * Fields **before the first separator line** form the head area of the form (no heading). Media fields belong to the
+    section they are written in.
+  * A separator line **without a title** (`--` alone, `-- Titel` without a closing delimiter, `-- -- --`) has no effect,
+    as before.
+  * **Relations:** if a class has sections, its relation fields appear in an automatic last section „Verknüpfungen“
+    (UI text, translatable). Without sections nothing changes.
+  * **Inheritance:** the sections of the base are copied along; own fields before the first own separator line land in
+    the last section of the base (as if they were written directly below it).
+  * The form shows every section as a collapsible block, from 3 groups on with a jump bar (see
+    [Editorial UI](editorial-ui.md)). No table changes: adding, renaming or removing sections only changes the model.
+    `_schema` gets `sections` and `section` per entry (see [REST API](rest-api.md)), only for classes with sections.
+  * The diagram editor writes every section back as `-- Titel --` and drops a section without fields silently (e.g.
+    after its last field was deleted there).
+  * **Schema errors:** two sections with the same title in one class (case-insensitive, also after copying via
+    `extends`: „Abschnitt 'Preise' in Klasse 'B' doppelt (bereits geerbt von 'Basis')“), a section without fields (a
+    separator line with a title directly before another one or before `}`; the `id` does not count). Separator lines in
+    `enum` blocks are skipped as before.
 * **Required fields:** without an addition a field is required (`NOT NULL`, the API validates), a `?` directly after the type makes it
   optional: `+ titel: string` (required), `+ untertitel: string?` (optional). Applies to all types (`text?`, `richtext?`, `int?`, `bool?`, `date?`).
   For `bool`, "required" only means that the value must be sent (`false` is valid).
@@ -256,7 +296,8 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   abstract class („Beziehung auf abstrakte Klasse 'Basisinhalt' nicht möglich …“; relations are not inherited,
   they belong on every subclass), an extends line without `{` on the same line (the class would otherwise silently
   disappear). Only the keyword `extends` is supported, PlantUML arrows like `B --|> A` remain an error
-  („Relation nicht verständlich“). The `id` stays a single column at the front.
+  („Relation nicht verständlich“). The `id` stays a single column at the front. Form sections of the base are copied
+  too (see Separator lines = form sections).
 * **Further unsupported constructs are schema errors** (instead of being silently discarded as before):
   * Stereotype on a class (`class Kunde <<Entity>> {`, any stereotype, also on `abstract class`): „Stereotypen
     ('<<...>>') werden aktuell nicht unterstützt …“ – remove the stereotype. On `package` and `enum` it stays allowed.

@@ -28,7 +28,13 @@ class Kategorie {
 class Buchung {
   + id: int
   + gebucht_am: date {title}
-  + status: string {title}
+  + status: Status {title}
+}
+
+enum Status {
+  GEBUCHT
+  BEZAHLT
+  OFFEN
 }
 
 Kurs "n" --> "1" Kategorie : gehört zu
