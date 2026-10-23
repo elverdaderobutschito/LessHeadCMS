@@ -35,3 +35,22 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan frs.sourceforge.net >> ~/.ssh/known_hosts
           rsync -av -e ssh dist/ "elbutschito@frs.sourceforge.net:/home/frs/project/lessheadcms/$TAG/"
+
+      - name: Als Standard-Download setzen
+        env:
+          SF_API_KEY: ${{ secrets.SOURCEFORGE_API_KEY }}
+        run: |
+          for f in dist/*.zip; do
+            name=$(basename "$f")
+            for i in 1 2 3 4 5; do
+              if curl -sf -H "Accept: application/json" -X PUT \
+                -d "default=windows&default=mac&default=linux&default=bsd&default=solaris&default=others" \
+                -d "api_key=$SF_API_KEY" \
+                "https://sourceforge.net/projects/lessheadcms/files/$TAG/$name"; then
+                echo "Standard-Download gesetzt: $name"
+                break
+              fi
+              echo "Datei noch nicht bereit, warte 30 Sekunden..."
+              sleep 30
+            done
+          done
