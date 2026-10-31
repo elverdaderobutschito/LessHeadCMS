@@ -38,7 +38,7 @@ final class Config
     public static function root(): string
     {
         if (self::$root === null) {
-            throw new \LogicException('Config::init() wurde nicht aufgerufen.');
+            throw new \LogicException('Config::init() has not been called.');
         }
         return self::$root;
     }
@@ -55,6 +55,22 @@ final class Config
     public static function translationsDir(): string
     {
         return self::root() . '/translations';
+    }
+
+    /**
+     * Own language files of the installation (CUSTOM_TRANSLATIONS_DIR in config.php, e.g. __DIR__ . '/custom_translations'):
+     * every <code>.csv there counts as the built-in texts of its language (BuiltinTexts). Not part of the delivery, an
+     * update does not touch it. A relative path counts from the LessHeadCMS folder. null if not set or empty.
+     */
+    public static function customTranslationsDir(): ?string
+    {
+        self::loadConfigFile();
+        $dir = defined('CUSTOM_TRANSLATIONS_DIR') ? constant('CUSTOM_TRANSLATIONS_DIR') : null;
+        if (!is_string($dir) || trim($dir) === '') {
+            return null;
+        }
+        $dir = rtrim(trim($dir), '/\\');
+        return preg_match('#^([/\\\\]|[A-Za-z]:)#', $dir) === 1 ? $dir : self::root() . '/' . $dir;
     }
 
     public static function assetsDir(): string
@@ -246,13 +262,13 @@ HTACCESS;
     {
         $dir = self::mediaDir();
         if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
-            throw new \RuntimeException('Verzeichnis media/ kann nicht angelegt werden.');
+            throw new \RuntimeException('The directory media/ cannot be created.');
         }
         if (!is_file($dir . '/.htaccess')) {
             @file_put_contents($dir . '/.htaccess', self::MEDIA_HTACCESS);
         }
         if (!is_writable($dir)) {
-            throw new \RuntimeException('Verzeichnis media/ ist nicht beschreibbar.');
+            throw new \RuntimeException('The directory media/ is not writable.');
         }
     }
 
@@ -266,7 +282,7 @@ HTACCESS;
     {
         $dir = self::dataDir();
         if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
-            throw new \RuntimeException('Verzeichnis data/ kann nicht angelegt werden.');
+            throw new \RuntimeException('The directory data/ cannot be created.');
         }
         $htaccess = $dir . '/.htaccess';
         if (!is_file($htaccess)) {
@@ -277,7 +293,7 @@ HTACCESS;
             );
         }
         if (!is_writable($dir)) {
-            throw new \RuntimeException('Verzeichnis data/ ist nicht beschreibbar.');
+            throw new \RuntimeException('The directory data/ is not writable.');
         }
     }
 }

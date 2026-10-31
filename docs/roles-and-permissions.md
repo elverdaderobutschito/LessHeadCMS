@@ -43,7 +43,8 @@ The following description of the rules and the API applies unchanged; the UI onl
 **Basic principle:** additive, **deny always wins**. Entities and fields are allowed by default – only deviations
 are stored. System areas are **denied** by default and need an explicit `allow`:
 `users` (user management), `media` (media library), `languages` (create/change/delete languages), `translations`
-(translations including CSV), `testdata` (test data generator). Deliberately **not** a system area and reserved for admins:
+(translations including CSV), `testdata` (test data generator), `violations` (list of records violating the
+[field rules](validation.md); denied fields never appear there). Deliberately **not** a system area and reserved for admins:
 schema editing (`/api/_schema/*`, diagram editor, backups/restore) and this management API.
 
 > **Change compared to earlier versions:** The media library used to be open to any logged-in role. Now it is denied for editors
@@ -90,7 +91,7 @@ permissions of these groups themselves and permissions of the user themselves.
 * **Action permissions** (`scope: action`, the target is the entity, plus `action`): `deny` on `create` rejects
   `POST /api/{entity}` with `403` – and with it also „Duplizieren“, which uses the same endpoint; `deny` on `update`
   rejects `PUT /api/{entity}/{id}`, `deny` on `delete` rejects `DELETE /api/{entity}/{id}`. Response:
-  `{"error": "forbidden", "action": "delete", "message": "Keine Berechtigung zum Löschen in 'Produkt'"}`. **Reading is never
+  `{"error": "forbidden", "action": "delete", "message": "No permission to delete in 'Produkt'", "code": "msg_records.delete_forbidden", "params": {"entity": "Produkt"}}`. **Reading is never
   affected** – that is still controlled only by entity and field denials. The default is allowed, `deny` wins across all
   sources, admins are exempt; on an abstract class the denial applies to all subclasses. The entity the call is aimed at
   is checked: rows that go along when deleting via `{cascade}` follow the rule in the

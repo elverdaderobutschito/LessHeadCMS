@@ -57,17 +57,18 @@ final class SchemaBackup
      *
      * @return array{stamp:string,files:string[]}
      */
-    public static function create(PDO $pdo, string $schemaFile, string $action = '„Anwenden“'): array
+    public static function create(PDO $pdo, string $schemaFile, ?Msg $action = null): array
     {
-        $failed = function (string $message) use ($action): ApiException {
+        $action = $action ?? Msg::of('msg_backup.action_apply', '"Apply"');
+        $failed = function (Msg $message) use ($action): ApiException {
             return self::failed($message, $action);
         };
         $dir = self::dir();
         if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
-            throw $failed('Das Verzeichnis data/schema-backups/ kann nicht angelegt werden.');
+            throw $failed(Msg::of('msg_backup.dir_create', 'The directory data/schema-backups/ cannot be created.'));
         }
         if (!is_writable($dir)) {
-            throw $failed('Das Verzeichnis data/schema-backups/ ist nicht beschreibbar.');
+            throw $failed(Msg::of('msg_backup.dir_writable', 'The directory data/schema-backups/ is not writable.'));
         }
         $stamp = date('Y-m-d_H-i-s');
         for ($n = 2; glob($dir . '/' . $stamp . '_*'); $n++) {
@@ -89,12 +90,12 @@ final class SchemaBackup
         }
         if (!$ok) {
             @unlink($db);
-            throw $failed('Die Datenbank-Sicherung konnte nicht geschrieben werden (Speicherplatz bzw. Schreibrechte in '
-                . 'data/schema-backups/ prüfen).');
+            throw $failed(Msg::of('msg_backup.db_write', 'The database backup could not be written (check disk space or write '
+                . 'permissions in data/schema-backups/).'));
         }
         if (is_file($schemaFile) && !@copy($schemaFile, $puml)) {
             @unlink($db);
-            throw $failed('Die Sicherung der Schema-Datei konnte nicht geschrieben werden.');
+            throw $failed(Msg::of('msg_backup.schema_write', 'The backup of the schema file could not be written.'));
         }
         @chmod($db, 0600);
         return ['stamp' => $stamp, 'files' => array_map('basename', array_filter([$db, is_file($puml) ? $puml : null]))];
@@ -197,18 +198,20 @@ final class SchemaBackup
             }
         }
         if ($entry === null) {
-            throw new ApiException(404, ['error' => 'backup_not_found', 'message' => "Eine Sicherung '$stamp' gibt es nicht (mehr)."]);
+            throw ApiException::of(404, 'backup_not_found', Msg::of('msg_backup.not_found', "A backup '{stamp}' does not exist (any more).", [
+                'stamp' => $stamp,
+            ]));
         }
         $files = array_column($entry['files'], 'name', 'kind');
         if (!isset($files['database'])) {
-            throw new ApiException(409, ['error' => 'backup_incomplete', 'message' => 'Diese Sicherung enthält keine Datenbank '
-                . '(ältere Sicherung nur der .puml) und lässt sich nicht automatisch wiederherstellen.']);
+            throw ApiException::of(409, 'backup_incomplete', Msg::of('msg_backup.incomplete', 'This backup contains no database (older '
+                . 'backup of the .puml only) and cannot be restored automatically.'));
         }
         $lock = Config::lockFile();
         $handle = @fopen($lock, 'x');
         if ($handle === false) {
-            throw new ApiException(409, ['error' => 'locked', 'message' => 'Gerade läuft ein Bootstrap oder eine Schema-Änderung '
-                . '(data/bootstrap.lock). Bitte kurz warten und erneut versuchen.']);
+            throw ApiException::of(409, 'locked', Msg::of('msg_backup.locked', 'A bootstrap or a schema change is running right now '
+                . '(data/bootstrap.lock). Please wait a moment and try again.'));
         }
         fclose($handle);
         $dbFile = Config::dbFile();
@@ -220,12 +223,12 @@ final class SchemaBackup
         try {
             [$schemaName, $source] = self::checkBackup(self::dir() . '/' . $files['database'],
                 isset($files['schema']) ? self::dir() . '/' . $files['schema'] : null, $tmpDb);
-            $safety = self::create($pdo, (string) $currentSchemaFile, '„Wiederherstellen“');
+            $safety = self::create($pdo, (string) $currentSchemaFile, Msg::of('msg_backup.action_restore', '"Restore"'));
             $target = Config::schemaDir() . '/' . $schemaName;
             $tmpPuml = $target . '.restore';
             if (@file_put_contents($tmpPuml, $source) === false) {
-                throw self::restoreFailed('Die Schema-Datei kann nicht geschrieben werden (' . $schemaName . ' im Ordner schema/) - '
-                    . 'bitte Schreibrechte prüfen.');
+                throw self::restoreFailed(Msg::of('msg_backup.restore_schema_write', 'The schema file cannot be written ({file} in the '
+                    . 'folder schema/) - please check the write permissions.', ['file' => $schemaName]));
             }
             @chmod($tmpDb, is_file($dbFile) ? (fileperms($dbFile) & 0777) : 0644);
             $pdo->exec('BEGIN IMMEDIATE'); // write lock of the previous file until after the swap
@@ -235,7 +238,8 @@ final class SchemaBackup
                 $pdo->exec('ROLLBACK');
             }
             if (!$replaced) {
-                throw self::restoreFailed('Die Datenbank-Datei data/cms.sqlite konnte nicht ersetzt werden (Schreibrechte in data/ prüfen).');
+                throw self::restoreFailed(Msg::of('msg_backup.restore_db_replace', 'The database file data/cms.sqlite could not be '
+                    . 'replaced (check the write permissions in data/).'));
             }
             // Bring the workflow file to the state of the restored database (its text is stored there in _meta); if that
             // does not work, the state of the database still applies - System -> Workflows then shows the difference
@@ -245,12 +249,13 @@ final class SchemaBackup
                     @file_put_contents(Workflows::dir() . '/' . basename($applied['file']), (string) $applied['source']);
                 }
             } catch (\Throwable $e) {
-                error_log('[LessHeadCMS] Workflow-Datei nach Wiederherstellung: ' . $e->getMessage());
+                error_log('[LessHeadCMS] Workflow file after restore: ' . $e->getMessage());
             }
             $warning = null;
             if (!@rename($tmpPuml, $target)) {
-                $warning = "Die Datenbank wurde wiederhergestellt, aber die Datei $schemaName konnte nicht ersetzt werden. Bitte "
-                    . "den Text der Sicherung per FTP als schema/$schemaName hochladen, sonst meldet /bootstrap migration_needed.";
+                $warning = Msg::of('msg_backup.restore_file_warning', 'The database was restored, but the file {file} could not be '
+                    . 'replaced. Please upload the text of the backup via FTP as schema/{file}, otherwise /bootstrap reports '
+                    . 'migration_needed.', ['file' => $schemaName]);
             }
         } catch (\Throwable $e) {
             if ($safety !== null && !$replaced) {
@@ -265,12 +270,12 @@ final class SchemaBackup
             Maintenance::end();
             @unlink($lock);
         }
-        return [
-            'status'   => 'restored',
-            'message'  => "Sicherung vom {$entry['created']} wiederhergestellt.",
+        return ['status' => 'restored'] + Msg::of('msg_backup.restored', 'Backup of {created} restored.', [
+            'created' => $entry['created'],
+        ])->fields() + [
             'restored' => ['stamp' => $entry['stamp'], 'created' => $entry['created'], 'schema' => $schemaName],
             'backup'   => ['stamp' => $safety['stamp'], 'files' => $safety['files'], 'dir' => 'data/schema-backups/'],
-        ] + ($warning !== null ? ['warning' => $warning] : []);
+        ] + ($warning !== null ? ['warning' => $warning->text(), 'warning_code' => $warning->codeOnly()] : []);
     }
 
     /**
@@ -279,13 +284,13 @@ final class SchemaBackup
      */
     private static function checkBackup(string $db, ?string $puml, string $tmpDb): array
     {
-        $invalid = function (string $why): ApiException {
-            return new ApiException(409, ['error' => 'backup_invalid', 'message' => "Die Sicherung ist nicht verwendbar: $why "
-                . 'Es wurde nichts geändert.']);
+        $invalid = function (Msg $why): ApiException {
+            return ApiException::of(409, 'backup_invalid', Msg::of('msg_backup.invalid', 'The backup cannot be used: {reason} Nothing '
+                . 'was changed.', ['reason' => $why]));
         };
         if (!@copy($db, $tmpDb) || !filesize($tmpDb)) {
-            throw self::restoreFailed('Die gesicherte Datenbank konnte nicht nach data/ kopiert werden (Speicherplatz bzw. '
-                . 'Schreibrechte prüfen).');
+            throw self::restoreFailed(Msg::of('msg_backup.restore_copy', 'The backed-up database could not be copied to data/ (check '
+                . 'disk space or write permissions).'));
         }
         try {
             $check = new PDO('sqlite:' . $tmpDb, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
@@ -294,35 +299,35 @@ final class SchemaBackup
                 ? $check->query('SELECT "key", "value" FROM "_meta"')->fetchAll(PDO::FETCH_KEY_PAIR) : [];
             $check = null;
         } catch (\PDOException $e) {
-            throw $invalid('keine lesbare SQLite-Datenbank.');
+            throw $invalid(Msg::of('msg_backup.invalid_sqlite', 'not a readable SQLite database.'));
         }
         if ($ok !== 'ok') {
-            throw $invalid('Die Datenbank ist beschädigt (integrity_check).');
+            throw $invalid(Msg::of('msg_backup.invalid_integrity', 'The database is damaged (integrity_check).'));
         }
         if (empty($meta['schema_json']) || empty($meta['schema_hash'])) {
-            throw $invalid('Die Datenbank enthält kein aktives Schema.');
+            throw $invalid(Msg::of('msg_backup.invalid_no_schema', 'The database contains no active schema.'));
         }
         $name = $meta['active_schema'] ?? null;
         if ($name === null && $puml !== null && preg_match(self::PATTERN, basename($puml), $m)) {
             $name = $m[2];
         }
         if (!is_string($name) || $name === '' || basename($name) !== $name || substr($name, -5) !== '.puml') {
-            throw $invalid('Der Name der Schema-Datei ist unbekannt.');
+            throw $invalid(Msg::of('msg_backup.invalid_name', 'The name of the schema file is unknown.'));
         }
         $source = $puml !== null ? (string) file_get_contents($puml) : null;
         if ($source === null || !hash_equals((string) $meta['schema_hash'], hash('sha256', $source))) {
             if (isset($meta['schema_source']) && hash_equals((string) $meta['schema_hash'], hash('sha256', $meta['schema_source']))) {
                 $source = $meta['schema_source'];
             } elseif ($source === null) {
-                throw $invalid('Die Schema-Datei fehlt in der Sicherung.');
+                throw $invalid(Msg::of('msg_backup.invalid_no_file', 'The schema file is missing in the backup.'));
             }
         }
         return [$name, $source];
     }
 
-    private static function restoreFailed(string $message): ApiException
+    private static function restoreFailed(Msg $message): ApiException
     {
-        return new ApiException(500, ['error' => 'restore_failed', 'message' => $message . ' Es wurde nichts geändert.']);
+        return ApiException::of(500, 'restore_failed', Msg::of('msg_backup.restore_failed', '{reason} Nothing was changed.', ['reason' => $message]));
     }
 
     /** Overview for System -> Schema: list, retention, database size and possibly a disk space notice */
@@ -331,25 +336,24 @@ final class SchemaBackup
         $keep = Settings::get($pdo, Settings::SCHEMA_BACKUP_KEEP);
         $size = is_file(Config::dbFile()) ? (int) filesize(Config::dbFile()) : 0;
         $warn = Settings::schemaBackupWarnBytes($pdo);
-        $mb = function (int $bytes): string {
-            return number_format($bytes / 1048576, $bytes >= 10 * 1048576 ? 0 : 1, ',', '.') . ' MB';
+        $mb = function (int $bytes): array {
+            return Msg::number($bytes / 1048576, $bytes >= 10 * 1048576 ? 0 : 1);
         };
+        $warning = $size > $warn ? Msg::of('msg_backup.size_warning', 'The database is already {size} MB. Before every apply it is '
+            . 'backed up completely; with {keep} kept backups these together take about {total} MB of disk space in '
+            . 'data/schema-backups/.', ['size' => $mb($size), 'keep' => $keep, 'total' => $mb($size * $keep)]) : null;
         return [
-            'backups'        => self::all(),
-            'keep'           => $keep,
-            'db_bytes'       => $size,
-            'warning'        => $size > $warn
-                ? "Die Datenbank ist bereits {$mb($size)} groß. Vor jedem Anwenden wird sie vollständig gesichert; bei $keep "
-                    . "aufbewahrten Sicherungen belegen diese zusammen etwa {$mb($size * $keep)} Speicherplatz in data/schema-backups/."
-                : null,
+            'backups'      => self::all(),
+            'keep'         => $keep,
+            'db_bytes'     => $size,
+            'warning'      => $warning !== null ? $warning->text() : null,
+            'warning_code' => $warning !== null ? $warning->codeOnly() : null,
         ];
     }
 
-    private static function failed(string $message, string $action): ApiException
+    private static function failed(Msg $message, Msg $action): ApiException
     {
-        return new ApiException(500, [
-            'error'   => 'backup_failed',
-            'message' => $message . " $action wurde abgebrochen, an der Datenbank wurde nichts geändert.",
-        ]);
+        return ApiException::of(500, 'backup_failed', Msg::of('msg_backup.failed', '{reason} {action} was aborted, nothing was changed '
+            . 'in the database.', ['reason' => $message, 'action' => $action]));
     }
 }

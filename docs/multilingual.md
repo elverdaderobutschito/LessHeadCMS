@@ -89,8 +89,8 @@ are translated by phase 2 (see below, all fixed frontend texts). **Not** transla
   „Speichern“ as usual.
 * **Display override of the default language:** Names in the diagram must stay ASCII-safe (column names), for instance
   `veroeffentlicht` → derived „Veroeffentlicht“. In System → Übersetzungen the default language can therefore be selected as well
-  („Deutsch (de) – Original“). There you override the derived label („Veröffentlicht“), only for
-  schema elements, not for fixed UI texts. It is stored in `translations` with the `language_id` of the default language.
+  („Deutsch (de) – Original“). There you override the derived label („Veröffentlicht“); fixed UI texts of the default
+  language can be overridden as well (see phase 2). It is stored in `translations` with the `language_id` of the default language.
   **Fallback chain of the display** (`Languages::labels()`): translation of the display language → override of the default language →
   derived label. For other languages the column „Original“ therefore shows the override (below it „abgeleitet:
   …“). Diagram, database, `_schema` and data API stay unchanged.
@@ -112,8 +112,34 @@ are translated by phase 2 (see below, all fixed frontend texts). **Not** transla
 
 * **The source of truth** for the German texts is a list of keys built into the UI (key → text,
   grouped by area), e.g. `form.save` or, with placeholders, `list.count` with `{shown}` and `{total}`.
-  The UI shows the translation of the display language, otherwise
-  the German text. Without a translation – so also for every newly created language – everything stays German.
+  The UI shows the text of the display language, otherwise the text of the default language, otherwise English.
+* **Three sources** for the text of a language, see [Built-in translations from files](#built-in-translations-from-files-three-sources):
+  shipped language files (`translations/en.csv`), custom language files of the installation (`CUSTOM_TRANSLATIONS_DIR`)
+  and the database (System → Übersetzungen, CSV import). The files act **without an import**.
+* **Fallback chain** (the same for fixed UI texts and server messages, resolved in one place – `resolve()` in the UI from
+  the response of `GET /api/_ui_texts`). Within each language: own translation (database) → custom language file →
+  shipped language file → German source texts (only for a German language):
+  1. display language,
+  2. default language of the installation – the same layers,
+  3. English – the built-in English texts (`translations/en.csv`, adapted by a custom `en.csv`); only needed if neither
+     step is German or English, because those already cover every key,
+  4. last resort: for a server message the English text of the response, for a fixed UI text its German source text.
+
+  Examples:
+  * German default language, language „English“ (`en`) created, nothing imported: menus and server messages are English
+    (from `translations/en.csv`).
+  * A newly created language without translations and without a language file (e.g. „Nederlands“) shows menus and
+    messages in the default language (German with „Deutsch“ as default language, English with „English“).
+  * A partly translated language shows its translations and the rest as built-in text of the language, otherwise in the
+    default language.
+  * A default language that is neither German nor English, e.g. „fr“ for a French diagram: put a `fr.csv` into the
+    custom directory (or import it, or translate on the translation page) and the UI is entirely French, server messages
+    included. What is not translated appears in English from `en.csv`.
+  * German default language with an own text for one key (e.g. `list.new` = „Datensatz anlegen“): that text appears,
+    everything else stays the built-in German text. Other display languages without their own text for the key fall back
+    to it as well.
+  * Without any language the UI is German as before.
+  Details and the response of `GET /api/_ui_texts`: [REST API – Error responses and messages](rest-api.md#error-responses-and-messages).
 * **Core area (2a):** login, forced and voluntary password change, sidebar (group „Sonstige“, heading and
   entries of the section „System“, user area), frame („Lade Schema …“, „Kein Zugriff.“), basic structure of the form
   (heading „… anlegen/bearbeiten“, Speichern und Schließen, Speichern und weiter, Speichern und neu, Abbrechen) and of the list (Neu anlegen,
@@ -129,13 +155,13 @@ are translated by phase 2 (see below, all fixed frontend texts). **Not** transla
   (title, field labels, accessibility hint), upload area (button, size hint, status per file, client-side
   size check – the status texts are only translated when rendering and change along with a language switch), media field in the
   form („Mediathek durchsuchen“, ←/→/× with `title` and `aria-label`, „Keine Medien ausgewählt.“) and media selection dialog.
-  Errors from the server (rejected uploads, 409 on deletion, required field) stay German; dates and numbers follow the
+  Errors from the server (rejected uploads, 409 on deletion, required field) follow the fallback chain; dates and numbers follow the
   date and number format of the display language (see "Date and number format per language").
 * **User management (2d):** list (heading, „Neuer Nutzer“, columns, role and status names, Bearbeiten, notice with
   the initial password after creation), dialog „Neuer Nutzer“ (title, labels, role selection, hint about the first login,
   Anlegen/Abbrechen; generator button and rule hint via the existing keys `password.generate`/`password.hint`) and
   dialog „Nutzer bearbeiten“ (title, labels, „Aktiv“, for admins a hint about the self-lockout protection). The
-  rejections by the server (own account, last active admin, validation, password rule) stay German.
+  rejections by the server (own account, last active admin, validation, password rule) follow the fallback chain.
 * **Test data, languages, translations (2e):** test data generator (explanatory text, columns, Generieren, result including
   „n erzeugt“/„n Verknüpfungen“, hint about empty media fields), language management (initial setup and „Neue Sprache
   hinzufügen“, columns, badge, Löschen including the prompt, success messages) and the translation UI itself (tabs,
@@ -153,29 +179,76 @@ are translated by phase 2 (see below, all fixed frontend texts). **Not** transla
   `<html lang>` follows the display language (set when the UI texts are loaded). Deliberately fixed are: diagram syntax
   (`{title}`, `{unique}`, `{cascade}`, `{label}`, `{symmetric}`, `«abstract»`, `«enumeration»`, type names, multiplicities),
   the confirmation text `WIEDERHERSTELLEN` (the server checks exactly that) and the suggested names of new elements
-  (`NeueEntitaet`, `neues_feld`, `WERT1` – they become identifiers). All texts from server responses (check, conflicts,
-  suggestion options, success messages) stay German – follow-up ticket.
+  (`NeueEntitaet`, `neues_feld`, `WERT1` – they become identifiers). Texts from server responses (check, conflicts,
+  suggestion options, success messages) come with a code and follow the fallback chain.
 * **System → Übersetzungen → tab „Feste UI-Texte“:** all keys by area, per row key, German text
-  and input field; counter, marking and collective saving as for the schema elements („Speichern“ takes the
+  and input field – for every language including the default language. Where the language has a built-in text (German
+  source text, shipped or custom language file) an entry overrides it; without an entry the field shows that text with
+  „eingebaut, kein Override“ and the source („mitgelieferte Sprachdatei“ / „eigene Sprachdatei“); counter, marking and collective saving as for the schema elements („Speichern“ takes the
   changes of both tabs). If a translation differs from the original in its placeholders (`{entity}`, `{id}` …),
   a hint appears (it is saved nevertheless).
 * **Storage:** `translations` with `kind = 'ui_text'`, `ref_id` = key. The server only checks the form of the key
   (`area.name`); only the frontend knows the list. Renaming a key means losing its translations.
   A `translations` table from phase 1 (CHECK without `ui_text`, `ref_id` with a foreign key to `schema_ids`) is rebuilt once on
   the first save; the existing translations are kept.
-* **English is included:** `translations/en.csv` contains all fixed UI texts in English. Create the language "English" (code `en`),
-  then under System → Übersetzungen → „CSV importieren“ choose the file `en.csv` and apply it (see
-  "Translations as CSV").
+* **English is included:** `translations/en.csv` contains all fixed UI texts in English (including the server messages and
+  the messages of the built-in patterns). It is the built-in text of every English language: create the language
+  "English" (code `en`, also `en-GB`, `eng` or the name „Englisch“) and the UI is English – no import needed.
 * **Login page:** Without a login the server does not know the user. The browser therefore remembers the code of the
   display language used last (`localStorage` `lhc.language`, only for a non-default language) and requests
   `GET /api/_ui_texts?lang=<code>`. A browser without a remembered language shows the default language. After the login (already
   during the mandatory password change) the language of the user applies.
 
+## Built-in translations from files (three sources)
+
+Language files act as built-in texts of their language at runtime – nothing is copied into the database. Three sources
+with a clear responsibility:
+
+| Source | Where | Who maintains it | On an update |
+|---|---|---|---|
+| 1. shipped | `translations/<code>.csv`, only the codes listed in the code (`BuiltinTexts::BUILTIN_LANGUAGES`, today `en`) | LessHeadCMS | replaced |
+| 2. custom | every `<code>.csv` in the directory `CUSTOM_TRANSLATIONS_DIR` (config.php) | the installation, e.g. an agency | untouched (not part of the delivery) |
+| 3. database | System → Übersetzungen, CSV import | admins | untouched |
+
+**Precedence per key:** database → custom file → shipped file (of the same language) → German source texts (German
+languages only). A custom `en.csv` with a single line changes exactly that text; every other key still comes from the
+shipped `en.csv`. Other files in `translations/` (e.g. a `fr.csv` put there via FTP) are **not** built in – they can only
+be imported (see below).
+
+* **Setting up the custom directory** (optional) in `config.php`:
+
+  ```php
+  define('CUSTOM_TRANSLATIONS_DIR', __DIR__ . '/custom_translations');
+  ```
+
+  A relative path counts from the LessHeadCMS folder. Without the setting, with an empty value or a missing directory
+  nothing happens (no error). The directory belongs to the installation: the build never creates or overwrites it, an
+  update does not touch it. Protect it against direct retrieval like `data/` – best outside the webroot, see
+  [deployment](deployment.md#custom-language-files).
+* **Assignment to a language** via code or name, with variants (the same recognition as for German languages): `en.csv`
+  serves `en`, `en-GB`, `en_US`, `eng` and the names „English“/„Englisch“; `fr.csv` serves `fr`, `fra`, „Français“,
+  „French“, „Französisch“ and so on. A file with a region (`en-GB.csv`) only serves exactly that code and beats the
+  general file. A code without a known name (e.g. `xx.csv`) is matched by its code only.
+* **Format:** the CSV format of the import below; only lines of kind `ui_text` count (schema elements and pattern messages
+  of an installation need an import).
+* **Faulty lines in a custom file** are ignored and written to the PHP error log instead of breaking the UI: placeholders
+  other than in the shipped English text (e.g. `{count}` missing), an invalid key, a text over 500 characters, a duplicate
+  key. Example: `[LessHeadCMS] custom_translations/fr.csv: 1 line(s) ignored - line 4 (msg_records.dependents):
+  placeholders differ from en.csv (expected: {count} {table}).` The shipped files are checked by the tests instead
+  (`backend/tests/messages_test.php` for every language in `BUILTIN_LANGUAGES`).
+* **Cache:** a file is parsed once and kept in `data/cache/ui-texts-<hash>.json`; it is read again when its modification
+  time or size changes. Without a writable `data/` the file is simply parsed on every request.
+* **Translation page:** keys with a text from a file show it as „… (eingebaut, kein Override)“ with the source
+  („mitgelieferte Sprachdatei“ / „eigene Sprachdatei“). An entry there is an override in the database and wins.
+* **More shipped languages** (e.g. `fr.csv`, `es.csv`): add the file to `backend/translations/` and its code to
+  `BuiltinTexts::BUILTIN_LANGUAGES` – nothing else changes; the placeholder test covers it automatically.
+
 ## Translations as CSV (export, import, `translations/`)
 
 System → Übersetzungen can download the translations of a language as CSV and import them again – from your own
 hard disk or from the directory `translations/`, which is filled via FTP like `schema/`. The product ships with
-`translations/en.csv` (all fixed UI texts in English).
+`translations/en.csv` (all fixed UI texts in English; it acts without an import, see above). Importing is for
+translations that should live in the database – schema elements, pattern messages or texts maintained on the page.
 
 * **Format:** UTF-8, header line `kind,ref,text`, standard CSV quoting (quotes only where necessary; `"` is
   doubled). One file per language, fixed UI texts and schema elements mixed:
@@ -198,15 +271,17 @@ hard disk or from the directory `translations/`, which is filled via FTP like `s
   (`…#2`). Resolution uses the same list the translation page is built from (`Languages::elements()`, i.e.
   model key → `SchemaIds::lookup()`); the catalog delivers the identifier per element as `ref`.
 * **Export:** „Herunterladen (CSV)“ next to the language selection downloads `<code>.csv` with all **stored** translations
-  of the chosen language (unsaved input is not included). For the default language these are the display overrides.
+  of the chosen language (unsaved input is not included). For the default language these are the display overrides and
+  the overridden fixed UI texts.
 * **Import:** area „CSV importieren“ – choose a file from the hard disk or one from `translations/`, plus the
   target language. If the file name matches a language code (`en.csv` with an existing language "en"), that language is preselected,
   otherwise the language chosen above; changeable. A **preview** appears immediately: new / changed (existing translation
   is overwritten, old → new expandable) / unchanged / skipped, every skipped line with line number and
   reason. Only „Übernehmen“ saves, in one transaction.
 * **Skipped instead of aborted:** element not found in the active schema (different project, field renamed), unknown
-  kind, invalid UI text key, empty text, text over 500 characters, duplicate line, fixed UI text for the
-  default language. The rest is imported. An import adds and overwrites, it **deletes nothing**.
+  kind, invalid UI text key, empty text, text over 500 characters, duplicate line. Fixed UI texts for the default language
+  are imported (they override the built-in texts – importing `en.csv` into a German default language therefore makes the
+  UI English). The rest is imported. An import adds and overwrites, it **deletes nothing**.
 * **Lenient when reading:** a BOM at the beginning, `;` instead of `,` as the separator (this is how Excel saves with German settings),
   Windows line endings and empty lines are allowed. Line breaks in the text become a single space, as when saving
   by hand. Without the header line `kind,ref,text`, with a character set other than UTF-8 or above 2 MB (setting `translations_csv_max_mb`) → `422`.

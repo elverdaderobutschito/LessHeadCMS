@@ -115,7 +115,7 @@ final class ListQuery
 
         foreach (['filter', 'eq'] as $key) {
             if (isset($query[$key]) && !is_array($query[$key])) {
-                $this->errors[$key] = $key . '[<feld>]=<wert> erwartet';
+                $this->errors[$key] = Msg::of('msg_list.field_value_expected', '{key}[<field>]=<value> expected', ['key' => $key]);
                 $query[$key] = [];
             }
         }
@@ -136,14 +136,15 @@ final class ListQuery
             if ($ids === null || array_filter($ids, function ($v) {
                 return !ctype_digit($v);
             }) || count($ids) > $maxPerPage) {
-                $this->errors['ids'] = 'IDs durch Komma getrennt erwartet, höchstens ' . $maxPerPage;
+                $this->errors['ids'] = Msg::of('msg_list.ids_expected', 'IDs separated by commas expected, at most {max}',
+                    ['max' => $maxPerPage]);
             } else {
                 $conditions[] = $ids ? 'e."id" IN (' . implode(', ', array_map('intval', $ids)) . ')' : '0';
             }
         }
         if (isset($query['q'])) {
             if (!is_string($query['q'])) {
-                $this->errors['q'] = 'Text erwartet';
+                $this->errors['q'] = Msg::of('msg_api.text_expected', 'Text expected');
             } elseif (trim($query['q']) !== '') {
                 $conditions[] = $this->search(trim($query['q']));
             }
@@ -154,10 +155,11 @@ final class ListQuery
         $this->sort($query);
 
         if ($this->errors) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Ungültige Abfrage: '
-                . implode('; ', array_map(function ($k, $v) {
-                    return "$k – $v";
-                }, array_keys($this->errors), $this->errors)), 'errors' => $this->errors]);
+            $details = Msg::semicolonList(array_map(function ($k, Msg $v) {
+                return Msg::of('msg_list.problem', '{key} – {problem}', ['key' => $k, 'problem' => $v]);
+            }, array_map('strval', array_keys($this->errors)), $this->errors));
+            throw ApiException::of(422, 'validation', Msg::of('msg_list.invalid_query', 'Invalid query: {details}',
+                ['details' => $details]), ApiException::fields($this->errors));
         }
         $this->where = $conditions ? ' WHERE (' . implode(') AND (', $conditions) . ')' : '';
     }
@@ -174,11 +176,14 @@ final class ListQuery
         }
         $v = $query[$key];
         if (!is_string($v) || !ctype_digit($v) || (int) $v < 1 || strlen($v) > 12) {
-            $this->errors[$key] = 'ganze Zahl ab 1 erwartet';
+            $this->errors[$key] = Msg::of('msg_list.int_expected', 'whole number from 1 expected');
             return $default;
         }
         if ((int) $v > $max) {
-            $this->errors[$key] = "höchstens $max" . ($key === 'per_page' ? ' Zeilen je Seite – größere Mengen bitte seitenweise abrufen (page)' : '');
+            $this->errors[$key] = $key === 'per_page'
+                ? Msg::of('msg_list.per_page_max', 'at most {max} rows per page – please fetch larger amounts page by page (page)',
+                    ['max' => $max])
+                : Msg::of('msg_list.at_most', 'at most {max}', ['max' => $max]);
             return $default;
         }
         return (int) $v;
@@ -352,21 +357,22 @@ final class ListQuery
         $m = $this->many($name);
         if ($m !== null) {
             if (!is_string($value)) {
-                $this->errors[$key] = 'Text erwartet';
+                $this->errors[$key] = Msg::of('msg_api.text_expected', 'Text expected');
                 return null;
             }
             return trim($value) === '' ? null : $this->manyContains($m, trim($value));
         }
         $f = $this->field($name);
         if ($f === null) {
-            $this->errors[$key] = 'unbekanntes oder nicht filterbares Feld';
+            $this->errors[$key] = Msg::of('msg_list.not_filterable', 'unknown field or a field that cannot be filtered');
             return null;
         }
         $kind = self::kind($f);
         $col = self::col($f);
         if ($kind === 'number' || $kind === 'date') {
             if (!is_array($value) || array_diff(array_keys($value), ['from', 'to'])) {
-                $this->errors[$key] = "Bereich erwartet: {$key}[from]= und/oder {$key}[to]=";
+                $this->errors[$key] = Msg::of('msg_list.range_expected', 'Range expected: {key}[from]= and/or {key}[to]=',
+                    ['key' => $key]);
                 return null;
             }
             $parts = [];
@@ -380,8 +386,10 @@ final class ListQuery
                 $exact = $f['type'] === 'datetime' && is_string($v) && preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $v);
                 $ok = is_string($v) && ($kind === 'date' ? $exact || preg_match('/^\d{4}-\d{2}-\d{2}$/', $v) : is_numeric($v));
                 if (!$ok) {
-                    $this->errors["{$key}[$bound]"] = $kind === 'date'
-                        ? 'Datum JJJJ-MM-TT erwartet' . ($f['type'] === 'datetime' ? ' (oder JJJJ-MM-TT HH:MM:SS in UTC)' : '') : 'Zahl erwartet';
+                    $this->errors["{$key}[$bound]"] = $kind !== 'date' ? Msg::of('msg_list.number_expected', 'Number expected')
+                        : ($f['type'] === 'datetime'
+                            ? Msg::of('msg_list.datetime_expected', 'Date YYYY-MM-DD expected (or YYYY-MM-DD HH:MM:SS in UTC)')
+                            : Msg::of('msg_list.date_expected', 'Date YYYY-MM-DD expected'));
                     continue;
                 }
                 $this->params[] = $kind === 'date' ? $v : $v + 0;
@@ -391,7 +399,7 @@ final class ListQuery
             return $parts ? "$col IS NOT NULL AND " . ($kind === 'date' ? "$col <> '' AND " : '') . implode(' AND ', $parts) : null;
         }
         if (!is_string($value)) {
-            $this->errors[$key] = $kind === 'bool' ? 'true oder false erwartet' : 'Text erwartet';
+            $this->errors[$key] = $kind === 'bool' ? Msg::of('msg_api.bool_expected', 'true or false expected') : Msg::of('msg_api.text_expected', 'Text expected');
             return null;
         }
         $value = trim($value);
@@ -400,7 +408,7 @@ final class ListQuery
         }
         if ($kind === 'bool') {
             if ($value !== 'true' && $value !== 'false') {
-                $this->errors[$key] = 'true oder false erwartet';
+                $this->errors[$key] = Msg::of('msg_api.bool_expected', 'true or false expected');
                 return null;
             }
             return $value === 'true' ? "$col = 1" : "($col IS NULL OR $col = 0)";
@@ -425,7 +433,8 @@ final class ListQuery
     {
         $f = $this->field($name);
         if ($f === null || !is_string($value)) {
-            $this->errors["eq[$name]"] = $f === null ? 'unbekanntes Feld' : 'Wert erwartet';
+            $this->errors["eq[$name]"] = $f === null ? Msg::of('msg_list.unknown_field', 'unknown field')
+                : Msg::of('msg_list.value_expected', 'Value expected');
             return null;
         }
         $col = self::col($f);
@@ -435,14 +444,14 @@ final class ListQuery
         $kind = self::kind($f);
         if ($kind === 'bool') {
             if ($value !== 'true' && $value !== 'false') {
-                $this->errors["eq[$name]"] = 'true oder false erwartet';
+                $this->errors["eq[$name]"] = Msg::of('msg_api.bool_expected', 'true or false expected');
                 return null;
             }
             return $value === 'true' ? "$col = 1" : "($col IS NULL OR $col = 0)";
         }
         if ($kind === 'number' || $kind === 'fk' || $kind === 'user') {
             if (!is_numeric($value)) {
-                $this->errors["eq[$name]"] = 'Zahl erwartet';
+                $this->errors["eq[$name]"] = Msg::of('msg_list.number_expected', 'Number expected');
                 return null;
             }
             $this->params[] = $value + 0;
@@ -483,14 +492,14 @@ final class ListQuery
         $id = null;
         if ($forId !== null && $forId !== '') {
             if (!is_string($forId) || !ctype_digit($forId) || (int) $forId < 1 || strlen($forId) > 12) {
-                $this->errors['for_id'] = 'ganze Zahl ab 1 erwartet';
+                $this->errors['for_id'] = Msg::of('msg_list.int_expected', 'whole number from 1 expected');
                 return [];
             }
             $id = (int) $forId;
         }
         if ($for === null || $for === '') {
             if ($id !== null) {
-                $this->errors['for_id'] = 'nur zusammen mit for=<entität>.<feld>';
+                $this->errors['for_id'] = Msg::of('msg_list.for_id_alone', 'only together with for=<entity>.<field>');
             }
             return [];
         }
@@ -522,7 +531,8 @@ final class ListQuery
             }
         }
         if ($out === null) {
-            $this->errors['for'] = '<entität>.<feld> einer Beziehung (FK-Spalte oder n:n-Liste) auf diese Entität erwartet';
+            $this->errors['for'] = Msg::of('msg_list.for_expected',
+                '<entity>.<field> of a relation (FK column or n:n list) to this entity expected');
             return [];
         }
         return $out;
@@ -532,7 +542,7 @@ final class ListQuery
     {
         $order = $query['order'] ?? 'asc';
         if ($order !== 'asc' && $order !== 'desc') {
-            $this->errors['order'] = 'asc oder desc erwartet';
+            $this->errors['order'] = Msg::of('msg_list.order_expected', 'asc or desc expected');
             $order = 'asc';
         }
         if (!isset($query['sort']) || $query['sort'] === '') {
@@ -543,7 +553,7 @@ final class ListQuery
         }
         $f = is_string($query['sort']) ? $this->field($query['sort']) : null;
         if ($f === null) {
-            $this->errors['sort'] = 'unbekanntes oder nicht sortierbares Feld';
+            $this->errors['sort'] = Msg::of('msg_list.not_sortable', 'unknown field or a field that cannot be sorted');
             return;
         }
         $col = self::col($f);

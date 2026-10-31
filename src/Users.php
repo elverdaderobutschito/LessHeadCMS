@@ -31,7 +31,6 @@ use PDOException;
 final class Users
 {
     public const ROLES = ['admin', 'redakteur', ApiKeys::ROLE];
-    private const ROLE_ERROR = "role muss 'admin', 'redakteur' oder 'api' sein";
 
     /** @var PDO */
     private $pdo;
@@ -65,7 +64,8 @@ final class Users
     private static function forbidAdminChange(array $actor, ?string $existingRole, ?string $newRole): void
     {
         if ($actor['role'] !== 'admin' && ($existingRole === 'admin' || $newRole === 'admin')) {
-            throw new ApiException(403, ['error' => 'forbidden', 'message' => 'Administratoren können nur von Administratoren angelegt oder geändert werden']);
+            throw ApiException::of(403, 'forbidden', Msg::of('msg_users.admin_only_by_admin',
+                'Administrators can only be created or changed by administrators'));
         }
     }
 
@@ -89,25 +89,25 @@ final class Users
         $password = $input['password'] ?? null;
 
         if ($name === null || $name === '') {
-            $errors['name'] = 'Pflichtfeld';
+            $errors['name'] = Msg::of('msg_api.required', 'Required field');
         }
         if ($username === null || $username === '') {
-            $errors['username'] = 'Pflichtfeld';
+            $errors['username'] = Msg::of('msg_api.required', 'Required field');
         }
         if ($email === null || $email === '') {
-            $errors['email'] = 'Pflichtfeld';
+            $errors['email'] = Msg::of('msg_api.required', 'Required field');
         }
         if ($role === null || !in_array($role, self::ROLES, true)) {
-            $errors['role'] = self::ROLE_ERROR;
+            $errors['role'] = self::roleError();
         }
         $isApi = $role === ApiKeys::ROLE;
         if (!$isApi) {
             $this->validatePassword($password, $errors);
         } elseif ($password !== null && $password !== '') {
-            $errors['password'] = 'API-Nutzer haben kein Passwort';
+            $errors['password'] = Msg::of('msg_users.api_no_password', 'API users have no password');
         }
         if ($errors) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Ungültige Eingabe', 'errors' => $errors]);
+            throw ApiException::invalid($errors);
         }
 
         try {
@@ -121,7 +121,8 @@ final class Users
             $stmt->execute([$name, $username, $email, $role, $isApi ? '' : password_hash($password, PASSWORD_DEFAULT), $isApi ? 0 : 1]);
         } catch (PDOException $ex) {
             if (self::isUniqueViolation($ex)) {
-                throw new ApiException(409, ['error' => 'duplicate', 'message' => "Benutzername '$username' ist bereits vergeben"]);
+                throw ApiException::of(409, 'duplicate', Msg::of('msg_users.username_taken', "Username '{username}' is already taken",
+                    ['username' => $username]));
             }
             throw $ex;
         }
@@ -153,7 +154,7 @@ final class Users
         if (array_key_exists('name', $input)) {
             $name = self::str($input['name']);
             if ($name === null || $name === '') {
-                $errors['name'] = 'Pflichtfeld';
+                $errors['name'] = Msg::of('msg_api.required', 'Required field');
             } else {
                 $values['name'] = $name;
             }
@@ -161,7 +162,7 @@ final class Users
         if (array_key_exists('email', $input)) {
             $email = self::str($input['email']);
             if ($email === null || $email === '') {
-                $errors['email'] = 'Pflichtfeld';
+                $errors['email'] = Msg::of('msg_api.required', 'Required field');
             } else {
                 $values['email'] = $email;
             }
@@ -169,43 +170,42 @@ final class Users
         if (array_key_exists('role', $input)) {
             $role = self::str($input['role']);
             if ($role === null || !in_array($role, self::ROLES, true)) {
-                $errors['role'] = self::ROLE_ERROR;
+                $errors['role'] = self::roleError();
             } elseif ($role !== $existing['role'] && ($role === ApiKeys::ROLE || $existing['role'] === ApiKeys::ROLE)) {
-                $errors['role'] = 'Ein API-Nutzer kann kein Login-Nutzer werden und umgekehrt - bitte einen neuen Nutzer anlegen';
+                $errors['role'] = Msg::of('msg_users.api_role_switch',
+                    'An API user cannot become a login user and vice versa - please create a new user');
             } else {
                 $values['role'] = $role;
             }
         }
         if (array_key_exists('api_read_only', $input)) {
             if ($actor !== null && $actor['role'] !== 'admin') {
-                throw new ApiException(403, ['error' => 'forbidden', 'message' => 'Nur für Administratoren']);
+                throw ApiException::of(403, 'forbidden', Msg::of('msg_users.admins_only', 'Administrators only'));
             }
             if (!is_bool($input['api_read_only'])) {
-                $errors['api_read_only'] = 'true oder false erwartet';
+                $errors['api_read_only'] = Msg::of('msg_api.bool_expected', 'true or false expected');
             } elseif ($existing['role'] !== ApiKeys::ROLE) {
-                $errors['api_read_only'] = '„Nur lesen“ gibt es nur für API-Nutzer';
+                $errors['api_read_only'] = Msg::of('msg_users.read_only_api', '“Read only” exists only for API users');
             } else {
                 $values['api_read_only'] = $input['api_read_only'] ? 1 : 0;
             }
         }
         if (array_key_exists('active', $input)) {
             if (!is_bool($input['active'])) {
-                $errors['active'] = 'true oder false erwartet';
+                $errors['active'] = Msg::of('msg_api.bool_expected', 'true or false expected');
             } else {
                 $values['active'] = $input['active'] ? 1 : 0;
             }
         }
         if ($errors) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Ungültige Eingabe', 'errors' => $errors]);
+            throw ApiException::invalid($errors);
         }
 
         // Protection 1: an admin must not deactivate themselves (otherwise the last admin could lock themselves out).
         $newActive = array_key_exists('active', $values) ? $values['active'] : (int) $existing['active'];
         if ($id === $currentUserId && $newActive === 0 && (int) $existing['active'] === 1) {
-            throw new ApiException(422, [
-                'error'   => 'self_deactivation',
-                'message' => 'Der eigene Account kann nicht deaktiviert werden',
-            ]);
+            throw ApiException::of(422, 'self_deactivation', Msg::of('msg_users.self_deactivation',
+                'You cannot deactivate your own account'));
         }
 
         // Protection 2: at least one active admin must always remain - applies both to active=false
@@ -214,10 +214,7 @@ final class Users
         $wasActiveAdmin = $existing['role'] === 'admin' && (int) $existing['active'] === 1;
         $staysActiveAdmin = $newRole === 'admin' && $newActive === 1;
         if ($wasActiveAdmin && !$staysActiveAdmin && $this->activeAdminCount($id) === 0) {
-            throw new ApiException(422, [
-                'error'   => 'last_admin',
-                'message' => 'Es muss mindestens ein aktiver Administrator bestehen bleiben',
-            ]);
+            throw ApiException::of(422, 'last_admin', Msg::of('msg_users.last_admin', 'At least one active administrator must remain'));
         }
 
         if ($values) {
@@ -241,7 +238,7 @@ final class Users
         $stmt->execute([$id]);
         $row = $stmt->fetch();
         if ($row === false) {
-            throw new ApiException(404, ['error' => 'not_found', 'message' => 'Nutzer nicht gefunden']);
+            throw ApiException::of(404, 'not_found', Msg::of('msg_users.not_found', 'User not found'));
         }
         return $row;
     }
@@ -257,10 +254,15 @@ final class Users
     private function validatePassword($password, array &$errors): void
     {
         if (!is_string($password) || $password === '') {
-            $errors['password'] = 'Pflichtfeld';
+            $errors['password'] = Msg::of('msg_api.required', 'Required field');
         } elseif (($ruleError = Auth::passwordError($this->pdo, $password)) !== null) {
             $errors['password'] = $ruleError; // same rule as PUT /api/me/password
         }
+    }
+
+    private static function roleError(): Msg
+    {
+        return Msg::of('msg_users.role_invalid', "role must be 'admin', 'redakteur' or 'api'");
     }
 
     private static function cast(array $row): array

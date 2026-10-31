@@ -47,6 +47,8 @@ final class Cms
     private $memberships = null;
     /** @var bool call the webhooks after a write (Webhooks::fire()); off for the test data generator */
     private $webhooks = true;
+    /** @var Validation|null field rules of the diagram (messages in the language of the user), on demand */
+    private $validation = null;
 
     /**
      * @param Access|null $access roles and permissions (Permissions::access()): denied entities do not exist for this caller
@@ -59,6 +61,11 @@ final class Cms
      * Workflow field (PumlParser: field with 'workflow'): stored and read like an enum, but never changeable via
      * create()/update() - new rows start in the initial state, it is only changed via transition(). It stands outside
      * the field permissions (a field denial on it is ignored); entity denials apply as everywhere.
+     *
+     * Field rules ({maxLength: 140}, {pattern: plz}, ..., see Validation): create() and update() check the complete record
+     * (update: stored state merged with the change) before saving - 422 with 'errors' and 'violations'. Denied fields are
+     * not checked for the caller (they cannot change them, the save leaves them as they are) and never appear in messages.
+     * A transition only changes the workflow state (and visibility), which have no rules - it is not blocked by them.
      */
     public function __construct(PDO $pdo, array $model, ?Access $access = null, ?array $user = null)
     {
@@ -144,6 +151,11 @@ final class Cms
             }
             if (array_key_exists('section', $f)) {
                 $field['section'] = $f['section']; // only for classes with sections, see below
+            }
+            // field rules (Validation::describe()) - only for fields that have some, otherwise _schema stays as before
+            $rules = $this->validation()->describe($f);
+            if ($rules !== null) {
+                $field['rules'] = $rules;
             }
             $fields[] = $field;
         }
@@ -273,26 +285,31 @@ final class Cms
         $field = Workflows::fieldOf($e);
         $def = $field !== null ? ($this->model['workflows'][$field['workflow']] ?? null) : null;
         if ($def === null) {
-            throw new ApiException(404, ['error' => 'no_workflow', 'message' => "Für '{$e['name']}' gibt es keinen Workflow"]);
+            throw ApiException::of(404, 'no_workflow', Msg::of('msg_records.no_workflow', "There is no workflow for '{entity}'", [
+                'entity' => $e['name'],
+            ]));
         }
         if ($this->user === null) {
-            throw new ApiException(401, ['error' => 'unauthorized', 'message' => 'Anmeldung erforderlich']);
+            throw ApiException::of(401, 'unauthorized', Msg::of('msg_auth.login_required', 'Login required'));
         }
         if (!is_string($label) || trim($label) === '') {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Transition fehlt',
-                'errors' => ['transition' => 'Label der Transition erwartet']]);
+            throw ApiException::of(422, 'validation', Msg::of('msg_records.transition_missing', 'Transition missing'), ApiException::fields([
+                'transition' => Msg::of('msg_records.transition_expected', 'Label of the transition expected'),
+            ]));
         }
         $row = $this->fetchRow($e, $id);
         if ($row === null) {
-            throw new ApiException(404, ['error' => 'not_found', 'message' => 'Datensatz nicht gefunden']);
+            throw ApiException::of(404, 'not_found', Msg::of('msg_api.record_not_found', 'Record not found'));
         }
         $state = $row[$field['name']];
         $named = array_values(array_filter($def['transitions'], function ($t) use ($label) {
             return WorkflowParser::fold($t['label']) === WorkflowParser::fold(trim($label));
         }));
         if (!$named) {
-            throw new ApiException(422, ['error' => 'unknown_transition', 'message' => "Die Transition '" . trim($label)
-                . "' gibt es im Workflow {$def['name']} nicht", 'errors' => ['transition' => 'unbekannt']]);
+            throw ApiException::of(422, 'unknown_transition', Msg::of('msg_records.transition_unknown', "The transition '{transition}' "
+                . 'does not exist in the workflow {workflow}', ['transition' => trim($label), 'workflow' => $def['name']]), ApiException::fields([
+                'transition' => Msg::of('msg_records.unknown', 'unknown'),
+            ]));
         }
         $t = null;
         foreach ($named as $candidate) {
@@ -301,15 +318,17 @@ final class Cms
             }
         }
         if ($t === null) {
-            throw new ApiException(409, ['error' => 'invalid_state', 'state' => $state, 'message' => "Die Transition "
-                . "'{$named[0]['label']}' ist im Zustand '$state' nicht möglich (nur von '"
-                . implode("', '", array_column($named, 'from')) . "' aus)"]);
+            throw ApiException::of(409, 'invalid_state', Msg::of('msg_records.transition_state', "The transition '{transition}' is not "
+                . "possible in the state '{state}' (only from '{from}')", [
+                    'transition' => $named[0]['label'], 'state' => $state, 'from' => implode("', '", array_column($named, 'from')),
+                ]), ['state' => $state]);
         }
         $reason = Revisions::reason($reason);
         $this->memberships = $this->memberships ?? Workflows::memberships($this->pdo, $this->user);
         if (!Workflows::permitted($this->memberships, $t)) {
-            throw new ApiException(403, ['error' => 'forbidden', 'transition' => $t['label'],
-                'message' => "Keine Berechtigung für die Transition '{$t['label']}'"]);
+            throw ApiException::of(403, 'forbidden', Msg::of('msg_records.transition_forbidden', "No permission for the transition '{transition}'", [
+                'transition' => $t['label'],
+            ]), ['transition' => $t['label']]);
         }
         $set = [$field['name'] => $t['to']];
         if (RecordMeta::applies($e)) {
@@ -330,8 +349,8 @@ final class Cms
                 . SqlGenerator::q($field['name']) . ' = ?');
             $stmt->execute(array_merge(array_values($set), [$id, $state]));
             if ($stmt->rowCount() !== 1) {
-                throw new ApiException(409, ['error' => 'invalid_state', 'message' => 'Der Zustand wurde inzwischen von jemand '
-                    . 'anderem geändert. Bitte neu laden.']);
+                throw ApiException::of(409, 'invalid_state', Msg::of('msg_records.state_changed', 'The state has been changed by someone '
+                    . 'else in the meantime. Please reload.'));
             }
             $task = Workflows::recordTransition($this->pdo, $e['table'], $id, $t, $this->user);
             $row = $this->fetchRow($e, $id);
@@ -489,9 +508,10 @@ final class Cms
             if ($bytes > $limit) {
                 $stmt->closeCursor();
                 $fit = max(1, (int) floor(count($rows) * 0.8));
-                throw new ApiException(413, ['error' => 'response_too_large', 'message' => 'Die Antwort wäre zu groß: schon '
-                    . (count($rows) + 1) . ' von ' . $q->perPage . ' Zeilen dieser Seite überschreiten ' . round($limit / 1048576, 1)
-                    . " MB. Bitte per_page verkleinern (z. B. per_page=$fit).", 'per_page' => $q->perPage, 'suggested_per_page' => $fit]);
+                throw ApiException::of(413, 'response_too_large', Msg::of('msg_records.response_too_large', 'The response would be too '
+                    . 'large: already {rows} of {per_page} rows of this page exceed {mb} MB. Please reduce per_page (e.g. per_page={fit}).', [
+                        'rows' => count($rows) + 1, 'per_page' => $q->perPage, 'mb' => round($limit / 1048576, 1), 'fit' => $fit,
+                    ]), ['per_page' => $q->perPage, 'suggested_per_page' => $fit]);
             }
             $rows[(int) $row['id']] = array_diff_key($this->castRow($e, $row), $denied);
         }
@@ -564,7 +584,7 @@ final class Cms
         $e = $this->entity($table);
         $row = $this->fetchRow($e, $id);
         if ($row === null) {
-            throw new ApiException(404, ['error' => 'not_found', 'message' => 'Datensatz nicht gefunden']);
+            throw ApiException::of(404, 'not_found', Msg::of('msg_api.record_not_found', 'Record not found'));
         }
         return array_diff_key($row, $this->denied($e));
     }
@@ -590,8 +610,9 @@ final class Cms
         $values = $this->collectValues($e, $input, true, $errors);
         $links = $this->collectLinks($e, $input, $errors);
         $media = $this->collectMedia($e, $input, !$allowEmptyMedia, $errors);
-        if ($errors) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Ungültige Eingabe', 'errors' => $errors]);
+        $violations = $this->validation()->violations($e, $values, $errors);
+        if ($errors || $violations) {
+            throw Validation::failure($errors, $violations);
         }
         $this->rejectDuplicate($e, $values, null);
 
@@ -618,6 +639,7 @@ final class Cms
         return $row;
     }
 
+    /** PUT and PATCH /api/{entity}/{id}: both partial - fields not sent keep their stored value */
     public function update(string $table, int $id, array $input): array
     {
         return $this->updateRecord($this->entity($table), $id, $input, 'update', [])[0];
@@ -633,7 +655,7 @@ final class Cms
         $this->requireAction($e, 'update');
         $current = $this->fetchRow($e, $id);
         if ($current === null) {
-            throw new ApiException(404, ['error' => 'not_found', 'message' => 'Datensatz nicht gefunden']);
+            throw ApiException::of(404, 'not_found', Msg::of('msg_api.record_not_found', 'Record not found'));
         }
         $denied = $this->denied($e);
         $input = array_diff_key($input, $denied); // denied fields: the stored value stays
@@ -643,8 +665,8 @@ final class Cms
         $workflow = Workflows::fieldOf($e);
         if ($workflow !== null && array_key_exists($workflow['name'], $input)) {
             if ($input[$workflow['name']] !== $current[$workflow['name']]) {
-                $errors[$workflow['name']] = 'Der Zustand lässt sich nur über eine Workflow-Transition ändern (POST /api/'
-                    . $e['table'] . "/$id/transition).";
+                $errors[$workflow['name']] = Msg::of('msg_records.state_via_transition', 'The state can only be changed via a workflow '
+                    . 'transition (POST /api/{entity}/{id}/transition).', ['entity' => $e['table'], 'id' => $id]);
             }
             unset($input[$workflow['name']]);
         }
@@ -653,8 +675,10 @@ final class Cms
         $media = $this->collectMedia($e, $input, false, $errors);
         $errors += $this->selfLinkErrors($e, $id, $links);
         $this->rejectCycles($e, $id, $values, $errors);
-        if ($errors) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Ungültige Eingabe', 'errors' => $errors]);
+        // field rules against the complete record (stored state + change), see Validation
+        $violations = $this->validation()->violations($e, $values + $current, $errors + $denied);
+        if ($errors || $violations) {
+            throw Validation::failure($errors, $violations);
         }
         // PUT is partial: fields of the group that were not sent keep their stored value
         $this->rejectDuplicate($e, $values + $current, $id);
@@ -680,6 +704,77 @@ final class Cms
         return $result;
     }
 
+    // ---------------------------------------------------------------- Field rules (Validation)
+
+    /**
+     * GET /api/{entity}/{id}/_violations: rule violations of the stored record (the form marks the fields right when it is
+     * opened, not only when saving). Without denied fields. {violations: [{field, rule, message, params}]}
+     */
+    public function recordViolations(string $table, int $id): array
+    {
+        $e = $this->entity($table);
+        $row = $this->fetchRow($e, $id);
+        if ($row === null) {
+            throw ApiException::of(404, 'not_found', Msg::of('msg_api.record_not_found', 'Record not found'));
+        }
+        return ['violations' => $this->validation()->violations($e, $row, $this->denied($e))];
+    }
+
+    /**
+     * GET /api/_violations: all records that violate the current rules (e.g. after a stricter rule or a changed pattern -
+     * they are never changed automatically): [{entity, table, id, title, field, rule, message, params}], ordered by
+     * entity (diagram order), record and field. Computed anew on every call. Entities and fields denied to the caller are
+     * left out completely. At most $limit entries (total counts all).
+     *
+     * @return array{violations:array,total:int,limit:int,checked:array<string,int>}
+     */
+    public function ruleViolations(int $limit): array
+    {
+        $out = [];
+        $total = 0;
+        $checked = [];
+        foreach ($this->entityNames() as $table) {
+            $e = $this->model['entities'][$table];
+            $denied = $this->denied($e);
+            $ruled = array_values(array_filter($e['fields'], function ($f) use ($denied) {
+                return !empty($f['rules']) && !isset($denied[$f['name']]);
+            }));
+            if (!$ruled) {
+                continue;
+            }
+            $title = $this->visibleTitle($e);
+            $cols = array_unique(array_merge(['id'], $title, array_column($ruled, 'name')));
+            $stmt = $this->pdo->query('SELECT ' . implode(', ', array_map([SqlGenerator::class, 'q'], $cols)) . ' FROM '
+                . SqlGenerator::q($table) . ' ORDER BY "id"');
+            $checked[$table] = 0;
+            while (($row = $stmt->fetch()) !== false) {
+                $checked[$table]++;
+                $row = $this->castRow($e, $row);
+                $found = $this->validation()->violations(['fields' => $ruled], $row);
+                $total += count($found);
+                foreach ($found as $v) {
+                    if (count($out) >= $limit) {
+                        break;
+                    }
+                    $parts = array_filter(array_map(function ($name) use ($row) {
+                        return $name === 'id' || $row[$name] === null ? '' : (string) $row[$name];
+                    }, $title), 'strlen');
+                    $out[] = ['entity' => $e['name'], 'table' => $table, 'id' => (int) $row['id'],
+                        'title' => $parts ? implode(' ', $parts) : null] + $v;
+                }
+            }
+        }
+        return ['violations' => $out, 'total' => $total, 'limit' => $limit, 'checked' => $checked];
+    }
+
+    private function validation(): Validation
+    {
+        if ($this->validation === null) {
+            $this->validation = new Validation($this->pdo, $this->user);
+        }
+        return $this->validation;
+    }
+
     // ---------------------------------------------------------------- Versions (Revisions)
 
     /**
@@ -699,7 +794,8 @@ final class Cms
         $e = $this->historyEntity($table, $id);
         $rev = Revisions::one($this->pdo, $e['table'], $id, $version, $this->denied($e));
         if ($rev === null) {
-            throw new ApiException(404, ['error' => 'revision_not_found', 'message' => "Version $version gibt es nicht (mehr)"]);
+            throw ApiException::of(404, 'revision_not_found', Msg::of('msg_records.revision_not_found', 'Version {version} does not exist '
+                . '(any more)', ['version' => $version]));
         }
         return $rev;
     }
@@ -722,7 +818,8 @@ final class Cms
         $this->requireAction($e, 'update');
         $rev = Revisions::one($this->pdo, $e['table'], $id, $version, []);
         if ($rev === null) {
-            throw new ApiException(404, ['error' => 'revision_not_found', 'message' => "Version $version gibt es nicht (mehr)"]);
+            throw ApiException::of(404, 'revision_not_found', Msg::of('msg_records.revision_not_found', 'Version {version} does not exist '
+                . '(any more)', ['version' => $version]));
         }
         $snapshot = $rev['snapshot'];
         $current = $this->fetchRow($e, $id);
@@ -738,13 +835,16 @@ final class Cms
             $value = $snapshot[$name];
             if ($workflow !== null && $name === $workflow['name']) {
                 if ($value !== $current[$name]) {
-                    $skipped[] = ['field' => $name, 'reason' => 'Der Workflow-Status ändert sich nur über eine Transition.'];
+                    $skipped[] = ['field' => $name] + Msg::of('msg_records.skip_workflow', 'The workflow state only changes via a transition.')
+                        ->fields('reason');
                 }
                 continue;
             }
             $fk = $f['foreign_key'];
             if ($fk && $value !== null && $this->fetchIds($fk['table'], 'id', [(int) $value]) === []) {
-                $skipped[] = ['field' => $name, 'reason' => $this->model['entities'][$fk['table']]['name'] . " #$value gibt es nicht mehr."];
+                $skipped[] = ['field' => $name] + Msg::of('msg_records.skip_gone', '{entity} {ids} no longer exists.', [
+                    'entity' => $this->model['entities'][$fk['table']]['name'], 'ids' => "#$value",
+                ])->fields('reason');
                 continue;
             }
             $data[$name] = $value;
@@ -757,8 +857,9 @@ final class Cms
             $exist = $this->fetchIds($m['table'], 'id', $ids);
             $data[$m['name']] = array_values(array_intersect($ids, $exist));
             if ($gone = array_values(array_diff($ids, $exist))) {
-                $skipped[] = ['field' => $m['name'], 'reason' => $this->model['entities'][$m['table']]['name'] . ' #'
-                    . implode(', #', $gone) . ' gibt es nicht mehr.'];
+                $skipped[] = ['field' => $m['name']] + Msg::of('msg_records.skip_gone', '{entity} {ids} no longer exists.', [
+                    'entity' => $this->model['entities'][$m['table']]['name'], 'ids' => '#' . implode(', #', $gone),
+                ])->fields('reason');
             }
         }
         foreach ($e['media'] ?? [] as $m) {
@@ -771,7 +872,9 @@ final class Cms
                 return in_array($v, $exist, true);
             }));
             if ($gone = array_values(array_diff($ids, $exist))) {
-                $skipped[] = ['field' => $m['name'], 'reason' => 'Medium #' . implode(', #', $gone) . ' gibt es nicht mehr.'];
+                $skipped[] = ['field' => $m['name']] + Msg::of('msg_records.skip_media_gone', 'Medium {ids} no longer exists.', [
+                    'ids' => '#' . implode(', #', $gone),
+                ])->fields('reason');
             }
         }
         $data[Revisions::REASON_KEY] = $input[Revisions::REASON_KEY] ?? null;
@@ -784,8 +887,13 @@ final class Cms
             if (!$bad) {
                 throw $ex;
             }
+            $codes = (array) ($ex->payload['error_codes'] ?? []);
             foreach ($bad as $name => $message) {
-                $skipped[] = ['field' => $name, 'reason' => 'Passt nicht zum aktuellen Schema: ' . (is_string($message) ? $message : json_encode($message, JSON_UNESCAPED_UNICODE))];
+                $reason = isset($codes[$name]) ? Msg::fromArray(['message' => $message] + (array) $codes[$name])
+                    : Msg::of('msg_api.plain', '{text}', ['text' => is_string($message) ? $message : json_encode($message, JSON_UNESCAPED_UNICODE)]);
+                $skipped[] = ['field' => $name] + Msg::of('msg_records.skip_schema', 'Does not fit the current schema: {reason}', [
+                    'reason' => $reason,
+                ])->fields('reason');
             }
             [$row, $new] = $this->updateRecord($e, $id, array_diff_key($data, $bad), 'restore', $extra);
         }
@@ -821,10 +929,10 @@ final class Cms
     {
         $e = $this->entity($table);
         if ($this->user === null) {
-            throw new ApiException(401, ['error' => 'unauthorized', 'message' => 'Anmeldung erforderlich']);
+            throw ApiException::of(401, 'unauthorized', Msg::of('msg_auth.login_required', 'Login required'));
         }
         if ($this->fetchIds($e['table'], 'id', [$id]) === []) {
-            throw new ApiException(404, ['error' => 'not_found', 'message' => 'Datensatz nicht gefunden']);
+            throw ApiException::of(404, 'not_found', Msg::of('msg_api.record_not_found', 'Record not found'));
         }
         return $e;
     }
@@ -846,7 +954,7 @@ final class Cms
         $e = $this->entity($table);
         $this->requireAction($e, 'delete');
         if ($this->fetchIds($e['table'], 'id', [$id]) === []) {
-            throw new ApiException(404, ['error' => 'not_found', 'message' => 'Datensatz nicht gefunden']);
+            throw ApiException::of(404, 'not_found', Msg::of('msg_api.record_not_found', 'Record not found'));
         }
 
         // 1. Deletion set: the row + everything that depends on it via {cascade} FKs (recursively). The set also
@@ -895,13 +1003,11 @@ final class Cms
             $counts = array_map('count', $blockers);
             $parts = [];
             foreach ($counts as $child => $n) {
-                $parts[] = "$n abhängige Zeile(n) in '$child'";
+                $parts[] = Msg::of('msg_records.dependents', "{count} dependent row(s) in '{table}'", ['count' => $n, 'table' => $child]);
             }
-            throw new ApiException(409, [
-                'error'      => 'in_use',
-                'message'    => 'Kann nicht gelöscht werden: ' . implode(', ', $parts) . '.',
-                'dependents' => $counts,
-            ]);
+            throw ApiException::of(409, 'in_use', Msg::of('msg_records.delete_blocked', 'Cannot be deleted: {reasons}.', [
+                'reasons' => Msg::commaList($parts),
+            ]), ['dependents' => $counts]);
         }
 
         // 2b. Minimum count ("1..*" on the n side, e.g. Position "1..*" --> "1" Rechnung): if a row that
@@ -910,13 +1016,13 @@ final class Cms
         $lacking = $this->minViolations($doomed);
         if ($lacking) {
             $parts = array_map(function ($v) {
-                return "'{$v['entity']} #{$v['id']}' benötigt mindestens eine Zeile in '{$v['child_entity']}'";
+                return Msg::of('msg_records.min_row', "'{entity} #{id}' needs at least one row in '{child}'", [
+                    'entity' => $v['entity'], 'id' => $v['id'], 'child' => $v['child_entity'],
+                ]);
             }, $lacking);
-            throw new ApiException(409, [
-                'error'        => 'min_required',
-                'message'      => 'Kann nicht gelöscht werden: ' . implode(', ', $parts) . ' (Mindestanzahl).',
-                'min_required' => $lacking,
-            ]);
+            throw ApiException::of(409, 'min_required', Msg::of('msg_records.delete_min', 'Cannot be deleted: {reasons} (minimum count).', [
+                'reasons' => Msg::commaList($parts),
+            ]), ['min_required' => $lacking]);
         }
 
         // 3. Delete, row by row strictly "children before parents" (across all tables, see deletionOrder()):
@@ -957,10 +1063,7 @@ final class Cms
                 $this->pdo->rollBack();
             }
             if ($ex instanceof PDOException && $this->isConstraintError($ex)) {
-                throw new ApiException(409, [
-                    'error'   => 'in_use',
-                    'message' => 'Datensatz wird noch von anderen Datensätzen referenziert',
-                ]);
+                throw ApiException::of(409, 'in_use', Msg::of('msg_records.referenced', 'The record is still referenced by other records'));
             }
             throw $ex;
         }
@@ -993,10 +1096,10 @@ final class Cms
     {
         $key = strtolower($table);
         if (!isset($this->model['entities'][$key])) {
-            throw new ApiException(404, ['error' => 'unknown_entity', 'message' => "Unbekannte Entität '$table'"]);
+            throw ApiException::of(404, 'unknown_entity', Msg::of('msg_records.unknown_entity', "Unknown entity '{entity}'", ['entity' => $table]));
         }
         if ($this->access !== null && $this->access->entityDenied($key)) {
-            throw new ApiException(403, ['error' => 'forbidden', 'message' => "Keine Berechtigung für '$table'"]);
+            throw ApiException::of(403, 'forbidden', Msg::of('msg_records.entity_forbidden', "No permission for '{entity}'", ['entity' => $table]));
         }
         return $this->model['entities'][$key];
     }
@@ -1009,9 +1112,15 @@ final class Cms
     private function requireAction(array $e, string $action): void
     {
         if ($this->access !== null && $this->access->actionDenied($e['table'], $action)) {
-            $what = ['create' => 'Anlegen', 'update' => 'Bearbeiten', 'delete' => 'Löschen'][$action];
-            throw new ApiException(403, ['error' => 'forbidden', 'action' => $action,
-                'message' => "Keine Berechtigung zum $what in '{$e['name']}'"]);
+            $params = ['entity' => $e['name']];
+            if ($action === 'create') {
+                $message = Msg::of('msg_records.create_forbidden', "No permission to create in '{entity}'", $params);
+            } elseif ($action === 'update') {
+                $message = Msg::of('msg_records.update_forbidden', "No permission to edit in '{entity}'", $params);
+            } else {
+                $message = Msg::of('msg_records.delete_forbidden', "No permission to delete in '{entity}'", $params);
+            }
+            throw ApiException::of(403, 'forbidden', $message, ['action' => $action]);
         }
     }
 
@@ -1306,7 +1415,7 @@ final class Cms
             );
             $stmt->execute([(int) $values[$name], $id]);
             if ($stmt->fetchColumn()) {
-                $errors[$name] = 'Würde einen Zyklus erzeugen: Der Datensatz kann nicht sich selbst oder einem seiner Nachfahren untergeordnet werden';
+                $errors[$name] = Msg::of('msg_records.cycle', 'Would create a cycle: the record cannot be placed under itself or one of its descendants');
             }
         }
     }
@@ -1363,34 +1472,44 @@ final class Cms
         if ($oneToOne !== null) {
             $target = $this->model['entities'][$oneToOne['foreign_key']['table']]['name'];
             $ref = $target . ' #' . json_encode($values[$fields[0]] ?? null);
+            $params = ['ref' => $ref, 'entity' => $e['name'], 'id' => $existing, 'target' => $target];
             $message = $existing !== null
-                ? "$ref ist bereits {$e['name']} #$existing zugeordnet (1:1-Beziehung: höchstens eine Zuordnung je $target)."
-                : "$ref ist bereits einem anderen Datensatz von {$e['name']} zugeordnet (1:1-Beziehung: höchstens eine Zuordnung je $target).";
-            $fieldError = $existing !== null ? "Bereits {$e['name']} #$existing zugeordnet" : 'Bereits zugeordnet';
+                ? Msg::of('msg_records.one_to_one', '{ref} is already assigned to {entity} #{id} (1:1 relationship: at most one assignment '
+                    . 'per {target}).', $params)
+                : Msg::of('msg_records.one_to_one_other', '{ref} is already assigned to another record of {entity} (1:1 relationship: at '
+                    . 'most one assignment per {target}).', $params);
+            $fieldError = $existing !== null
+                ? Msg::of('msg_records.assigned_to', 'Already assigned to {entity} #{id}', $params)
+                : Msg::of('msg_records.assigned', 'Already assigned');
         } else {
             $parts = [];
             foreach ($fields as $name) {
                 $v = $values[$name] ?? null;
                 $parts[] = $name . ' = ' . (is_string($v) ? "'$v'" : json_encode($v));
             }
-            $where = $existing !== null ? " ({$e['name']} #$existing)" : '';
-            $message = count($fields) > 1
-                ? 'Die Kombination ' . implode(', ', $parts) . " existiert bereits$where."
-                : 'Der Wert ' . $parts[0] . " ist bereits vergeben$where.";
-            $fieldError = count($fields) > 1 ? 'Kombination existiert bereits' : 'Bereits vergeben';
+            $params = ['values' => implode(', ', $parts), 'entity' => $e['name'], 'id' => $existing];
+            if (count($fields) > 1) {
+                $message = $existing !== null
+                    ? Msg::of('msg_records.combination_exists_at', 'The combination {values} already exists ({entity} #{id}).', $params)
+                    : Msg::of('msg_records.combination_exists', 'The combination {values} already exists.', $params);
+                $fieldError = Msg::of('msg_records.combination_exists_short', 'Combination already exists');
+            } else {
+                $message = $existing !== null
+                    ? Msg::of('msg_records.value_taken_at', 'The value {values} is already taken ({entity} #{id}).', $params)
+                    : Msg::of('msg_records.value_taken', 'The value {values} is already taken.', $params);
+                $fieldError = Msg::of('msg_records.value_taken_short', 'Already taken');
+            }
         }
         // rule with a field denied for the caller: reveal neither its name nor its value
         $visible = array_values(array_diff($fields, array_keys($this->denied($e))));
         if ($visible !== $fields) {
-            $message = 'Diese Kombination existiert bereits (die Regel umfasst ein Feld, das für Sie gesperrt ist).';
+            $message = Msg::of('msg_records.combination_hidden', 'This combination already exists (the rule includes a field that is '
+                . 'denied for you).');
         }
-        return [
-            'error'         => 'duplicate',
-            'message'       => $message,
+        return ['error' => 'duplicate'] + $message->fields() + [
             'unique_fields' => $visible,
             'existing_id'   => $existing,
-            'errors'        => array_fill_keys($visible, $fieldError),
-        ];
+        ] + ApiException::fields(array_fill_keys($visible, $fieldError));
     }
 
     /**
@@ -1434,18 +1553,18 @@ final class Cms
                 if ($creating && $f['required'] && $f['type'] === 'visibility') {
                     $values[$name] = 0; // default value: draft
                 } elseif ($creating && $f['required']) {
-                    $errors[$name] = 'Pflichtfeld';
+                    $errors[$name] = Msg::of('msg_api.required', 'Required field');
                 }
                 continue;
             }
             try {
                 $value = self::coerce($f, $input[$name]);
             } catch (\InvalidArgumentException $ex) {
-                $errors[$name] = $ex->getMessage();
+                $errors[$name] = ValueException::msgOf($ex);
                 continue;
             }
             if ($value === null && $f['required']) {
-                $errors[$name] = 'Pflichtfeld';
+                $errors[$name] = Msg::of('msg_api.required', 'Required field');
                 continue;
             }
             $values[$name] = $value;
@@ -1464,13 +1583,13 @@ final class Cms
             }
             $ids = $input[$name] ?? [];
             if (!is_array($ids)) {
-                $errors[$name] = 'Liste von IDs erwartet';
+                $errors[$name] = Msg::of('msg_permissions.ids_expected', 'List of IDs expected');
                 continue;
             }
             $clean = [];
             foreach ($ids as $id) {
                 if (!is_int($id) && !(is_string($id) && preg_match('/^\d+$/', $id))) {
-                    $errors[$name] = 'Liste von IDs erwartet';
+                    $errors[$name] = Msg::of('msg_permissions.ids_expected', 'List of IDs expected');
                     continue 2;
                 }
                 $clean[(int) $id] = true;
@@ -1495,27 +1614,27 @@ final class Cms
             $name = $m['name'];
             if (!array_key_exists($name, $input)) {
                 if ($requireOnCreate && $m['required']) {
-                    $errors[$name] = 'Pflichtfeld: mindestens ein Medium auswählen';
+                    $errors[$name] = Msg::of('msg_records.media_required', 'Required field: select at least one medium');
                 }
                 continue;
             }
             $items = $input[$name] ?? [];
             if (!is_array($items) || ($items && array_keys($items) !== range(0, count($items) - 1))) {
-                $errors[$name] = 'Liste von Medien-IDs erwartet';
+                $errors[$name] = Msg::of('msg_records.media_ids_expected', 'List of media IDs expected');
                 continue;
             }
             $ids = [];
             foreach ($items as $item) {
                 $v = is_array($item) ? ($item['id'] ?? null) : $item;
                 if (!is_int($v) && !(is_string($v) && preg_match('/^\d+$/', $v))) {
-                    $errors[$name] = 'Liste von Medien-IDs erwartet';
+                    $errors[$name] = Msg::of('msg_records.media_ids_expected', 'List of media IDs expected');
                     continue 2;
                 }
                 $ids[(int) $v] = true;
             }
             $ids = array_keys($ids);
             if (!$ids && $m['required']) {
-                $errors[$name] = 'Pflichtfeld: mindestens ein Medium auswählen';
+                $errors[$name] = Msg::of('msg_records.media_required', 'Required field: select at least one medium');
                 continue;
             }
             if ($ids) {
@@ -1524,9 +1643,9 @@ final class Cms
                 $stmt->execute($ids);
                 $missing = array_diff($ids, array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN)));
                 if ($missing) {
-                    $errors[$name] = 'Medium ' . implode(', ', array_map(function ($i) {
+                    $errors[$name] = Msg::of('msg_records.media_missing', 'Medium {ids} does not exist', ['ids' => implode(', ', array_map(function ($i) {
                         return "#$i";
-                    }, $missing)) . ' existiert nicht';
+                    }, $missing))]);
                     continue;
                 }
             }
@@ -1564,7 +1683,7 @@ final class Cms
         $errors = [];
         foreach ($e['many_to_many'] as $m) {
             if ($m['table'] === $e['table'] && in_array($id, $links[$m['name']] ?? [], true)) {
-                $errors[$m['name']] = 'Ein Datensatz kann nicht mit sich selbst verknüpft werden';
+                $errors[$m['name']] = Msg::of('msg_records.self_link', 'A record cannot be linked to itself');
             }
         }
         return $errors;
@@ -1581,7 +1700,7 @@ final class Cms
         // when creating, this can only be checked here (the ID is only known now); the transaction is then rolled back
         $selfErrors = $this->selfLinkErrors($e, $id, $links);
         if ($selfErrors) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Ungültige Eingabe', 'errors' => $selfErrors]);
+            throw ApiException::invalid($selfErrors);
         }
         foreach ($e['many_to_many'] as $m) {
             if (!isset($links[$m['name']])) {
@@ -1617,7 +1736,7 @@ final class Cms
                 if (is_int($value) || (is_string($value) && preg_match('/^-?\d+$/', trim($value)))) {
                     return (int) $value;
                 }
-                throw new \InvalidArgumentException('Ganzzahl erwartet');
+                throw new ValueException(Msg::of('msg_records.int_expected', 'Integer expected'));
             case 'decimal':
                 // Integers and floating point numbers (decimal point, not comma - JSON/<input type=number> always deliver
                 // a point, independent of the browser's display locale).
@@ -1627,7 +1746,7 @@ final class Cms
                 if (is_string($value) && preg_match('/^-?\d+(\.\d+)?$/', trim($value))) {
                     return (float) $value;
                 }
-                throw new \InvalidArgumentException('Zahl erwartet');
+                throw new ValueException(Msg::of('msg_records.number_expected', 'Number expected'));
             case 'bool':
             case 'visibility':
                 if ($value === true || $value === 1 || $value === '1' || $value === 'true' || $value === 'on') {
@@ -1636,7 +1755,7 @@ final class Cms
                 if ($value === false || $value === 0 || $value === '0' || $value === 'false' || $value === 'off') {
                     return 0;
                 }
-                throw new \InvalidArgumentException('true oder false erwartet');
+                throw new ValueException(Msg::of('msg_api.bool_expected', 'true or false expected'));
             case 'date':
                 if (is_string($value)) {
                     $d = \DateTime::createFromFormat('!Y-m-d', $value);
@@ -1644,20 +1763,20 @@ final class Cms
                         return $value;
                     }
                 }
-                throw new \InvalidArgumentException('Datum im Format JJJJ-MM-TT erwartet');
+                throw new ValueException(Msg::of('msg_records.date_expected', 'Date in the format YYYY-MM-DD expected'));
             case 'enum':
                 // exactly one of the declared values (case-sensitive, as with the CHECK constraint)
                 if (is_string($value) && in_array($value, $f['enum_values'], true)) {
                     return $value;
                 }
-                throw new \InvalidArgumentException(
-                    "Ungültiger Wert für '{$f['name']}'. Erlaubt: " . implode(', ', $f['enum_values']) . '.'
-                );
+                throw new ValueException(Msg::of('msg_records.enum_invalid', "Invalid value for '{field}'. Allowed: {values}.", [
+                    'field' => $f['name'], 'values' => implode(', ', $f['enum_values']),
+                ]));
             default: // string, text, richtext
                 if (is_scalar($value)) {
                     return (string) $value;
                 }
-                throw new \InvalidArgumentException('Text erwartet');
+                throw new ValueException(Msg::of('msg_api.text_expected', 'Text expected'));
         }
     }
 
@@ -1693,10 +1812,8 @@ final class Cms
                 }
             }
             if ($this->isConstraintError($ex)) {
-                throw new ApiException(422, [
-                    'error'   => 'constraint',
-                    'message' => 'Verweis auf einen nicht vorhandenen Datensatz oder Pflichtfeld fehlt',
-                ]);
+                throw ApiException::of(422, 'constraint', Msg::of('msg_records.constraint', 'Reference to a non-existent record or required '
+                    . 'field missing'));
             }
             throw $ex;
         } catch (\Throwable $ex) {

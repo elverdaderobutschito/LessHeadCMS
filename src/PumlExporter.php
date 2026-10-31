@@ -49,54 +49,62 @@ final class PumlExporter
      * either - otherwise e.g. a name with "}" and a line break could create another class in the text. Whether the diagram
      * is valid as a schema is checked by the parser afterwards.
      *
-     * @return string[] error messages (empty = fine)
+     * @return Msg[] error messages (empty = fine)
      */
     public static function check($model): array
     {
         if (!is_array($model)) {
-            return ['Model-JSON erwartet.'];
+            return [Msg::of('msg_export.model_expected', 'Model JSON expected.')];
         }
         $errors = [];
-        $list = function (string $key, array $in, string $where) use (&$errors): array {
+        $list = function (string $key, array $in, Msg $where) use (&$errors): array {
             $v = $in[$key] ?? null;
             if (!is_array($v) || array_values($v) !== $v) {
-                $errors[] = "$where: '$key' muss eine Liste sein.";
+                $errors[] = Msg::of('msg_export.list_expected', "{where}: '{key}' must be a list.", ['where' => $where, 'key' => $key]);
                 return [];
             }
             return $v;
         };
-        $text = function (array $in, string $key, string $where, string $pattern, bool $nullable = false) use (&$errors): void {
+        $text = function (array $in, string $key, Msg $where, string $pattern, bool $nullable = false) use (&$errors): void {
             $v = $in[$key] ?? null;
             if ($v === null && $nullable) {
                 return;
             }
             if (!is_string($v) || !preg_match($pattern, $v)) {
-                $errors[] = "$where: ungültiger Wert für '$key'" . (is_string($v) ? " ('$v')" : '') . '.';
+                $errors[] = is_string($v)
+                    ? Msg::of('msg_export.value_invalid_shown', "{where}: invalid value for '{key}' ('{value}').", ['where' => $where, 'key' => $key, 'value' => $v])
+                    : Msg::of('msg_export.value_invalid', "{where}: invalid value for '{key}'.", ['where' => $where, 'key' => $key]);
             }
         };
-        $flag = function (array $in, string $key, string $where) use (&$errors): void {
+        $flag = function (array $in, string $key, Msg $where) use (&$errors): void {
             if (!is_bool($in[$key] ?? null)) {
-                $errors[] = "$where: '$key' muss true oder false sein.";
+                $errors[] = Msg::of('msg_export.bool_expected', "{where}: '{key}' must be true or false.", ['where' => $where, 'key' => $key]);
             }
         };
+        $object = function (Msg $where): Msg {
+            return Msg::of('msg_export.object_expected', '{where}: object expected.', ['where' => $where]);
+        };
+        $root = Msg::of('msg_export.model', 'Model');
         $label = '/^[^\r\n{}]*$/u'; // one line, without {}
-        foreach ($list('enums', $model, 'Model') as $i => $en) {
-            $where = 'Enum ' . ($i + 1);
+        foreach ($list('enums', $model, $root) as $i => $en) {
+            $where = Msg::of('msg_export.enum', 'Enum {n}', ['n' => $i + 1]);
             if (!is_array($en)) {
-                $errors[] = "$where: Objekt erwartet.";
+                $errors[] = $object($where);
                 continue;
             }
             $text($en, 'name', $where, self::IDENT);
             foreach ($list('values', $en, $where) as $v) {
                 if (!is_string($v) || !preg_match(self::IDENT, $v)) {
-                    $errors[] = "$where: ungültiger Wert " . json_encode($v, JSON_UNESCAPED_UNICODE) . '.';
+                    $errors[] = Msg::of('msg_export.enum_value', '{where}: invalid value {value}.', [
+                        'where' => $where, 'value' => json_encode($v, JSON_UNESCAPED_UNICODE),
+                    ]);
                 }
             }
         }
-        foreach ($list('entities', $model, 'Model') as $i => $e) {
-            $where = 'Entität ' . ($i + 1);
+        foreach ($list('entities', $model, $root) as $i => $e) {
+            $where = Msg::of('msg_export.entity', 'Entity {n}', ['n' => $i + 1]);
             if (!is_array($e)) {
-                $errors[] = "$where: Objekt erwartet.";
+                $errors[] = $object($where);
                 continue;
             }
             $text($e, 'name', $where, self::IDENT);
@@ -107,7 +115,7 @@ final class PumlExporter
             foreach (['title_fields', 'unique_fields'] as $k) {
                 foreach ($list($k, $e, $where) as $n) {
                     if (!is_string($n)) {
-                        $errors[] = "$where: '$k' enthält keinen Namen.";
+                        $errors[] = Msg::of('msg_export.no_name', "{where}: '{key}' contains no name.", ['where' => $where, 'key' => $k]);
                     }
                 }
             }
@@ -115,20 +123,22 @@ final class PumlExporter
             $sections = [];
             foreach (array_key_exists('sections', $e) ? $list('sections', $e, $where) : [] as $title) {
                 if (!is_string($title) || !self::validSection($title)) {
-                    $errors[] = "$where: ungültiger Abschnittstitel " . json_encode($title, JSON_UNESCAPED_UNICODE)
-                        . ' (einzeilig, nicht leer, ohne { und }).';
+                    $errors[] = Msg::of('msg_export.section_invalid', '{where}: invalid section title {title} (one line, not empty, '
+                        . 'without { and }).', ['where' => $where, 'title' => json_encode($title, JSON_UNESCAPED_UNICODE)]);
                     continue;
                 }
                 if (isset($sections[mb_strtolower($title, 'UTF-8')])) {
-                    $errors[] = "$where: Abschnitt '$title' doppelt.";
+                    $errors[] = Msg::of('msg_export.section_twice', "{where}: section '{title}' twice.", ['where' => $where, 'title' => $title]);
                 }
                 $sections[mb_strtolower($title, 'UTF-8')] = $title;
             }
             $section = function (array $in) use (&$errors, $where, $sections): void {
                 $v = $in['section'] ?? null;
                 if ($v !== null && (!is_string($v) || !in_array($v, $sections, true))) {
-                    $errors[] = "$where: Feld '" . (is_string($in['name'] ?? null) ? $in['name'] : '?') . "' gehört zu einem "
-                        . 'unbekannten Abschnitt ' . json_encode($v, JSON_UNESCAPED_UNICODE) . '.';
+                    $errors[] = Msg::of('msg_export.section_unknown', "{where}: field '{field}' belongs to an unknown section {section}.", [
+                        'where' => $where, 'field' => is_string($in['name'] ?? null) ? $in['name'] : '?',
+                        'section' => json_encode($v, JSON_UNESCAPED_UNICODE),
+                    ]);
                 }
             };
             $names = [];
@@ -144,12 +154,13 @@ final class PumlExporter
                 sort($sorted);
                 sort($known);
                 if ($sorted !== $known) {
-                    $errors[] = "$where: 'field_order' muss genau die Namen der Felder und Medien-Felder enthalten.";
+                    $errors[] = Msg::of('msg_export.field_order', "{where}: 'field_order' must contain exactly the names of the fields and "
+                        . 'media fields.', ['where' => $where]);
                 }
             }
             foreach ($list('fields', $e, $where) as $f) {
                 if (!is_array($f)) {
-                    $errors[] = "$where: Feld als Objekt erwartet.";
+                    $errors[] = Msg::of('msg_export.field_object', '{where}: field expected as an object.', ['where' => $where]);
                     continue;
                 }
                 $section($f);
@@ -160,10 +171,27 @@ final class PumlExporter
                 }
                 $text($f, 'renamed_from', $where, self::IDENT, true);
                 $flag($f, 'required', $where);
+                // rules (Validation): missing in model JSON without rules; the values must be single tokens (number, date,
+                // pattern name) - whether they fit the type is checked by the parser afterwards
+                $seenRules = [];
+                foreach (array_key_exists('rules', $f) ? $list('rules', $f, $where) : [] as $r) {
+                    $type = is_array($r) ? ($r['type'] ?? null) : null;
+                    $value = is_array($r) ? ($r['value'] ?? null) : null;
+                    if (!in_array($type, Validation::RULES, true) || isset($seenRules[$type])
+                        || !(is_int($value) || is_float($value) || (is_string($value) && preg_match('/^-?[A-Za-z0-9_][A-Za-z0-9_.\-]*$/', $value)))) {
+                        $errors[] = Msg::of('msg_export.rule_invalid', "{where}: field '{field}' has an invalid rule {rule} (expected "
+                            . '{type: {types}, value}).', [
+                                'where' => $where, 'field' => is_string($f['name'] ?? null) ? $f['name'] : '?',
+                                'rule' => json_encode($r, JSON_UNESCAPED_UNICODE), 'types' => implode('|', Validation::RULES),
+                            ]);
+                        continue;
+                    }
+                    $seenRules[$type] = true;
+                }
             }
             foreach ($list('media', $e, $where) as $m) {
                 if (!is_array($m)) {
-                    $errors[] = "$where: Medien-Feld als Objekt erwartet.";
+                    $errors[] = Msg::of('msg_export.media_object', '{where}: media field expected as an object.', ['where' => $where]);
                     continue;
                 }
                 $text($m, 'name', $where, self::IDENT);
@@ -172,14 +200,14 @@ final class PumlExporter
                 $section($m);
             }
         }
-        foreach ($list('relations', $model, 'Model') as $i => $r) {
-            $where = 'Beziehung ' . ($i + 1);
+        foreach ($list('relations', $model, $root) as $i => $r) {
+            $where = Msg::of('msg_export.relation', 'Relationship {n}', ['n' => $i + 1]);
             if (!is_array($r)) {
-                $errors[] = "$where: Objekt erwartet.";
+                $errors[] = $object($where);
                 continue;
             }
             if (!in_array($r['kind'] ?? null, ['n1', 'one_to_one', 'nn'], true)) {
-                $errors[] = "$where: 'kind' muss n1, one_to_one oder nn sein.";
+                $errors[] = Msg::of('msg_export.kind_invalid', "{where}: 'kind' must be n1, one_to_one or nn.", ['where' => $where]);
             }
             $text($r, 'from_entity', $where, self::IDENT);
             $text($r, 'to_entity', $where, self::IDENT);
@@ -300,6 +328,7 @@ final class PumlExporter
                 if (($f['renamed_from'] ?? null) !== null) {
                     $markers .= ' {renamed_from:' . $f['renamed_from'] . '}';
                 }
+                $markers .= Validation::markers(array_column($f['rules'] ?? [], 'value', 'type'));
                 // the id is never optional ("required" is internally false there)
                 $optional = !$f['required'] && empty($f['primary']) ? '?' : '';
                 $out[] = "  + {$f['name']}: $type$optional$markers";

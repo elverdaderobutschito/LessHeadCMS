@@ -111,14 +111,13 @@ final class Revisions
             return null;
         }
         if (!is_string($value)) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Ungültige Eingabe',
-                'errors' => [self::REASON_KEY => 'Text erwartet']]);
+            throw ApiException::invalid([self::REASON_KEY => Msg::of('msg_api.text_expected', 'Text expected')]);
         }
         $value = trim($value);
         $length = function_exists('mb_strlen') ? mb_strlen($value, 'UTF-8') : strlen($value);
         if ($length > self::REASON_MAX) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Ungültige Eingabe',
-                'errors' => [self::REASON_KEY => 'Höchstens ' . self::REASON_MAX . ' Zeichen']]);
+            throw ApiException::invalid([self::REASON_KEY => Msg::of('msg_api.max_chars', 'At most {max} characters',
+                ['max' => self::REASON_MAX])]);
         }
         return $value === '' ? null : $value;
     }

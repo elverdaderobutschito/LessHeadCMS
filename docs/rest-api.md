@@ -8,11 +8,14 @@ _Part of the [LessHeadCMS documentation](../README.md)._
 | Method  | Path                    | Access        | Description                                             |
 |---------|-------------------------|---------------|---------------------------------------------------------|
 | GET     | `/api`                  | public        | list of the entities                                    |
-| GET     | `/api/{entity}/_schema` | public        | `package` (name of the `package` block or `null`), field name, type (for `enum` additionally `enum_values`), `required`, `foreign_key` (target table, `title_field`, `label`, `on_delete`, `one_to_one`), `many_to_many` (`name`, target table, `title_field`, `label`, `show_label`, `symmetric`), `unique_fields` (`{unique}` group), only for media fields additionally `media` (`name`, `type: "media"`, `required`), `field_order` (display order, see below), only for classes with form sections `sections` and `section` per entry, `system_fields` (record metadata `created_at`/`created_by`/`updated_at`/`updated_by`, see [Record metadata](record-metadata.md); public without the two user fields) |
+| GET     | `/api/{entity}/_schema` | public        | `package` (name of the `package` block or `null`), field name, type (for `enum` additionally `enum_values`, for fields with [field rules](validation.md) `rules`), `required`, `foreign_key` (target table, `title_field`, `label`, `on_delete`, `one_to_one`), `many_to_many` (`name`, target table, `title_field`, `label`, `show_label`, `symmetric`), `unique_fields` (`{unique}` group), only for media fields additionally `media` (`name`, `type: "media"`, `required`), `field_order` (display order, see below), only for classes with form sections `sections` and `section` per entry, `system_fields` (record metadata `created_at`/`created_by`/`updated_at`/`updated_by`, see [Record metadata](record-metadata.md); public without the two user fields) |
 | GET     | `/api/{entity}`         | public        | records, **always paginated** (default: page 1 with 50 rows) – see "Lists: paging, sorting, filtering" |
 | GET     | `/api/{entity}/{id}`    | public        | one record                                              |
 | POST    | `/api/{entity}`         | **session**   | create (JSON body) → 201                                |
-| PUT     | `/api/{entity}/{id}`    | **session**   | change; only fields sent are changed                    |
+| PUT     | `/api/{entity}/{id}`    | **session**   | change; only fields sent are changed; the merged record is checked against the [field rules](validation.md) |
+| PATCH   | `/api/{entity}/{id}`    | **session**   | the same as `PUT`                                       |
+| GET     | `/api/{entity}/{id}/_violations` | **session** | [field rule](validation.md) violations of the stored record `{violations: [{field, rule, message, params}]}` (without denied fields) |
+| GET     | `/api/_violations`      | admin or system area „violations“ | all records violating the current field rules, see [Field rules](validation.md) |
 | DELETE  | `/api/{entity}/{id}`    | **session**   | delete → `{"deleted": id}`, with `{cascade}` additionally `"cascade_deleted": {"<table>": n}` |
 | GET     | `/api/{entity}/{id}/revisions` | **session** | versions of the record, newest first – see [Record versions](record-versions.md) |
 | GET     | `/api/{entity}/{id}/revisions/{version}` | **session** | one version with its snapshot |
@@ -183,10 +186,10 @@ is used anywhere at all**. This applies to the thumbnails (`…_thumb.<extension
 | PUT     | `/api/_languages/{id}`            | Admin. Body `{"code"?, "name"?, "date_format"?, "datetime_format"?, "decimal_separator"?, "thousands_separator"?}` (also for the default language; what is not sent stays); `422` with `errors` per field for an invalid format |
 | DELETE  | `/api/_languages/{id}`            | Admin. `{"deleted", "translations_removed"}`; default language → `409 default_language` |
 | PUT     | `/api/_prefs/language`            | any role. Body `{"language_id"}` → as GET `/api/_languages` |
-| GET     | `/api/_translations?language_id=` | Admin. `{"language", "groups": [{title, kind: "entity"\|"enum", abstract, items: [{kind, ref_id, ref, value, original, type, text}]}], "ui_texts": {key: text}}`; default language → `422` |
+| GET     | `/api/_translations?language_id=` | Admin. `{"language", "groups": [{title, kind: "entity"\|"enum", abstract, items: [{kind, ref_id, ref, value, original, type, text}]}], "ui_texts": {key: text}, "ui_builtin": {key: text}, "ui_builtin_sources": {key: "shipped"\|"custom"}, "german"}` – `ui_texts` are the stored texts (overrides of the built-in ones), `ui_builtin` the built-in texts of the language from the language files with their source, `german` whether the German source texts are built in |
 | PUT     | `/api/_translations`              | Admin. Body `{"language_id", "items": [{kind, ref_id, value?, text}]}` → `{"saved", "removed"}`; empty text removes; element not in the active schema or, for `kind: "ui_text"`, not a valid key (`area.name`, at most 100 characters) → `422`, then nothing is saved |
 | GET     | `/api/_i18n`                      | any role. Display texts in the own language: `{"language", "entities": {table: {entity, fields: {field: text}, many: {list: text}, enum_values: {field: {value: text}}}}}`; empty for the default language |
-| GET     | `/api/_ui_texts?lang=`            | **without login**. Translated fixed UI texts `{"language": {code, name, is_default}\|null, "texts": {key: text}}`: with a session (also during the mandatory password change) the language of the user, otherwise the one for the code `lang`, otherwise the default language; `texts` empty for the default language |
+| GET     | `/api/_ui_texts?lang=`            | **without login**. Translated fixed UI texts `{"language": {code, name, is_default}\|null, "texts": {key: text}}`: with a session (also during the mandatory password change) the language of the user, otherwise the one for the code `lang`, otherwise the default language; also `german`, `builtin` (texts from the language files) and `fallback` (fallback chain, see [Error responses and messages](#error-responses-and-messages)) |
 | GET     | `/api/_translations/export?lang=` | Admin. `lang` = ID of the language → file `<code>.csv` (`text/csv`, `Content-Disposition: attachment`) with all stored translations, for the format see [Translations as CSV](multilingual.md) |
 | GET     | `/api/_translations/files`        | Admin. `{"directory": "translations", "files": [{name, size, modified}]}` – the `.csv` files in `translations/` (empty if the directory does not exist) |
 | POST    | `/api/_translations/import/preview` | Admin. Body `{"language_id", "content": "<CSV text>"}` or `{"language_id", "file": "en.csv"}` (file from `translations/`) → `{"applied": false, "language", "file", "rows", "new", "changed", "unchanged", "skipped", "changed_rows": [{line, kind, ref, old, new}], "skipped_rows": [{line, kind, ref, reason}]}` (lists shortened to 200 entries); saves nothing. No header line `kind,ref,text`/not UTF-8/above 2 MB → `422`, file or language unknown → `404` |
@@ -220,16 +223,17 @@ of the records knows nothing about sections.
 **`unique_fields` in `_schema`** (at the top level): the `{unique}` group of the entity as a list of column names, e.g.
 `["bestellung_id", "variante_id"]` (first fields in diagram order, then FK columns in relation order), `[]`
 without a rule. A `POST`/`PUT` that would create an existing combination gets `409`:
-`{"error": "duplicate", "message": "Die Kombination bestellung_id = 3, variante_id = 7 existiert bereits (Bestellposition #12).",
-"unique_fields": […], "existing_id": 12, "errors": {"bestellung_id": "Kombination existiert bereits", …}}` (for a
-single column „Der Wert code = 'X' ist bereits vergeben (Gutschein #4).“ / „Bereits vergeben“). The form of the
-editorial UI shows the message and marks the fields involved. A `PUT` is partial: missing columns of the
+`{"error": "duplicate", "message": "The combination bestellung_id = 3, variante_id = 7 already exists (Bestellposition #12).",
+"code": "msg_records.combination_exists_at", "params": {…}, "unique_fields": […], "existing_id": 12,
+"errors": {"bestellung_id": "Combination already exists", …}, "error_codes": {…}}` (for a single column „The value code = 'X'
+is already taken (Gutschein #4).“ / „Already taken“). The form of the editorial UI shows the message in the display
+language and marks the fields involved. A `PUT` is partial: missing columns of the
 group count with their stored value; the own row never counts as a duplicate. If a parallel duplicate gets ahead of the
 check, the database constraint kicks in (also `409`, then `existing_id: null`).
 
 **1:1 (`foreign_key.one_to_one: true`):** The same `409 duplicate` response if a target row is already assigned to another
-row, with `unique_fields: ["nutzer_id"]` and the message „Nutzer #3 ist bereits Profil #1 zugeordnet
-(1:1-Beziehung: höchstens eine Zuordnung je Nutzer).“ (field: „Bereits Profil #1 zugeordnet“). The 1:1 column does **not**
+row, with `unique_fields: ["nutzer_id"]` and the message „Nutzer #3 is already assigned to Profil #1
+(1:1 relationship: at most one assignment per Nutzer).“ (field: „Already assigned to Profil #1“). The 1:1 column does **not**
 appear in `unique_fields` (that stays the `{unique}` group); `one_to_one` is enough. In the
 FK select and in the search dialog (magnifier), the editorial UI hides target rows that are already referenced by another row (the own one stays
 selectable when editing); the `409` message only appears if someone has assigned the row in parallel. Older
@@ -297,10 +301,75 @@ then `curl -b jar.txt -X POST …/api/artikel -d '{…}'`.
 declaring side delivers and accepts an ID list, e.g. `"tag_ids": [1, 2]` for `artikel`. Errors: `400` (not JSON), `404`,
 `401`/`403` (see above), `409` (record is still referenced; when deleting with `"dependents": {"<table>": n}`;
 last row of a relationship with a minimum count: `"error": "min_required"`;
-for `{unique}` `"error": "duplicate"`, see `unique_fields`), `422` (validation, with `errors` per field), `503` (not bootstrapped yet).
+for `{unique}` `"error": "duplicate"`, see `unique_fields`), `422` (validation, with `errors` per field and `violations`
+`[{field, rule, code, message, params}]`, see [Field rules](validation.md)), `503` (not bootstrapped yet). The shape of
+all error responses: [Error responses and messages](#error-responses-and-messages).
 
 Example:
 
 ```bash
 curl -b jar.txt -X POST https://<host>/api/artikel -d '{"titel":"Hallo","inhalt":"# Hi","veroeffentlicht":true,"erstellt_am":"2026-09-20","gehort_zu_kategorie_id":1,"geschrieben_von_autor_id":1,"tag_ids":[1,2]}'
 ```
+
+## Error responses and messages
+
+English is the language of the API. Every text the server produces – error responses, validation, schema and workflow
+errors, migration hints, warnings, the results of the test data generator and of webhook calls – is a short English
+sentence. Next to it the response carries a stable **code** and its **params**; a client that wants to show the text in
+another language (or react to a particular problem) uses `code` + `params`, never the wording of `message`, which may be
+improved at any time.
+
+```json
+{
+  "error": "not_found",
+  "message": "Record not found",
+  "code": "msg_api.record_not_found",
+  "params": {}
+}
+```
+
+* `error` stays the coarse machine-readable category (`validation`, `duplicate`, `in_use`, `schema_error`, `forbidden`,
+  …) as before; `code` names the exact message (`msg_<area>.<name>`, e.g. `msg_schema.class_twice`,
+  `msg_records.delete_blocked`, `validation.length_max`).
+* `params` fills the `{placeholders}` of the message. A param can itself be a message `{code, params, message}` (e.g. a
+  list of reasons) or a number `{"type": "number", "value": 2.5, "decimals": 1}` that a client formats for its language.
+* Field errors: `errors` `{field: English text}` stays as it was; `error_codes` `{field: {code, params}}` names the
+  first problem of each field. A failed save additionally lists every problem in `violations`
+  `[{field, rule, code, message, params}]` (see [Field rules](validation.md)).
+* Lists and analysis results carry the code next to the text in the same object: the items of `changes`, `blockers`,
+  `confirmations`, `backfills` of the schema analysis (`text`, `code`, `params`), rename options and backfill choices
+  (`label`, `code`, `params`), skipped entries of a restore (`reason`, `code`, `params`). Where a text stands on its own
+  field, the code is a sibling field with the suffix `_code`: `warning` / `warning_code`, `problem` / `problem_code`,
+  webhook calls `error` / `error_code`, the parser warnings of the model JSON `warnings` / `warning_codes` (same order),
+  the test data generator `skipped` / `skipped_codes` and `failed` / `failed_codes` (per table).
+* Messages written by admins are content, not server texts: messages of own patterns come in the display language of the
+  user (see [Field rules](validation.md)) and carry no code. The messages of the built-in patterns (`email`, `url`, `slug`,
+  `plz`) are server texts with a code (`msg_patterns.builtin_*`) – unless the admin has entered a translation for them,
+  which then comes as content without a code.
+
+The editorial UI translates every server message through its code into the display language (German source texts plus
+the translations under Lokalisierung → Übersetzungen, group „Servermeldungen“; the bundled `translations/en.csv` holds
+the English texts and acts without an import, like custom language files – see
+[Multilingual – built-in translations from files](multilingual.md#built-in-translations-from-files-three-sources)).
+
+**Fallback chain.** Server messages fall back exactly like the fixed UI texts – one chain, resolved in one place
+(`frontend/src/components/i18n.js`, fed by `GET /api/_ui_texts`):
+
+1. display language of the user: its own translations, then its built-in texts (custom language file, shipped language
+   file such as `translations/en.csv` for English, the German source texts for a German language),
+2. default language of the installation, the same way – own translations (overrides, also for German or English as
+   default language) before the built-in texts,
+3. English (the built-in English texts: `translations/en.csv`, adapted by a custom `en.csv`),
+4. last resort: the English `message` of the response – never an empty text or the bare code. (A fixed UI text without
+   any text falls back to its German source text.)
+
+Menus and messages of one screen are therefore always in the same language: a display language with no or only some
+translations shows the rest as its built-in text (if it has a language file), otherwise in the default language, and
+with English as default language in English. Messages of own
+patterns: translation in the display language → override of the default language → the message as stored.
+
+`GET /api/_ui_texts` returns `{language, texts, german, builtin, fallback}`: `texts` the translations of the display
+language (database), `builtin` its texts from the language files (custom file over shipped file, per key), `german`
+whether it has the German source texts built in, `fallback` the further steps `[{texts, german, builtin}]` (the default
+language if it is not the display language, then English – the latter only if no step before is German or English, as
+those cover every key). Without languages: `{language: null, texts: {}, german: true, builtin: {}, fallback: []}`.

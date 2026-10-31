@@ -204,11 +204,12 @@ final class Settings
         foreach ($input as $name => $value) {
             $def = self::DEFINITIONS[$name] ?? null;
             if ($def === null) {
-                $errors[(string) $name] = 'Unbekannte Einstellung';
+                $errors[(string) $name] = Msg::of('msg_settings.unknown', 'Unknown setting');
             } elseif ($def[0] === 'bool' && !is_bool($value)) {
-                $errors[$name] = 'true oder false erwartet';
+                $errors[$name] = Msg::of('msg_api.bool_expected', 'true or false expected');
             } elseif ($def[0] === 'int' && (!is_int($value) || $value < $def[2] || $value > $def[3])) {
-                $errors[$name] = "Ganze Zahl von {$def[2]} bis {$def[3]} erwartet";
+                $errors[$name] = Msg::of('msg_settings.int_range', 'Whole number from {min} to {max} expected',
+                    ['min' => $def[2], 'max' => $def[3]]);
             }
         }
         if (!$errors) {
@@ -216,11 +217,11 @@ final class Settings
             $after = $input + self::all($pdo);
             if ($after[self::LIST_DEFAULT_PER_PAGE] > $after[self::LIST_MAX_PER_PAGE]) {
                 $errors[isset($input[self::LIST_DEFAULT_PER_PAGE]) ? self::LIST_DEFAULT_PER_PAGE : self::LIST_MAX_PER_PAGE]
-                    = 'Die Standard-Seitengröße darf nicht über der größten Seitengröße liegen';
+                    = Msg::of('msg_settings.default_above_max', 'The default page size must not be larger than the largest page size');
             }
         }
         if ($errors) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Ungültige Eingabe', 'errors' => $errors]);
+            throw ApiException::invalid($errors);
         }
         Database::ensureMetaTable($pdo);
         foreach ($input as $name => $value) {

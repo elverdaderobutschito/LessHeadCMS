@@ -144,6 +144,15 @@ namespace LessHeadCMS;
  * class are not an error (like an unused enum). In the model: 'workflows' (all definitions of the active file) only if a
  * workflow file is active - without one the model is exactly the previous one.
  *
+ * Field rules (see Validation): `+ teaser: string {maxLength: 140}`, `+ code: string {minLength: 3} {maxLength: 12}`,
+ * `+ zip: string {pattern: plz}`, `+ servings: int {min: 1, max: 20}` (several rules in one marker separated by commas),
+ * `+ publishedAt: date {min: 2020-01-01}`. Same marker notation as {title}/{unique}, rule names case-insensitive, combinable
+ * with all other field markers. The rules end up in the field as 'rules' => ['maxLength' => 140, ...] (canonical order,
+ * missing without rules) and change no table - they are checked by Cms before every save. Schema errors: unknown or
+ * doubled rule, rule not matching the type (minLength/maxLength: string, text, richtext; min/max: int, decimal, date;
+ * pattern: string), invalid value, minLength > maxLength or min > max, a pattern name that does not exist in the pattern
+ * library (only if parse() receives the names), any rule on the id.
+ *
  * Unsupported PlantUML constructs are schema errors instead of being silently discarded: classes with `<<Stereotype>>`
  * or `implements`, `interface` blocks, class lines without a body or with an unrecognizable body (the class would
  * otherwise be dropped completely), a minimum count (`1..*`) on n:n relationships, an `id` field with a type other than
@@ -158,7 +167,8 @@ namespace LessHeadCMS;
  *           (on_delete: 'restrict' | 'cascade'; in models stored before this option the key is missing = restrict;
  *           one_to_one: 1:1 relationship, missing in older models = false;
  *           min_required: only present (true) for "1..*"/"1..n" on the n side, see above;
- *           only for type 'enum' additionally 'enum' => 'Status' (name as declared) and 'enum_values' => ['OFFEN', ...]) ],
+ *           only for type 'enum' additionally 'enum' => 'Status' (name as declared) and 'enum_values' => ['OFFEN', ...];
+ *           only with rules 'rules' => ['minLength' => 3, 'maxLength' => 12, 'min' => 1, 'max' => 20, 'pattern' => 'plz']) ],
  *       'many_to_many' => [ ['name','table','junction','own_column','other_column','label','show_label','symmetric'] ]
  *           (show_label: {label} marker; symmetric: {symmetric} self-reference; in older stored models
  *           the keys are missing = false),
@@ -220,20 +230,17 @@ final class PumlParser
      * see SchemaIds), multilingual support (languages, translations, user_language_prefs, see Languages) as well as roles and
      * permissions (roles, groups, permissions, group_roles, user_roles, user_groups, see Permissions) and the tasks of the
      * workflows (lh_task, see Workflows; deliberately with a prefix - "tasks" stays available as a class name), the
-     * API keys (api_keys, see ApiKeys), the versions of the records (lh_revision, see Revisions) and the webhooks
-     * (lh_webhook, lh_webhook_call, see Webhooks).
+     * API keys (api_keys, see ApiKeys), the versions of the records (lh_revision, see Revisions), the webhooks
+     * (lh_webhook, lh_webhook_call, see Webhooks) and the pattern library (lh_pattern, see Patterns).
      */
     public const RESERVED = [
         'users', 'login', 'logout', 'me', 'testdata', 'login_attempts', 'user_column_prefs', 'media', 'media_tags',
         'media_tag_links', 'schema_ids', 'schema_layout', 'languages', 'translations', 'user_language_prefs',
         'roles', 'groups', 'permissions', 'group_roles', 'user_roles', 'user_groups', 'lh_task', 'api_keys', 'lh_revision',
-        'lh_webhook', 'lh_webhook_call',
+        'lh_webhook', 'lh_webhook_call', 'lh_pattern',
     ];
 
     private const IDENT = '/^[A-Za-z_][A-Za-z0-9_]*$/';
-
-    private const NN_LABEL_HINT = 'Bitte jede n:n-Beziehung zur selben Zieltabelle mit einem eigenen, eindeutigen Label '
-        . 'versehen (z. B. Artikel "n" -- "n" Tag : Haupttags).';
 
     /** Format identifier of the model JSON (see modelJson()) */
     public const MODEL_FORMAT = 'lessheadcms-model';
@@ -242,10 +249,12 @@ final class PumlParser
     /**
      * @param array<string,array>|null $workflows definitions of the active workflow file (WorkflowParser::parse()); null =
      *        no workflow file active (a workflow field is then a schema error)
+     * @param string[]|null $patterns names of the pattern library (Patterns::names()): `{pattern: x}` must name one of
+     *        them; null = not checked (re-reading an already applied schema, which was checked when it was applied)
      */
-    public static function parse(string $source, ?array $workflows = null): array
+    public static function parse(string $source, ?array $workflows = null, ?array $patterns = null): array
     {
-        return self::analyze($source, $workflows)['model'];
+        return self::analyze($source, $workflows, $patterns)['model'];
     }
 
     /**
@@ -265,7 +274,8 @@ final class PumlParser
      *       'extends' => 'Basis'|null (name as declared), 'renamed_from' => string|null,
      *       'fields' => [ ['id' => 'field:kurs.titel', 'name', 'type' (base type or 'enum'), 'enum_name' => string|null,
      *           'sql_type', 'required', 'primary', 'title', 'unique', 'renamed_from' => string|null,
-     *           'section' => string|null] ] (own fields without FK columns and media; the id only for classes without
+     *           'section' => string|null, only with rules 'rules' => [['id' => 'rule:kurs.titel.maxLength', 'type' =>
+ *           'maxLength', 'value' => 80], ...]] ] (own fields without FK columns and media; the id only for classes without
      *           extends - for subclasses it comes from the base),
      *       'title_fields' => [...], 'unique_fields' => [...] (own fields; {unique} on relations is stored there),
      *       'media' => [ ['id' => 'media:kurs.galerie', 'name', 'required', 'renamed_from', 'section'] ],
@@ -280,14 +290,15 @@ final class PumlParser
      *       (direction normalized: for n1/one_to_one from_entity is the class with the FK column, for nn the one
      *       named first; the multiplicities stay on their side as written),
      *   'enums' => [ ['id' => 'enum:status', 'name', 'values' => [...]] ],
-     *   'warnings' => ["Zeile 3: 'skinparam' wird nicht übernommen", ...],
+     *   'warnings' => ["Line 3: 'skinparam' is not taken over", ...],
+     *   'warning_codes' => [{code, params}, ...] (same order, for the UI),
      * ]
      *
      * @throws SchemaException as parse()
      */
-    public static function modelJson(string $source, ?array $workflows = null): array
+    public static function modelJson(string $source, ?array $workflows = null, ?array $patterns = null): array
     {
-        $a = self::analyze($source, $workflows);
+        $a = self::analyze($source, $workflows, $patterns);
         $model = $a['model'];
         $entities = [];
         foreach ($a['classes'] as $table => $c) {
@@ -311,7 +322,8 @@ final class PumlParser
                     'title' => in_array($f['name'], $c['title_fields'], true),
                     'unique' => in_array($f['name'], $c['unique_fields'], true),
                     'renamed_from' => $f['renamed_from'] ?? null, 'section' => $f['section'] ?? null,
-                ] + (isset($f['workflow']) ? ['workflow' => true] : []); // workflow field: enum_name = name of the workflow
+                ] + (isset($f['workflow']) ? ['workflow' => true] : []) // workflow field: enum_name = name of the workflow
+                    + (isset($f['rules']) ? ['rules' => self::rulesJson('rule:' . $fid, $f['rules'])] : []);
             }
             $entities[] = [
                 'id' => 'entity:' . $table, 'name' => $c['name'], 'table' => $table,
@@ -350,8 +362,28 @@ final class PumlParser
         }
         return [
             'format' => self::MODEL_FORMAT, 'version' => self::MODEL_VERSION,
-            'entities' => $entities, 'relations' => $relations, 'enums' => $enums, 'warnings' => $a['warnings'],
+            'entities' => $entities, 'relations' => $relations, 'enums' => $enums,
+            'warnings' => array_map(function (Msg $w) {
+                return $w->text();
+            }, $a['warnings']),
+            'warning_codes' => array_map(function (Msg $w) {
+                return $w->codeOnly();
+            }, $a['warnings']),
         ];
+    }
+
+    /**
+     * Rules of a field in the model JSON: list of {id, type, value} in canonical order; id = "<prefix>.<type>" (a rule type
+     * occurs at most once per field, so the id stays stable as long as the field does - SchemaIds::decorate() derives it
+     * from the stable ID of the field)
+     */
+    private static function rulesJson(string $prefix, array $rules): array
+    {
+        $out = [];
+        foreach ($rules as $type => $value) {
+            $out[] = ['id' => "$prefix.$type", 'type' => $type, 'value' => $value];
+        }
+        return $out;
     }
 
     /**
@@ -359,7 +391,7 @@ final class PumlParser
      * (all classes before inheritance resolution, abstract ones too, with their own fields), 'relations' (per relation line,
      * see applyRelation()), 'abstract_packages' (table => package of the abstract classes) and 'warnings'.
      */
-    private static function analyze(string $source, ?array $workflows = null): array
+    private static function analyze(string $source, ?array $workflows = null, ?array $patterns = null): array
     {
         $source = preg_replace('/^\xEF\xBB\xBF/', '', $source);
         $source = str_replace(["\r\n", "\r"], "\n", $source);
@@ -383,7 +415,7 @@ final class PumlParser
         }
         $source = $stripped;
         $warnings = []; // [line number, text], sorted by line at the end
-        $warn = function (int $index, string $text) use (&$warnings, $lineOf): void {
+        $warn = function (int $index, Msg $text) use (&$warnings, $lineOf): void {
             $warnings[] = [$lineOf[$index] ?? $index + 1, $text];
         };
 
@@ -392,8 +424,8 @@ final class PumlParser
         foreach (array_keys($enums) as $enum) {
             foreach (array_keys($workflows ?? []) as $wf) {
                 if (strcasecmp($enum, $wf) === 0) {
-                    throw new SchemaException("enum '$enum' heißt wie der Workflow '$wf' der aktiven Workflow-Datei. Bitte das "
-                        . 'Enum anders benennen.');
+                    throw new SchemaException(Msg::of('msg_schema.enum_is_workflow', "enum '{enum}' has the same name as the workflow "
+                        . "'{workflow}' of the active workflow file. Please name the enum differently.", ['enum' => $enum, 'workflow' => $wf]));
                 }
             }
         }
@@ -415,16 +447,11 @@ final class PumlParser
         // field "interface : string" without a visibility sign in a class body does not count as an interface.
         foreach (explode("\n", $source) as $line) {
             if (preg_match('/^\s*interface\s+([^\s{:<]+)/i', $line, $if)) {
-                throw new SchemaException(
-                    "Interfaces ('interface') werden aktuell nicht unterstützt ('{$if[1]}'). Bitte stattdessen eine normale "
-                    . "Klasse ('class {$if[1]} { ... }') verwenden."
-                );
+                throw new SchemaException(Msg::of('msg_schema.interface', "Interfaces ('interface') are currently not supported "
+                    . "('{name}'). Please use a normal class ('class {name} { ... }') instead.", ['name' => $if[1]]));
             }
             if (preg_match('/^\s*(?:abstract\s+)?class\s+[^{]*\{renamed_from:[^}]*\}\s*$/i', $line)) {
-                throw new SchemaException(
-                    'Klassenzeile mit {renamed_from:…} nicht verständlich (erwartet: class Neu {renamed_from:Alt} { mit "{" auf '
-                    . 'derselben Zeile): ' . trim($line)
-                );
+                throw new SchemaException(self::renamedClassLine($line));
             }
         }
         // Optionally preceded by "{renamed_from:AlterName}" (schema editing: the table of class AlterName is renamed).
@@ -437,30 +464,31 @@ final class PumlParser
             return substr_count($source, "\n", 0, $h[1]);
         }, $heads[0]);
         $classes = []; // table => parsed class, abstract ones too, with 'abstract' and 'extends'
-        $rest = preg_replace_callback($classPattern, function (array $match) use (&$classes, $enums, $headLines, $warn, $workflows): string {
+        $rest = preg_replace_callback($classPattern, function (array $match) use (&$classes, $enums, $headLines, $warn, $workflows, $patterns): string {
             $head = $headLines[count($classes)] ?? 0;
             if ($match[4] !== '') {
-                $warn($head, "Farbangabe '" . trim($match[4]) . "' an Klasse '{$match[2]}' wird nicht übernommen");
+                $warn($head, Msg::of('msg_schema.warn_class_color', "Colour '{color}' on class '{class}' is not taken over", [
+                    'color' => trim($match[4]), 'class' => $match[2],
+                ]));
             }
-            $entity = self::parseClass($match[2], $match[6], $enums, function (int $i, string $text) use ($warn, $head) {
+            $entity = self::parseClass($match[2], $match[6], $enums, function (int $i, Msg $text) use ($warn, $head) {
                 $warn($head + $i, $text); // line 0 of the body is the rest of the head line after "{"
-            }, $workflows);
+            }, $workflows, $patterns);
             if (isset($classes[$entity['table']])) {
-                throw new SchemaException("Klasse '{$match[2]}' ist doppelt definiert.");
+                throw new SchemaException(Msg::of('msg_schema.class_twice', "Class '{class}' is defined twice.", ['class' => $match[2]]));
             }
             $entity['extends'] = self::parseExtends($match[2], $match[3]);
             $entity['abstract'] = trim($match[1]) !== '';
             if ($entity['abstract'] && array_filter($entity['fields'], function ($f) {
                 return isset($f['workflow']);
             })) {
-                throw new SchemaException("Abstrakte Klasse '{$match[2]}' kann kein Workflow-Feld haben (ein Workflow gehört zu "
-                    . 'genau einer Klasse mit eigener Tabelle).');
+                throw new SchemaException(Msg::of('msg_schema.abstract_workflow', "Abstract class '{class}' cannot have a workflow field "
+                    . '(a workflow belongs to exactly one class with its own table).', ['class' => $match[2]]));
             }
             if (($match[5] ?? '') !== '') {
                 if ($entity['abstract']) {
-                    throw new SchemaException(
-                        "Abstrakte Klasse '{$match[2]}' kann nicht mit {renamed_from:…} markiert werden (sie hat keine Tabelle)."
-                    );
+                    throw new SchemaException(Msg::of('msg_schema.abstract_renamed', "Abstract class '{class}' cannot be marked with "
+                        . '{renamed_from:…} (it has no table).', ['class' => $match[2]]));
                 }
                 $entity['renamed_from'] = $match[5];
             }
@@ -474,43 +502,32 @@ final class PumlParser
         // only allows extends, a colour and {renamed_from:…}; so only uncaptured class lines remain here)
         foreach (explode("\n", $rest) as $line) {
             if (preg_match('/^\s*(?:abstract\s+)?class\s+([^\s{<]+)\s*(<<[^>]*>>)/i', $line, $st)) {
-                throw new SchemaException(
-                    "Stereotypen ('<<...>>') werden aktuell nicht unterstützt ('{$st[1]} {$st[2]}'). Bitte den Stereotyp entfernen."
-                );
+                throw new SchemaException(Msg::of('msg_schema.stereotype', "Stereotypes ('<<...>>') are currently not supported "
+                    . "('{class} {stereotype}'). Please remove the stereotype.", ['class' => $st[1], 'stereotype' => $st[2]]));
             }
             if (preg_match('/^\s*(?:abstract\s+)?class\s+(\S+)\s+implements\b\s*([^{]*)/i', $line, $im)) {
                 $iface = trim($im[2]);
-                throw new SchemaException(
-                    "'implements' wird aktuell nicht unterstützt ('{$im[1]} implements $iface'). Bitte die Felder von '$iface' "
-                    . "direkt in '{$im[1]}' übernehmen (Duplizieren) oder 'extends' mit einer 'abstract class' verwenden."
-                );
+                throw new SchemaException(Msg::of('msg_schema.implements', "'implements' is currently not supported ('{class} implements "
+                    . "{interface}'). Please copy the fields of '{interface}' directly into '{class}' (duplicate) or use 'extends' with "
+                    . "an 'abstract class'.", ['class' => $im[1], 'interface' => $iface]));
             }
             if (preg_match('/^\s*(?:abstract\s+)?class\s+\S+.*\{renamed_from/i', $line)) {
-                throw new SchemaException(
-                    'Klassenzeile mit {renamed_from:…} nicht verständlich (erwartet: class Neu {renamed_from:Alt} { mit "{" auf '
-                    . 'derselben Zeile): ' . trim($line)
-                );
+                throw new SchemaException(self::renamedClassLine($line));
             }
             if (preg_match('/^\s*(?:abstract\s+)?class\s+\S+.*\sextends\s/i', $line)) {
-                throw new SchemaException(
-                    'Klassenzeile mit extends nicht verständlich (erwartet: class B extends A { mit "{" auf derselben Zeile '
-                    . 'und "}" allein auf einer eigenen Zeile): ' . trim($line)
-                );
+                throw new SchemaException(Msg::of('msg_schema.extends_line', 'Class line with extends not understood (expected: class B '
+                    . 'extends A { with "{" on the same line and "}" alone on a line of its own): {source}', ['source' => trim($line)]));
             }
             // Every remaining class line was not captured by the class pattern - the class would otherwise be dropped silently:
             // without a body ("class X" alone) or with a body that is not laid out as expected ("class X {}" on one line,
             // closing "}" missing or not alone on its line)
             if (preg_match('/^\s*(?:abstract\s+)?class\s+(\S+)\s*$/i', $line, $nb)) {
-                throw new SchemaException(
-                    "Klassenzeile '{$nb[1]}' ohne Körper ('{ ... }') nicht verständlich. Bitte Felder in geschweiften Klammern "
-                    . 'ergänzen.'
-                );
+                throw new SchemaException(Msg::of('msg_schema.class_no_body', "Class line '{class}' without a body ('{ ... }') not "
+                    . 'understood. Please add fields in curly braces.', ['class' => $nb[1]]));
             }
             if (preg_match('/^\s*(?:abstract\s+)?class\s+\S/i', $line)) {
-                throw new SchemaException(
-                    'Klassenzeile nicht verständlich (erwartet: class X { mit "{" auf derselben Zeile und "}" allein auf einer '
-                    . 'eigenen Zeile): ' . trim($line)
-                );
+                throw new SchemaException(Msg::of('msg_schema.class_line', 'Class line not understood (expected: class X { with "{" on '
+                    . 'the same line and "}" alone on a line of its own): {source}', ['source' => trim($line)]));
             }
         }
         $entities = self::resolveInheritance($classes);
@@ -521,15 +538,14 @@ final class PumlParser
             }
         }
         if (!$entities) {
-            throw new SchemaException(
-                'Keine Klassen in der .puml-Datei gefunden.' . ($abstract ? ' (Abstrakte Klassen bekommen keine eigene Tabelle.)' : '')
-            );
+            throw new SchemaException($abstract
+                ? Msg::of('msg_schema.no_classes_abstract', 'No classes found in the .puml file. (Abstract classes get no table of their own.)')
+                : Msg::of('msg_schema.no_classes', 'No classes found in the .puml file.'));
         }
         foreach (array_keys($enums) as $enum) {
             if (isset($entities[strtolower($enum)]) || isset($abstract[strtolower($enum)])) {
-                throw new SchemaException(
-                    "enum '$enum' heißt wie eine Klasse. Bitte einen der beiden umbenennen."
-                );
+                throw new SchemaException(Msg::of('msg_schema.enum_is_class', "enum '{enum}' has the same name as a class. Please rename "
+                    . 'one of the two.', ['enum' => $enum]));
             }
         }
 
@@ -563,7 +579,9 @@ final class PumlParser
             }
             if (self::parsePackageLine($line, $blocks)) {
                 if (preg_match('/\s#\w+/', (string) preg_replace('/"[^"]*"/', '""', $line), $color)) {
-                    $warn($index, "Farbangabe '" . trim($color[0]) . "' an package wird nicht übernommen");
+                    $warn($index, Msg::of('msg_schema.warn_package_color', "Colour '{color}' on package is not taken over", [
+                        'color' => trim($color[0]),
+                    ]));
                 }
                 continue;
             }
@@ -583,7 +601,7 @@ final class PumlParser
             // Only if the line is not a relation (a class may e.g. be called "Title")
             $decor = $isRelation ? null : self::decoration($line, $noteAliases);
             if ($decor !== null) {
-                $warn($index, "'{$decor[0]}' wird nicht übernommen");
+                $warn($index, Msg::of('msg_schema.warn_decoration', "'{statement}' is not taken over", ['statement' => $decor[0]]));
                 $skipUntil = $decor[1];
                 continue;
             }
@@ -592,14 +610,14 @@ final class PumlParser
             }
             if ($isRelation) {
                 if ($arrow !== $r[3]) {
-                    $warn($index, "Farbangabe im Pfeil '{$r[3]}' wird nicht übernommen");
+                    $warn($index, Msg::of('msg_schema.warn_arrow_color', "Colour in the arrow '{arrow}' is not taken over", ['arrow' => $r[3]]));
                 }
                 $marker = null; // {cascade} or {label}; null = none
                 $flags = ['unique' => false, 'symmetric' => false];
                 $renamedFrom = null; // {renamed_from:Altes Label}: only for SchemaMigration, without meaning at the first bootstrap
                 $filterBy = null; // {filter_by:field} or {filter_by:sourcefield=targetfield}: filtered selection, see resolveFilter()
-                $multi = "Nur eine Markierung pro Relation möglich ({cascade} oder {label}, zusätzlich höchstens "
-                    . "einmal {unique}, {symmetric}, {filter_by:…} bzw. {renamed_from:…}): $line";
+                $multi = Msg::of('msg_schema.relation_markers', 'Only one marker per relation possible ({cascade} or {label}, in addition '
+                    . 'at most once {unique}, {symmetric}, {filter_by:…} or {renamed_from:…}): {source}', ['source' => $line]);
                 preg_match_all('/\{(\w*)(?::([^{}]*))?\}/', $r[7] ?? '', $markers);
                 foreach ($markers[1] as $i => $raw) {
                     $m = strtolower($raw);
@@ -618,10 +636,10 @@ final class PumlParser
                         continue;
                     }
                     if (!in_array($m, ['cascade', 'label', 'unique', 'symmetric'], true)) {
-                        throw new SchemaException(
-                            "Unbekannte Markierung '{{$raw}}' an Relation (erlaubt: {cascade}, {label}, {unique}, "
-                            . "{symmetric}, {renamed_from:Altes Label}, {filter_by:feld}): $line"
-                        );
+                        throw new SchemaException(Msg::of('msg_schema.relation_marker_unknown', "Unknown marker '{marker}' on relation "
+                            . '(allowed: {cascade}, {label}, {unique}, {symmetric}, {renamed_from:Old label}, {filter_by:field}): {source}', [
+                                'marker' => '{' . $raw . '}', 'source' => $line,
+                            ]));
                     }
                     // {cascade} (n:1 only) and {label} (n:n only) are mutually exclusive; {unique} and {symmetric} are
                     // independent of that (each at most once)
@@ -641,11 +659,9 @@ final class PumlParser
                 }
                 foreach ([$r[1], $r[5]] as $side) {
                     if (isset($abstract[strtolower($side)])) {
-                        throw new SchemaException(
-                            "Beziehung auf abstrakte Klasse '{$abstract[strtolower($side)]}' nicht möglich - abstrakte "
-                            . 'Klassen haben keine eigene Tabelle (Beziehungen werden nicht vererbt; bitte je Unterklasse '
-                            . "zeichnen): $line"
-                        );
+                        throw new SchemaException(Msg::of('msg_schema.relation_abstract', "Relationship to abstract class '{class}' not "
+                            . 'possible - abstract classes have no table of their own (relationships are not inherited; please draw '
+                            . 'one per subclass): {source}', ['class' => $abstract[strtolower($side)], 'source' => $line]));
                     }
                 }
                 $applied = self::applyRelation(
@@ -659,20 +675,21 @@ final class PumlParser
                     'unique' => $flags['unique'], 'symmetric' => $flags['symmetric'], 'renamed_from' => $renamedFrom,
                 ];
             } elseif (preg_match('/^package\s/i', $line)) {
-                throw new SchemaException(
-                    "package-Zeile nicht verständlich (erwartet: package \"Name\" { ... } mit den Klassen darin): $line"
-                );
+                throw new SchemaException(Msg::of('msg_schema.package_line', 'package line not understood (expected: package "Name" '
+                    . '{ ... } with the classes in it): {source}', ['source' => $line]));
             } elseif (preg_match('/[-.]{2}|<-|->/', $line) && $line[0] !== '@') {
-                throw new SchemaException("Relation nicht verständlich (erwartet: A \"n\" --> \"1\" B : label): $line");
+                throw new SchemaException(Msg::of('msg_schema.relation_line', 'Relation not understood (expected: A "n" --> "1" B : label): '
+                    . '{source}', ['source' => $line]));
             } elseif ($line[0] !== '@') {
                 // everything else is ignored as before (only @startuml/@enduml without a notice)
-                $warn($index, "'" . (mb_strlen($line) > 60 ? mb_substr($line, 0, 57) . '...' : $line)
-                    . "' wird nicht übernommen (unbekannte Anweisung, ignoriert)");
+                $warn($index, Msg::of('msg_schema.warn_unknown', "'{statement}' is not taken over (unknown statement, ignored)", [
+                    'statement' => mb_strlen($line) > 60 ? mb_substr($line, 0, 57) . '...' : $line,
+                ]));
             }
         }
         $open = self::currentPackage($blocks);
         if ($open !== null) {
-            throw new SchemaException("package \"$open\" wird nicht mit \"}\" geschlossen.");
+            throw new SchemaException(Msg::of('msg_schema.package_unclosed', 'package "{package}" is not closed with "}".', ['package' => $open]));
         }
 
         // Used workflows: their states count as an enum (display, translations); action=set_visibility needs a
@@ -690,9 +707,11 @@ final class PumlParser
                 });
                 foreach ($workflows[$f['workflow']]['transitions'] as $ti => $t) {
                     if (!$hasVisibility && in_array('set_visibility', array_column($t['actions'], 'type'), true)) {
-                        throw new SchemaException("Workflow '{$f['workflow']}': Die Transition '{$t['label']}' ({$t['from']} -> "
-                            . "{$t['to']}) nutzt action=set_visibility, aber die Klasse '{$e['name']}' hat kein visibility-Feld.",
-                            null, ['workflow' => $f['workflow'], 'transition' => $ti, 'key' => 'action:set_visibility']);
+                        throw new SchemaException(Msg::of('msg_schema.set_visibility', "Workflow '{workflow}': The transition '{transition}' "
+                            . "({from} -> {to}) uses action=set_visibility, but the class '{class}' has no visibility field.", [
+                                'workflow' => $f['workflow'], 'transition' => $t['label'], 'from' => $t['from'], 'to' => $t['to'],
+                                'class' => $e['name'],
+                            ]), null, ['workflow' => $f['workflow'], 'transition' => $ti, 'key' => 'action:set_visibility']);
                     }
                 }
             }
@@ -712,24 +731,25 @@ final class PumlParser
         // renamed after its label later on, see applyRelation, hits the name of another one)
         foreach ($mediaJunctions as $table => $where) {
             if (in_array($table, self::RESERVED, true) || isset($entities[$table])) {
-                throw new SchemaException(
-                    "Zwischentabelle '$table' des Medien-Felds $where kollidiert mit einer Klasse gleichen Namens."
-                );
+                throw new SchemaException(Msg::of('msg_schema.media_junction_class', "Link table '{table}' of the media field {field} "
+                    . 'collides with a class of the same name.', ['table' => $table, 'field' => $where]));
             }
             if (in_array($table, array_column($junctions, 'table'), true)) {
-                throw new SchemaException(
-                    "Zwischentabelle '$table' des Medien-Felds $where würde doppelt entstehen (gleichnamige n:n-Zwischentabelle). "
-                    . 'Bitte das Feld oder die Beziehung umbenennen.'
-                );
+                throw new SchemaException(Msg::of('msg_schema.media_junction_twice', "Link table '{table}' of the media field {field} "
+                    . 'would be created twice (n:n link table of the same name). Please rename the field or the relationship.', [
+                        'table' => $table, 'field' => $where,
+                    ]));
             }
         }
         $junctionNames = array_column($junctions, 'table');
         foreach (array_diff_assoc($junctionNames, array_unique($junctionNames)) as $dup) {
-            throw new SchemaException("Zwischentabelle '$dup' würde doppelt entstehen. " . self::NN_LABEL_HINT);
+            throw new SchemaException(self::junctionTwice($dup));
         }
         foreach ($junctions as $j) {
             if (in_array($j['table'], self::RESERVED, true) || isset($entities[$j['table']])) {
-                throw new SchemaException("Zwischentabelle '{$j['table']}' kollidiert mit einer Klasse gleichen Namens.");
+                throw new SchemaException(Msg::of('msg_schema.junction_class', "Link table '{table}' collides with a class of the same name.", [
+                    'table' => $j['table'],
+                ]));
             }
         }
 
@@ -744,7 +764,10 @@ final class PumlParser
         ];
     }
 
-    /** @param array<int,array{0:int,1:string}> $warnings */
+    /**
+     * @param array<int,array{0:int,1:Msg}> $warnings
+     * @return Msg[] "Line 3: …"
+     */
     private static function sortedWarnings(array $warnings): array
     {
         $order = array_keys($warnings);
@@ -752,8 +775,27 @@ final class PumlParser
             return [$warnings[$a][0], $a] <=> [$warnings[$b][0], $b];
         });
         return array_map(function ($i) use ($warnings) {
-            return "Zeile {$warnings[$i][0]}: {$warnings[$i][1]}";
+            return Msg::of('msg_schema.warn_line', 'Line {line}: {text}', ['line' => $warnings[$i][0], 'text' => $warnings[$i][1]]);
         }, $order);
+    }
+
+    private static function enumEmpty(string $name): Msg
+    {
+        return Msg::of('msg_schema.enum_empty', "enum '{enum}' has no values (expected: enum {enum} { with one value per line }).", [
+            'enum' => $name,
+        ]);
+    }
+
+    private static function renamedClassLine(string $line): Msg
+    {
+        return Msg::of('msg_schema.renamed_class_line', 'Class line with {renamed_from:…} not understood (expected: class New '
+            . '{renamed_from:Old} { with "{" on the same line): {source}', ['source' => trim($line)]);
+    }
+
+    private static function junctionTwice(string $table): Msg
+    {
+        return Msg::of('msg_schema.junction_twice', "Link table '{table}' would be created twice. Please give every n:n relationship "
+            . 'to the same target table its own unique label (e.g. Artikel "n" -- "n" Tag : Haupttags).', ['table' => $table]);
     }
 
     /**
@@ -811,10 +853,10 @@ final class PumlParser
                 }
                 $junction = $table . '_' . strtolower($f['name']) . '_media';
                 if (isset($junctions[$junction])) {
-                    throw new SchemaException(
-                        "Zwischentabelle '$junction' des Medien-Felds {$e['name']}.{$f['name']} würde doppelt entstehen "
-                        . "(ebenso bei {$junctions[$junction]}). Bitte eines der Felder umbenennen."
-                    );
+                    throw new SchemaException(Msg::of('msg_schema.media_field_junction_twice', "Link table '{table}' of the media field "
+                        . '{field} would be created twice (likewise for {other}). Please rename one of the fields.', [
+                            'table' => $junction, 'field' => "{$e['name']}.{$f['name']}", 'other' => $junctions[$junction],
+                        ]));
                 }
                 $junctions[$junction] = "{$e['name']}.{$f['name']}";
                 $e['media'][] = [
@@ -879,17 +921,15 @@ final class PumlParser
         }
         $base = trim((string) preg_replace('/^extends\b/i', '', $raw));
         if ($base === '') {
-            throw new SchemaException("Klasse '$class': extends ohne Basisklasse.");
+            throw new SchemaException(Msg::of('msg_schema.extends_empty', "Class '{class}': extends without a base class.", ['class' => $class]));
         }
         if (strpos($base, ',') !== false || preg_match('/\sextends\s/i', " $base ")) {
-            throw new SchemaException(
-                "Klasse '$class': Mehrfachvererbung wird nicht unterstützt ('$raw'). Nur eine Basisklasse je Klasse."
-            );
+            throw new SchemaException(Msg::of('msg_schema.extends_multiple', "Class '{class}': multiple inheritance is not supported "
+                . "('{source}'). Only one base class per class.", ['class' => $class, 'source' => $raw]));
         }
         if (!preg_match('/^[^\s{]+$/', $base)) {
-            throw new SchemaException(
-                "Klasse '$class': extends-Angabe nicht verständlich ('$raw', erwartet: class $class extends <Basisklasse> {)."
-            );
+            throw new SchemaException(Msg::of('msg_schema.extends_unclear', "Class '{class}': extends not understood ('{source}', "
+                . 'expected: class {class} extends <BaseClass> {).', ['class' => $class, 'source' => $raw]));
         }
         return $base;
     }
@@ -923,20 +963,24 @@ final class PumlParser
             if ($c['extends'] !== null) {
                 $bt = strtolower($c['extends']);
                 if (!isset($classes[$bt])) {
-                    throw new SchemaException("Klasse '{$c['name']}' erbt von unbekannter Klasse '{$c['extends']}'.");
+                    throw new SchemaException(Msg::of('msg_schema.extends_unknown', "Class '{class}' inherits from unknown class '{base}'.", [
+                        'class' => $c['name'], 'base' => $c['extends'],
+                    ]));
                 }
                 if ($bt === $table || in_array($bt, $chain, true)) {
                     $names = array_map(function ($t) use ($classes) {
                         return $classes[$t]['name'];
                     }, array_merge(array_slice($chain, (int) array_search($bt, $chain, true)), [$table, $bt]));
-                    throw new SchemaException('Zyklische Vererbung: ' . implode(' extends ', $names) . '.');
+                    throw new SchemaException(Msg::of('msg_schema.extends_cycle', 'Cyclic inheritance: {chain}.', [
+                        'chain' => implode(' extends ', $names),
+                    ]));
                 }
                 if (!$classes[$bt]['abstract']) {
-                    throw new SchemaException(
-                        "Klasse '{$c['name']}' erbt von '{$classes[$bt]['name']}', die keine abstrakte Klasse ist. "
-                        . "Vererbung kopiert nur Felder aus einer Vorlage ohne eigene Tabelle: bitte 'abstract class "
-                        . "{$classes[$bt]['name']}' schreiben (die dann keine eigene Tabelle mehr bekommt)."
-                    );
+                    throw new SchemaException(Msg::of('msg_schema.extends_concrete', "Class '{class}' inherits from '{base}', which is not "
+                        . "an abstract class. Inheritance only copies fields from a template without a table of its own: please write "
+                        . "'abstract class {base}' (which then no longer gets a table of its own).", [
+                            'class' => $c['name'], 'base' => $classes[$bt]['name'],
+                        ]));
                 }
                 $base = $resolve($bt, array_merge($chain, [$table]));
                 $own = array_values(array_filter($c['fields'], function ($f) {
@@ -945,10 +989,10 @@ final class PumlParser
                 foreach ($own as $f) {
                     $l = strtolower($f['name']);
                     if (isset($base['origin'][$l]) && $l !== 'id') {
-                        throw new SchemaException(
-                            "Feld '{$f['name']}' in Klasse '{$c['name']}' doppelt definiert "
-                            . "(bereits geerbt von '{$base['origin'][$l]}')."
-                        );
+                        throw new SchemaException(Msg::of('msg_schema.field_inherited_twice', "Field '{field}' in class '{class}' defined "
+                            . "twice (already inherited from '{base}').", [
+                                'field' => $f['name'], 'class' => $c['name'], 'base' => $base['origin'][$l],
+                            ]));
                     }
                 }
                 // Sections: those of the base first; own fields before the first own separator line continue the last
@@ -965,8 +1009,10 @@ final class PumlParser
                 foreach ($c['sections'] as $title) {
                     $l = mb_strtolower($title, 'UTF-8');
                     if (isset($base['section_origin'][$l])) {
-                        throw new SchemaException("Abschnitt '$title' in Klasse '{$c['name']}' doppelt (bereits geerbt von "
-                            . "'{$base['section_origin'][$l]}'). Bitte den Abschnitt anders benennen.");
+                        throw new SchemaException(Msg::of('msg_schema.section_inherited_twice', "Section '{title}' in class '{class}' twice "
+                            . "(already inherited from '{base}'). Please name the section differently.", [
+                                'title' => $title, 'class' => $c['name'], 'base' => $base['section_origin'][$l],
+                            ]));
                     }
                 }
                 $c['sections'] = array_merge($base['sections'], $c['sections']);
@@ -979,9 +1025,8 @@ final class PumlParser
                     return $f['type'] === 'visibility';
                 });
                 if (count($visibility) > 1) {
-                    throw new SchemaException(
-                        "Entität {$c['name']} hat mehrere visibility-Felder (auch geerbte zählen), erlaubt ist maximal eines"
-                    );
+                    throw new SchemaException(Msg::of('msg_schema.visibility_inherited', 'Entity {class} has several visibility fields '
+                        . '(inherited ones count too), at most one is allowed', ['class' => $c['name']]));
                 }
             }
             return $resolved[$table] = $c;
@@ -1009,7 +1054,7 @@ final class PumlParser
      * so that a field `enum : string` (without a visibility sign) in a class body does not count as a block.
      *
      * @param array<string,string[]> $enums is filled
-     * @param callable|null $warn fn(int line index, string text) for warnings (colour on the enum line)
+     * @param callable|null $warn fn(int line index, Msg text) for warnings (colour on the enum line)
      */
     private static function extractEnums(string $source, array &$enums, ?callable $warn = null): string
     {
@@ -1022,18 +1067,21 @@ final class PumlParser
             $name = $m[1];
             $start = $i;
             if (!preg_match(self::IDENT, $name)) {
-                throw new SchemaException(
-                    "Ungültiger enum-Name '$name' (erlaubt: Buchstaben, Ziffern, _ ohne Umlaute, nicht mit Ziffer beginnend)."
-                );
+                throw new SchemaException(Msg::of('msg_schema.enum_name', "Invalid enum name '{enum}' (allowed: letters, digits, _ without "
+                    . 'umlauts, not starting with a digit).', ['enum' => $name]));
             }
             if (!preg_match('/^(?:\s*<<[^>]*>>)?(?:\s*#\w+)?\s*(?:\{(.*))?$/', $m[2], $open)) {
-                throw new SchemaException("enum-Zeile nicht verständlich (erwartet: enum $name { ... }): " . trim($lines[$i]));
+                throw new SchemaException(Msg::of('msg_schema.enum_line', 'enum line not understood (expected: enum {enum} { ... }): {source}', [
+                    'enum' => $name, 'source' => trim($lines[$i]),
+                ]));
             }
             if (!isset($open[1])) {
-                throw new SchemaException("enum '$name' hat keine Werte (erwartet: enum $name { mit einem Wert je Zeile }).");
+                throw new SchemaException(self::enumEmpty($name));
             }
             if ($warn !== null && preg_match('/#\w+/', $m[2], $color)) {
-                $warn($i, "Farbangabe '{$color[0]}' an enum '$name' wird nicht übernommen");
+                $warn($i, Msg::of('msg_schema.warn_enum_color', "Colour '{color}' on enum '{enum}' is not taken over", [
+                    'color' => $color[0], 'enum' => $name,
+                ]));
             }
             // lines of the block: the rest of the enum line after "{", then the following lines up to the closing "}"
             $raw = [];
@@ -1053,7 +1101,7 @@ final class PumlParser
                 $pending = $lines[$i];
             }
             if (!$closed) {
-                throw new SchemaException("enum '$name' wird nicht mit \"}\" geschlossen.");
+                throw new SchemaException(Msg::of('msg_schema.enum_unclosed', 'enum \'{enum}\' is not closed with "}".', ['enum' => $name]));
             }
             $values = [];
             $seen = [];
@@ -1063,28 +1111,29 @@ final class PumlParser
                     continue;
                 }
                 if (!preg_match(self::IDENT, $value)) {
-                    throw new SchemaException(
-                        "Ungültiger Wert '$value' in enum '$name' (erwartet: ein Wert je Zeile aus Buchstaben, Ziffern, _ "
-                        . 'ohne Umlaute, nicht mit Ziffer beginnend, z. B. OFFEN).'
-                    );
+                    throw new SchemaException(Msg::of('msg_schema.enum_value', "Invalid value '{value}' in enum '{enum}' (expected: one "
+                        . 'value per line of letters, digits, _ without umlauts, not starting with a digit, e.g. OFFEN).', [
+                            'value' => $value, 'enum' => $name,
+                        ]));
                 }
                 if (isset($seen[strtolower($value)])) {
-                    throw new SchemaException("Wert '$value' in enum '$name' doppelt angegeben.");
+                    throw new SchemaException(Msg::of('msg_schema.enum_value_twice', "Value '{value}' given twice in enum '{enum}'.", [
+                        'value' => $value, 'enum' => $name,
+                    ]));
                 }
                 $seen[strtolower($value)] = true;
                 $values[] = $value;
             }
             if (!$values) {
-                throw new SchemaException("enum '$name' hat keine Werte (erwartet: enum $name { mit einem Wert je Zeile }).");
+                throw new SchemaException(self::enumEmpty($name));
             }
             if (isset(self::TYPE_MAP[strtolower($name)]) || strtolower($name) === self::MEDIA_TYPE) {
-                throw new SchemaException(
-                    "enum '$name' heißt wie der Basistyp '" . strtolower($name) . "'. Bitte anders benennen."
-                );
+                throw new SchemaException(Msg::of('msg_schema.enum_is_type', "enum '{enum}' has the same name as the base type '{type}'. "
+                    . 'Please name it differently.', ['enum' => $name, 'type' => strtolower($name)]));
             }
             foreach (array_keys($enums) as $other) {
                 if (strtolower($other) === strtolower($name)) {
-                    throw new SchemaException("enum '$name' ist doppelt definiert.");
+                    throw new SchemaException(Msg::of('msg_schema.enum_twice', "enum '{enum}' is defined twice.", ['enum' => $name]));
                 }
             }
             $enums[$name] = $values;
@@ -1111,14 +1160,12 @@ final class PumlParser
         }
         $name = trim(($m[1] ?? '') !== '' ? $m[1] : ($m[2] ?? ''));
         if ($name === '') {
-            throw new SchemaException("package ohne Namen: $line");
+            throw new SchemaException(Msg::of('msg_schema.package_no_name', 'package without a name: {source}', ['source' => $line]));
         }
         $outer = self::currentPackage($blocks);
         if ($outer !== null) {
-            throw new SchemaException(
-                "Verschachtelte Packages werden nicht unterstützt (\"$name\" in \"$outer\"). "
-                . 'Die Sidebar kennt nur eine Gruppierungsebene.'
-            );
+            throw new SchemaException(Msg::of('msg_schema.package_nested', 'Nested packages are not supported ("{package}" in "{outer}"). '
+                . 'The sidebar knows only one grouping level.', ['package' => $name, 'outer' => $outer]));
         }
         if (empty($m[3])) { // "package X {}" on one line: empty, closed again right away
             $blocks[] = $name;
@@ -1139,19 +1186,25 @@ final class PumlParser
 
     /**
      * @param array<string,string[]> $enums declared enums (see extractEnums())
-     * @param callable|null $warn fn(int line in the body, string text) for warnings (skipped methods)
+     * @param callable|null $warn fn(int line in the body, Msg text) for warnings (skipped methods)
+     * @param string[]|null $patterns names of the pattern library for {pattern: x} (see parse()); null = not checked
      */
-    private static function parseClass(string $name, string $body, array $enums = [], ?callable $warn = null, ?array $workflows = null): array
+    private static function parseClass(
+        string $name, string $body, array $enums = [], ?callable $warn = null, ?array $workflows = null, ?array $patterns = null
+    ): array
     {
         if (!preg_match(self::IDENT, $name)) {
-            throw new SchemaException("Ungültiger Klassenname '$name' (erlaubt: Buchstaben, Ziffern, _ ohne Umlaute).");
+            throw new SchemaException(Msg::of('msg_schema.class_name', "Invalid class name '{class}' (allowed: letters, digits, _ without "
+                . 'umlauts).', ['class' => $name]));
         }
         $table = strtolower($name);
         if (in_array($table, self::RESERVED, true)) {
-            throw new SchemaException("Klassenname '$name' ist reserviert (" . implode(', ', self::RESERVED) . ').');
+            throw new SchemaException(Msg::of('msg_schema.class_reserved', "Class name '{class}' is reserved ({reserved}).", [
+                'class' => $name, 'reserved' => implode(', ', self::RESERVED),
+            ]));
         }
         if ($table[0] === '_') {
-            throw new SchemaException("Klassenname '$name' darf nicht mit _ beginnen.");
+            throw new SchemaException(Msg::of('msg_schema.class_underscore', "Class name '{class}' must not start with _.", ['class' => $name]));
         }
 
         $fields = [];
@@ -1177,8 +1230,8 @@ final class PumlParser
                 }
                 foreach ($sections as $other) {
                     if (mb_strtolower($other, 'UTF-8') === mb_strtolower($title, 'UTF-8')) {
-                        throw new SchemaException("Abschnitt '$title' in Klasse '$name' doppelt (jeder Abschnittstitel nur "
-                            . 'einmal je Klasse).');
+                        throw new SchemaException(Msg::of('msg_schema.section_twice', "Section '{title}' in class '{class}' twice (every "
+                            . 'section title only once per class).', ['title' => $title, 'class' => $name]));
                     }
                 }
                 $sections[] = $title;
@@ -1188,42 +1241,73 @@ final class PumlParser
             }
             if (strpos($line, '(') !== false) {
                 if ($warn !== null) {
-                    $warn($bodyLine, "Methode '$line' in Klasse '$name' wird nicht übernommen");
+                    $warn($bodyLine, Msg::of('msg_schema.warn_method', "Method '{method}' in class '{class}' is not taken over", [
+                        'method' => $line, 'class' => $name,
+                    ]));
                 }
                 continue; // method
             }
-            $pattern = '/^(?:\{\w+\}\s*)?[+\-#~]?\s*([^\s:]+)\s*:\s*(\w+)\s*(\?)?\s*'
-                . '((?:\{(?:title|unique|renamed_from:[A-Za-z_][A-Za-z0-9_]*)\}\s*)*)$/i';
+            $pattern = '/^(?:\{\w+\}\s*)?[+\-#~]?\s*([^\s:]+)\s*:\s*(\w+)\s*(\?)?\s*((?:\{[^{}]*\}\s*)*)$/';
+            $unclear = new SchemaException(Msg::of('msg_schema.field_line', "Line in class '{class}' not understood (expected: + field: "
+                . 'type or + field: type? or + field: type {title} and/or {unique}, optionally {renamed_from:old_name} and rules like '
+                . '{maxLength: 140}): {source}', ['class' => $name, 'source' => $line]));
             if (!preg_match($pattern, $line, $f)) {
-                throw new SchemaException(
-                    "Zeile in Klasse '$name' nicht verständlich (erwartet: + feld: typ oder + feld: typ? "
-                    . "oder + feld: typ {title} und/oder {unique}, optional {renamed_from:alter_name}): $line"
-                );
+                throw $unclear;
             }
             [, $field, $type] = $f;
             $optional = ($f[3] ?? '') === '?'; // '?' directly after the type = optional, otherwise a required field
-            // {title}/{unique}/{renamed_from:x} at the end of the line, in any order, each at most once
-            preg_match_all('/\{(\w+)(?::(\w+))?\}/', $f[4] ?? '', $markers);
-            $markerNames = array_map('strtolower', $markers[1]);
-            if (count($markerNames) !== count(array_unique($markerNames))) {
-                throw new SchemaException("Feld '$field' in Klasse '$name': Markierung doppelt angegeben: $line");
-            }
-            $isTitle = in_array('title', $markerNames, true);
-            $isUnique = in_array('unique', $markerNames, true);
+            // Markers at the end of the line, in any order, each at most once: {title}, {unique}, {renamed_from:x} and the
+            // rules (Validation): {maxLength: 140}, several in one marker separated by commas ({min: 1, max: 20})
+            preg_match_all('/\{([^{}]*)\}/', $f[4] ?? '', $markers);
+            $markerNames = [];
+            $rulePairs = []; // [rule as written, value as written], checked by Validation::parseRules() once the type is known
             // {renamed_from:alter_name}: only for schema editing (SchemaMigration) - the data of column alter_name
             // moves into this field; without meaning at the first bootstrap
             $renamedFrom = null;
-            foreach ($markerNames as $i => $m) {
-                if ($m === 'renamed_from') {
-                    $renamedFrom = $markers[2][$i];
+            foreach ($markers[1] as $raw) {
+                $m = trim($raw);
+                if (preg_match('/^(title|unique)$/i', $m)) {
+                    $markerNames[] = strtolower($m);
+                } elseif (preg_match('/^renamed_from:/i', $m)) {
+                    if (!preg_match('/^renamed_from:([A-Za-z_][A-Za-z0-9_]*)$/i', $m, $rf)) {
+                        throw $unclear;
+                    }
+                    $markerNames[] = 'renamed_from';
+                    $renamedFrom = $rf[1];
+                } elseif (strpos($m, ':') !== false) {
+                    foreach (explode(',', $m) as $part) {
+                        if (!preg_match('/^\s*([A-Za-z]\w*)\s*:\s*(\S(?:.*\S)?)\s*$/', $part, $rp)) {
+                            throw $unclear;
+                        }
+                        $rulePairs[] = [$rp[1], $rp[2]];
+                    }
+                } else {
+                    // forgotten "pattern:" ({uszip} instead of {pattern: uszip}): ask back instead of "not understood"
+                    foreach ($patterns ?? [] as $known) {
+                        if (strcasecmp($known, $m) === 0) {
+                            throw new SchemaException(Msg::of('msg_schema.marker_pattern', "Unknown marker {{marker}} in class '{class}'. "
+                                . 'Did you mean {pattern: {pattern}}?', ['marker' => $m, 'class' => $name, 'pattern' => $known]));
+                        }
+                    }
+                    throw $unclear;
                 }
             }
+            if (count($markerNames) !== count(array_unique($markerNames))) {
+                throw new SchemaException(Msg::of('msg_schema.marker_twice', '{where}: marker given twice: {source}', [
+                    'where' => self::fieldWhere($field, $name), 'source' => $line,
+                ]));
+            }
+            $isTitle = in_array('title', $markerNames, true);
+            $isUnique = in_array('unique', $markerNames, true);
             if ($renamedFrom !== null && strtolower($field) === 'id') {
-                throw new SchemaException("Feld 'id' in Klasse '$name' kann nicht mit {renamed_from:…} markiert werden.");
+                throw new SchemaException(Msg::of('msg_schema.id_renamed', "Field 'id' in class '{class}' cannot be marked with "
+                    . '{renamed_from:…}.', ['class' => $name]));
             }
             $type = strtolower($type);
             if (!preg_match(self::IDENT, $field)) {
-                throw new SchemaException("Ungültiger Feldname '$field' in Klasse '$name'.");
+                throw new SchemaException(Msg::of('msg_schema.field_name', "Invalid field name '{field}' in class '{class}'.", [
+                    'field' => $field, 'class' => $name,
+                ]));
             }
             // enum name as type (case-insensitive like the base types)
             $enum = null;
@@ -1239,13 +1323,13 @@ final class PumlParser
                 && strtolower($field) !== 'id') {
                 $workflow = self::workflowFor($name, $field, $f[2], $workflows);
                 if ($optional || $isTitle || $isUnique) {
-                    throw new SchemaException("Feld '$field' in Klasse '$name': Ein Workflow-Feld ist immer Pflicht und kennt "
-                        . "weder '?' noch {title} oder {unique}: $line");
+                    throw new SchemaException(Msg::of('msg_schema.workflow_field_markers', "{where}: A workflow field is always required "
+                        . "and knows neither '?' nor {title} or {unique}: {source}", ['where' => self::fieldWhere($field, $name), 'source' => $line]));
                 }
                 foreach ($fields as $other) {
                     if (isset($other['workflow'])) {
-                        throw new SchemaException("Klasse '$name' hat mehrere Workflow-Felder ('{$other['name']}' und '$field'), "
-                            . 'erlaubt ist genau eines.');
+                        throw new SchemaException(Msg::of('msg_schema.workflow_fields', "Class '{class}' has several workflow fields "
+                            . "('{first}' and '{second}'), exactly one is allowed.", ['class' => $name, 'first' => $other['name'], 'second' => $field]));
                     }
                 }
             }
@@ -1254,47 +1338,46 @@ final class PumlParser
             } elseif ($enum !== null) {
                 $type = 'enum';
             } elseif (!isset(self::TYPE_MAP[$type]) && $type !== self::MEDIA_TYPE) {
-                throw new SchemaException(
-                    "Unbekannter Typ '$type' bei $name.$field (erlaubt: "
-                    . implode(', ', array_merge(array_keys(self::TYPE_MAP), [self::MEDIA_TYPE], array_keys($enums))) . ')'
-                );
+                throw new SchemaException(Msg::of('msg_schema.type_unknown', "Unknown type '{type}' at {class}.{field} (allowed: {allowed})", [
+                    'type' => $type, 'class' => $name, 'field' => $field,
+                    'allowed' => implode(', ', array_merge(array_keys(self::TYPE_MAP), [self::MEDIA_TYPE], array_keys($enums))),
+                ]));
             }
             if ($isTitle && strtolower($field) === 'id') {
-                throw new SchemaException(
-                    "Feld 'id' in Klasse '$name' kann nicht mit {title} markiert werden "
-                    . '(die ID wird in Anzeige-Bezeichnungen ohnehin immer als "#<id>" vorangestellt).'
-                );
+                throw new SchemaException(Msg::of('msg_schema.id_title', "Field 'id' in class '{class}' cannot be marked with {title} (the "
+                    . 'ID is always put in front of display labels as "#<id>" anyway).', ['class' => $name, 'title' => '{title}']));
             }
             if ($isTitle && !in_array($type, self::TITLE_ALLOWED_TYPES, true)) {
-                throw new SchemaException(
-                    "Feld '$field' in Klasse '$name': {title} ist nur bei den Typen "
-                    . implode(', ', array_diff(self::TITLE_ALLOWED_TYPES, ['enum'])) . " und Enum-Typen sinnvoll "
-                    . "(nicht bei '$type')."
-                );
+                throw new SchemaException(Msg::of('msg_schema.title_type', "{where}: {title} only makes sense with the types {types} and "
+                    . "enum types (not with '{type}').", [
+                        'where' => self::fieldWhere($field, $name), 'title' => '{title}',
+                        'types' => implode(', ', array_diff(self::TITLE_ALLOWED_TYPES, ['enum'])), 'type' => $type,
+                    ]));
             }
             if ($isUnique && $type === self::MEDIA_TYPE && strtolower($field) !== 'id') {
-                throw new SchemaException(
-                    "Feld '$field' in Klasse '$name': {unique} ist bei Medien-Feldern nicht möglich (eine Liste von Medien, "
-                    . 'keine Spalte).'
-                );
+                throw new SchemaException(Msg::of('msg_schema.unique_media', '{where}: {unique} is not possible on media fields (a list of '
+                    . 'media, not a column).', ['where' => self::fieldWhere($field, $name), 'unique' => '{unique}']));
             }
             if ($isUnique && strtolower($field) === 'id') {
-                throw new SchemaException(
-                    "Feld 'id' in Klasse '$name' kann nicht mit {unique} markiert werden (die ID ist ohnehin eindeutig)."
-                );
+                throw new SchemaException(Msg::of('msg_schema.id_unique', "Field 'id' in class '{class}' cannot be marked with {unique} (the "
+                    . 'ID is unique anyway).', ['class' => $name, 'unique' => '{unique}']));
             }
             if (isset($seen[strtolower($field)])) {
-                throw new SchemaException("Feld '$field' in Klasse '$name' doppelt definiert.");
+                throw new SchemaException(Msg::of('msg_schema.field_twice', "Field '{field}' in class '{class}' defined twice.", [
+                    'field' => $field, 'class' => $name,
+                ]));
             }
             if (RecordMeta::isReserved($field)) {
-                throw new SchemaException("Feld '$field' in Klasse '$name': Der Name ist für die automatischen Systemfelder "
-                    . 'reserviert (' . implode(', ', RecordMeta::FIELDS) . '; Zeitpunkt und Nutzer von Anlage und letzter Änderung '
-                    . 'setzt das System selbst). Bitte umbenennen, z. B. erstellt_am.');
+                throw new SchemaException(Msg::of('msg_schema.field_system', '{where}: The name is reserved for the automatic system fields '
+                    . '({fields}; the system sets the time and user of creation and last change itself). Please rename it, e.g. '
+                    . 'erstellt_am.', ['where' => self::fieldWhere($field, $name), 'fields' => implode(', ', RecordMeta::FIELDS)]));
             }
             if (strtolower($field) === Revisions::REASON_KEY) {
-                throw new SchemaException("Feld '$field' in Klasse '$name': Der Name ist für den Änderungsgrund beim Speichern "
-                    . 'reserviert (Versionen). Bitte umbenennen.');
+                throw new SchemaException(Msg::of('msg_schema.field_reason', '{where}: The name is reserved for the reason of change when '
+                    . 'saving (versions). Please rename it.', ['where' => self::fieldWhere($field, $name)]));
             }
+            // rules ({maxLength: 140}, ...): type, values and pattern names, see Validation
+            $rules = Validation::parseRules($name, $field, $type, strtolower($field) === 'id', $rulePairs, $patterns);
             $seen[strtolower($field)] = true;
             if ($isTitle) {
                 $titleFields[] = $field;
@@ -1307,10 +1390,8 @@ final class PumlParser
                 // The ID is always INTEGER PRIMARY KEY AUTOINCREMENT; another type or "?" would otherwise be silently
                 // skipped (found by the schema fuzzer) - hence an error instead of ignoring it.
                 if ($type !== 'int' || $optional) {
-                    throw new SchemaException(
-                        "Das Feld 'id' in Klasse '$name' ist immer 'int' und immer Pflicht (kein '?'). "
-                        . "Bitte die Zeile entfernen oder als 'id: int' schreiben."
-                    );
+                    throw new SchemaException(Msg::of('msg_schema.id_type', "The field 'id' in class '{class}' is always 'int' and always "
+                        . "required (no '?'). Please remove the line or write it as 'id: int'.", ['class' => $name]));
                 }
                 $fields[] = [
                     'name' => 'id', 'type' => 'int', 'sql_type' => 'INTEGER',
@@ -1342,7 +1423,7 @@ final class PumlParser
             $fields[] = [
                 'name' => $field, 'type' => $type, 'sql_type' => self::TYPE_MAP[$type] ?? null, // media: no column
                 'primary' => false, 'required' => !$optional, 'foreign_key' => null,
-            ] + ($renamedFrom !== null ? ['renamed_from' => $renamedFrom] : []);
+            ] + ($renamedFrom !== null ? ['renamed_from' => $renamedFrom] : []) + ($rules ? ['rules' => $rules] : []);
         }
 
         if ($section !== null && $sectionFields === 0) {
@@ -1361,7 +1442,8 @@ final class PumlParser
             return $f['type'] === 'visibility';
         }), 'name');
         if (count($visibility) > 1) {
-            throw new SchemaException("Entität $name hat mehrere visibility-Felder, erlaubt ist maximal eines");
+            throw new SchemaException(Msg::of('msg_schema.visibility_twice', 'Entity {class} has several visibility fields, at most one '
+                . 'is allowed', ['class' => $name]));
         }
 
         if (!isset($seen['id'])) {
@@ -1396,10 +1478,18 @@ final class PumlParser
         return preg_match('/^[\s\-=._]*$/', $title) ? null : $title;
     }
 
-    private static function emptySection(string $class, string $section): string
+    private static function emptySection(string $class, string $section): Msg
     {
-        return "Abschnitt '$section' in Klasse '$class' hat keine Felder (die Trennlinie steht direkt vor einer weiteren "
-            . 'Trennlinie mit Titel oder vor "}"). Bitte Felder ergänzen oder die Trennlinie entfernen.';
+        return Msg::of('msg_schema.section_empty', "Section '{title}' in class '{class}' has no fields (the separator line stands "
+            . 'directly before another separator line with a title or before "}"). Please add fields or remove the separator line.', [
+                'title' => $section, 'class' => $class,
+            ]);
+    }
+
+    /** "Field 'x' in class 'Y'" - start of many messages */
+    private static function fieldWhere(string $field, string $class): Msg
+    {
+        return Msg::of('msg_schema.field_in_class', "Field '{field}' in class '{class}'", ['field' => $field, 'class' => $class]);
     }
 
     /**
@@ -1410,20 +1500,28 @@ final class PumlParser
     private static function workflowFor(string $class, string $field, string $type, ?array $workflows): array
     {
         if ($workflows === null) {
-            throw new SchemaException("Feld '$field' in Klasse '$class': Der Typ '$type' ist ein Workflow, aber es ist kein "
-                . 'aktiver Workflow konfiguriert. Bitte zuerst unter System → Workflows eine Workflow-Datei anlegen und anwenden.');
+            throw new SchemaException(Msg::of('msg_schema.workflow_inactive', "{where}: The type '{type}' is a workflow, but no active "
+                . 'workflow is configured. Please first create and apply a workflow file under System → Workflows.', [
+                    'where' => self::fieldWhere($field, $class), 'type' => $type,
+                ]));
         }
         if (strcasecmp($type, $class . WorkflowParser::SUFFIX) !== 0) {
-            throw new SchemaException("Feld '$field' in Klasse '$class': Das Workflow-Feld einer Klasse hat den Typ "
-                . "'{$class}" . WorkflowParser::SUFFIX . "' (nicht '$type').");
+            throw new SchemaException(Msg::of('msg_schema.workflow_type', "{where}: The workflow field of a class has the type "
+                . "'{expected}' (not '{type}').", [
+                    'where' => self::fieldWhere($field, $class), 'expected' => $class . WorkflowParser::SUFFIX, 'type' => $type,
+                ]));
         }
         foreach ($workflows as $name => $def) {
             if (strcasecmp((string) $name, $type) === 0) {
                 return $def;
             }
         }
-        throw new SchemaException("Feld '$field' in Klasse '$class': Den Workflow '$type' gibt es in der aktiven Workflow-Datei "
-            . 'nicht' . ($workflows ? ' (vorhanden: ' . implode(', ', array_keys($workflows)) . ')' : ' (sie enthält keinen Workflow)') . '.');
+        $params = ['where' => self::fieldWhere($field, $class), 'type' => $type, 'available' => implode(', ', array_keys($workflows))];
+        throw new SchemaException($workflows
+            ? Msg::of('msg_schema.workflow_missing', "{where}: The workflow '{type}' does not exist in the active workflow file "
+                . '(available: {available}).', $params)
+            : Msg::of('msg_schema.workflow_none', "{where}: The workflow '{type}' does not exist in the active workflow file (it "
+                . 'contains no workflow).', $params));
     }
 
     private static function cardinality(string $raw): string
@@ -1438,7 +1536,7 @@ final class PumlParser
         if ($c === '0..1') {
             return 'optional';
         }
-        throw new SchemaException("Unbekannte Multiplizität \"$raw\" (erlaubt: n, *, 1, 0..1).");
+        throw new SchemaException(Msg::of('msg_schema.multiplicity', 'Unknown multiplicity "{value}" (allowed: n, *, 1, 0..1).', ['value' => $raw]));
     }
 
     private static function applyRelation(
@@ -1461,7 +1559,9 @@ final class PumlParser
         $tb = strtolower($b);
         foreach ([$a => $ta, $b => $tb] as $orig => $t) {
             if (!isset($entities[$t])) {
-                throw new SchemaException("Relation verweist auf unbekannte Klasse '$orig'.");
+                throw new SchemaException(Msg::of('msg_schema.relation_unknown_class', "Relation references unknown class '{class}'.", [
+                    'class' => $orig,
+                ]));
             }
         }
         $ca = self::cardinality($cardA);
@@ -1471,11 +1571,12 @@ final class PumlParser
             // "1..*"/"1..n" would be read like "n" and the minimum count would be lost - not implemented, hence an error
             foreach ([$cardA, $cardB] as $card) {
                 if (in_array(strtolower(trim($card)), ['1..*', '1..n'], true)) {
-                    $what = $label !== '' ? "'$label'" : 'die Beziehung';
-                    throw new SchemaException(
-                        "Mindestanzahl bei n:n-Beziehungen wird aktuell nicht unterstützt (nur '0..*'/'n'). "
-                        . "Bitte $what zwischen '$a' und '$b' ohne Mindestangabe definieren."
-                    );
+                    $params = ['label' => $label, 'a' => $a, 'b' => $b];
+                    throw new SchemaException($label !== ''
+                        ? Msg::of('msg_schema.nn_minimum_label', "A minimum count on n:n relationships is currently not supported (only "
+                            . "'0..*'/'n'). Please define '{label}' between '{a}' and '{b}' without a minimum.", $params)
+                        : Msg::of('msg_schema.nn_minimum', "A minimum count on n:n relationships is currently not supported (only "
+                            . "'0..*'/'n'). Please define the relationship between '{a}' and '{b}' without a minimum.", $params));
                 }
             }
             $self = $ta === $tb;
@@ -1483,29 +1584,27 @@ final class PumlParser
                 throw new SchemaException(self::symmetricMisplaced($a, $b, 'n:n'));
             }
             if ($onDelete === 'cascade') {
-                throw new SchemaException(
-                    "{cascade} ist nur bei n:1-Relationen möglich, nicht bei der n:n-Relation '$a' -- '$b' "
-                    . '(Verknüpfungen in der Zwischentabelle werden beim Löschen ohnehin immer mitgelöscht).'
-                );
+                throw new SchemaException(Msg::of('msg_schema.nn_cascade', "{cascade} is only possible on n:1 relations, not on the n:n "
+                    . "relation '{a}' -- '{b}' (links in the link table are always deleted along anyway).", [
+                        'a' => $a, 'b' => $b, 'cascade' => '{cascade}',
+                    ]));
             }
             if ($marker === 'label' && $label === '') {
-                throw new SchemaException(
-                    "{label} an der n:n-Relation '$a' -- '$b' braucht ein Label davor "
-                    . "(z. B. $a \"n\" -- \"n\" $b : interessiert an {label}). Ohne Label wird ohnehin der Tabellenname angezeigt."
-                );
+                throw new SchemaException(Msg::of('msg_schema.nn_label_empty', "{label} on the n:n relation '{a}' -- '{b}' needs a label "
+                    . 'before it (e.g. {a} "n" -- "n" {b} : interessiert an {label}). Without a label the table name is shown anyway.', [
+                        'a' => $a, 'b' => $b, 'label' => '{label}',
+                    ]));
             }
             if ($unique) {
-                throw new SchemaException(
-                    "{unique} ist nur an Feldern und n:1-Relationen möglich, nicht an der n:n-Relation '$a' -- '$b'."
-                );
+                throw new SchemaException(Msg::of('msg_schema.nn_unique', "{unique} is only possible on fields and n:1 relations, not on "
+                    . "the n:n relation '{a}' -- '{b}'.", ['a' => $a, 'b' => $b, 'unique' => '{unique}']));
             }
             // Self-reference: without a label the two columns of the link table (and, for a directed
             // relationship, the direction) could not be named
             if ($self && self::normalizeLabel($label) === '') {
-                throw new SchemaException(
-                    "n:n-Selbstreferenz '$a' braucht ein Label (z. B. $a \"n\" -- \"n\" $a : folgt, oder "
-                    . "$a \"n\" -- \"n\" $a : befreundet mit {symmetric}); daraus werden die Spalten der Zwischentabelle benannt."
-                );
+                throw new SchemaException(Msg::of('msg_schema.nn_self_label', "n:n self-reference '{a}' needs a label (e.g. {a} \"n\" -- "
+                    . '"n" {a} : folgt, or {a} "n" -- "n" {a} : befreundet mit {symmetric}); the columns of the link table are named '
+                    . 'after it.', ['a' => $a, 'symmetric' => '{symmetric}']));
             }
             // Multiple relationship (further n:n of the same class to the same target table): from now on all
             // labelled relationships of this pair are named after their label - including the existing one(s) that
@@ -1533,7 +1632,7 @@ final class PumlParser
             [$table, $list] = self::manyNames($ta, $tb, $label, $siblings || $self);
             foreach ($junctions as $j) {
                 if ($j['table'] === $table) {
-                    throw new SchemaException("Zwischentabelle '$table' würde doppelt entstehen. " . self::NN_LABEL_HINT);
+                    throw new SchemaException(self::junctionTwice($table));
                 }
             }
             self::rejectListFieldClash($entities[$ta], $list, $a, $b);
@@ -1573,10 +1672,10 @@ final class PumlParser
             throw new SchemaException(self::symmetricMisplaced($a, $b, $oneToOne ? '1:1' : 'n:1'));
         }
         if ($marker === 'label') {
-            throw new SchemaException(
-                "{label} ist nur bei n:n-Relationen möglich, nicht bei der " . ($oneToOne ? '1:1' : 'n:1')
-                . "-Relation '$a' -- '$b' (dort wird das Label ohnehin immer als Feldbeschriftung angezeigt)."
-            );
+            throw new SchemaException(Msg::of('msg_schema.label_not_nn', "{label} is only possible on n:n relations, not on the {kind} "
+                . "relation '{a}' -- '{b}' (there the label is always shown as the field label anyway).", [
+                    'kind' => $oneToOne ? '1:1' : 'n:1', 'a' => $a, 'b' => $b, 'label' => '{label}',
+                ]));
         }
 
         $first = true; // does the class named first carry the column?
@@ -1594,11 +1693,9 @@ final class PumlParser
             [$owner, $target, $required] = [$ta, $tb, $cb === 'one'];
         }
         if ($oneToOne && $owner === $target && $required) {
-            throw new SchemaException(
-                "1:1-Selbstreferenz '$a' mit Pflicht-Seite \"1\" wird nicht unterstützt: Jede Zeile bräuchte eine andere, "
-                . 'noch nicht zugeordnete Zeile derselben Tabelle - schon die erste Zeile ließe sich nie anlegen. '
-                . "Optional ist sie möglich, z. B. $a \"0..1\" --> \"0..1\" $a : Nachfolger von."
-            );
+            throw new SchemaException(Msg::of('msg_schema.one_to_one_self', "1:1 self-reference '{a}' with a required side \"1\" is not "
+                . 'supported: every row would need another, not yet assigned row of the same table - not even the first row could '
+                . 'ever be created. It is possible as optional, e.g. {a} "0..1" --> "0..1" {a} : Nachfolger von.', ['a' => $a]));
         }
         $filter = self::resolveFilter($entities, $owner, $target, $filterBy);
         $column = self::addForeignKey($entities, $owner, $target, $required, $label, $onDelete, $oneToOne, $minRequired, $filter);
@@ -1635,11 +1732,12 @@ final class PumlParser
             return null;
         }
         $names = [$entities[$source]['name'], $entities[$target]['name']];
-        $where = "{filter_by:$spec} an der Relation '{$names[0]}' -- '{$names[1]}'";
+        $where = Msg::of('msg_schema.filter_where', "{marker} on the relation '{a}' -- '{b}'", [
+            'marker' => '{filter_by:' . $spec . '}', 'a' => $names[0], 'b' => $names[1],
+        ]);
         if (!preg_match('/^(\w+)(?:\s*=\s*(\w+))?$/', $spec, $m)) {
-            throw new SchemaException(
-                "$where nicht verständlich (erwartet: {filter_by:feld} oder {filter_by:quellfeld=zielfeld})."
-            );
+            throw new SchemaException(Msg::of('msg_schema.filter_unclear', '{where} not understood (expected: {filter_by:field} or '
+                . '{filter_by:sourcefield=targetfield}).', ['where' => $where]));
         }
         $found = [];
         foreach ([[$source, $m[1]], [$target, $m[2] ?? $m[1]]] as $i => [$table, $name]) {
@@ -1649,20 +1747,21 @@ final class PumlParser
                 }
             }
             if (!isset($found[$i])) {
-                throw new SchemaException(
-                    "$where: Klasse '{$names[$i]}' hat kein Feld '$name' (Quell- und Zielklasse brauchen beide das Filterfeld; "
-                    . 'id, Beziehungs-Spalten und Medien-Felder sind dafür nicht möglich).'
-                );
+                throw new SchemaException(Msg::of('msg_schema.filter_field', "{where}: Class '{class}' has no field '{field}' (source and "
+                    . 'target class both need the filter field; id, relationship columns and media fields are not possible for it).', [
+                        'where' => $where, 'class' => $names[$i], 'field' => $name,
+                    ]));
             }
         }
         $type = function (array $f): string {
             return $f['type'] === 'enum' ? 'Enum ' . $f['enum'] : $f['type'];
         };
         if ($type($found[0]) !== $type($found[1])) {
-            throw new SchemaException(
-                "$where: Die Filterfelder haben unterschiedliche Typen ('{$names[0]}.{$found[0]['name']}': " . $type($found[0])
-                . ", '{$names[1]}.{$found[1]['name']}': " . $type($found[1]) . ') - beide brauchen denselben Typ (bei Enum denselben Enum).'
-            );
+            throw new SchemaException(Msg::of('msg_schema.filter_types', "{where}: The filter fields have different types ('{field_a}': "
+                . "{type_a}, '{field_b}': {type_b}) - both need the same type (for an enum the same enum).", [
+                    'where'  => $where, 'field_a' => "{$names[0]}.{$found[0]['name']}", 'type_a' => $type($found[0]),
+                    'field_b' => "{$names[1]}.{$found[1]['name']}", 'type_b' => $type($found[1]),
+                ]));
         }
         return ['field' => $found[0]['name'], 'target_field' => $found[1]['name']];
     }
@@ -1676,10 +1775,12 @@ final class PumlParser
         return $filter['field'] === $filter['target_field'] ? $filter['field'] : $filter['field'] . '=' . $filter['target_field'];
     }
 
-    private static function symmetricMisplaced(string $a, string $b, string $kind): string
+    private static function symmetricMisplaced(string $a, string $b, string $kind): Msg
     {
-        return "{symmetric} ist nur bei einer n:n-Selbstreferenz möglich (z. B. $a \"n\" -- \"n\" $a : befreundet mit "
-            . "{symmetric}), nicht bei der $kind-Relation '$a' -- '$b'.";
+        return Msg::of('msg_schema.symmetric_misplaced', '{symmetric} is only possible on an n:n self-reference (e.g. {a} "n" -- "n" '
+            . "{a} : befreundet mit {symmetric}), not on the {kind} relation '{a}' -- '{b}'.", [
+                'a' => $a, 'b' => $b, 'kind' => $kind, 'symmetric' => '{symmetric}',
+            ]);
     }
 
     /**
@@ -1708,10 +1809,8 @@ final class PumlParser
     {
         foreach ($entity['fields'] as $f) {
             if (strtolower($f['name']) === $list) {
-                throw new SchemaException(
-                    "Feldname '{$f['name']}' in Klasse '$a' kollidiert mit der generierten n:n-Liste zur Beziehung "
-                    . "mit '$b'. Bitte umbenennen."
-                );
+                throw new SchemaException(Msg::of('msg_schema.list_clash', "Field name '{field}' in class '{a}' collides with the generated "
+                    . "n:n list of the relationship with '{b}'. Please rename it.", ['field' => $f['name'], 'a' => $a, 'b' => $b]));
             }
         }
     }
@@ -1745,12 +1844,13 @@ final class PumlParser
         foreach ($entities[$owner]['fields'] as $f) {
             if (strtolower($f['name']) === $column) {
                 if ($f['foreign_key'] !== null) {
-                    throw new SchemaException(
-                        "Spaltenname '$column' in '$owner' mehrfach erzeugt. Bitte jede Beziehung zur selben "
-                        . 'Zieltabelle mit einem eigenen, eindeutigen Label versehen.'
-                    );
+                    throw new SchemaException(Msg::of('msg_schema.column_twice', "Column name '{column}' in '{table}' generated more than "
+                        . 'once. Please give every relationship to the same target table its own unique label.', [
+                            'column' => $column, 'table' => $owner,
+                        ]));
                 }
-                throw new SchemaException("Spalte '$column' in '$owner' existiert bereits (Konflikt mit einem vorhandenen Feld).");
+                throw new SchemaException(Msg::of('msg_schema.column_exists', "Column '{column}' in '{table}' already exists (conflict "
+                    . 'with an existing field).', ['column' => $column, 'table' => $owner]));
             }
         }
         $entities[$owner]['fields'][] = [

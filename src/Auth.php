@@ -132,8 +132,8 @@ final class Auth
             'admin_created'                => $adminCreated,
         ];
         if ($adminCreated) {
-            $result['admin_hint'] = "Benutzer '" . self::DEFAULT_ADMIN . "' angelegt; Startpasswort siehe Dokumentation, "
-                . 'Änderung beim ersten Login erzwungen. Bitte sofort anmelden und das Passwort ändern.';
+            $result['admin_hint'] = "User '" . self::DEFAULT_ADMIN . "' created; initial password see documentation, a change is "
+                . 'enforced on the first login. Please sign in right away and change the password.';
         }
         $result['session_check'] = self::sessionCheck();
         $result['rate_limit_check'] = self::clientCheck();
@@ -181,8 +181,8 @@ final class Auth
             'x_forwarded_for'       => is_string($forwarded) ? $forwarded : null,
             'hint'                  => $public && $forwarded === null
                 ? null
-                : 'REMOTE_ADDR ist keine öffentliche Adresse bzw. X-Forwarded-For ist gesetzt: vermutlich sitzt ein Proxy davor. '
-                  . 'Dann teilen sich alle Besucher eine IP im Rate-Limit. Prüfen, ob remote_addr Ihrer echten IP entspricht.',
+                : 'REMOTE_ADDR is not a public address or X-Forwarded-For is set: probably a proxy is in front. Then all '
+                  . 'visitors share one IP in the rate limit. Check whether remote_addr matches your real IP.',
         ];
     }
 
@@ -224,15 +224,8 @@ final class Auth
         $ip = self::clientIp();
         $wait = self::lockedFor($pdo, $name, $ip);
         if ($wait > 0) {
-            throw new ApiException(
-                429,
-                [
-                    'error'               => 'rate_limited',
-                    'retry_after_seconds' => $wait,
-                    'message'             => 'Zu viele Fehlversuche, bitte später erneut versuchen',
-                ],
-                ['Retry-After' => (string) $wait]
-            );
+            throw ApiException::of(429, 'rate_limited', Msg::of('msg_auth.rate_limited', 'Too many failed attempts, please try again later'), ['retry_after_seconds' => $wait],
+                ['Retry-After' => (string) $wait]);
         }
 
         $user = null;
@@ -243,10 +236,8 @@ final class Auth
         }
         // API users have no password and never get a session: refused whatever was entered, without comparing anything.
         if ($user !== null && $user['role'] === ApiKeys::ROLE) {
-            throw new ApiException(403, [
-                'error'   => 'api_user_no_login',
-                'message' => 'API-Nutzer können sich nicht anmelden – der Zugriff ist nur mit dem API-Schlüssel möglich',
-            ]);
+            throw ApiException::of(403, 'api_user_no_login', Msg::of('msg_auth.api_user_no_login',
+                'API users cannot sign in – access is only possible with the API key'));
         }
         // Deactivated users fail the same way as with a wrong password - this does not reveal that the account exists.
         $valid = is_string($password)
@@ -255,7 +246,7 @@ final class Auth
             && (int) $user['active'] === 1;
         if (!$valid) {
             $pdo->prepare('INSERT INTO login_attempts (username, ip) VALUES (?, ?)')->execute([$name, $ip]);
-            throw new ApiException(401, ['error' => 'invalid_credentials', 'message' => 'Benutzername oder Passwort falsch']);
+            throw ApiException::of(401, 'invalid_credentials', Msg::of('msg_auth.invalid_credentials', 'Wrong username or password'));
         }
 
         // success: reset the failed attempts of this user name
@@ -267,8 +258,8 @@ final class Auth
         }
 
         if (!self::ensureSessionDir()) {
-            error_log('[LessHeadCMS] data/sessions ist nicht beschreibbar - Login nicht möglich.');
-            throw new ApiException(500, ['error' => 'session_unavailable', 'message' => 'Session-Verzeichnis nicht beschreibbar']);
+            error_log('[LessHeadCMS] data/sessions is not writable - login impossible.');
+            throw ApiException::of(500, 'session_unavailable', Msg::of('msg_auth.session_dir', 'Session directory not writable'));
         }
         self::gcSessions(self::sessionLifetime($pdo));
         self::start(false, self::sessionLifetime($pdo));
@@ -327,46 +318,50 @@ final class Auth
      *
      * @param string $password
      */
-    public static function passwordError(PDO $pdo, string $password): ?string
+    public static function passwordError(PDO $pdo, string $password): ?Msg
     {
         if (strlen($password) > self::MAX_PASSWORD_BYTES) {
-            return 'Das Passwort darf höchstens ' . self::MAX_PASSWORD_BYTES . ' Bytes lang sein';
+            return Msg::of('msg_auth.password_too_long', 'The password must not be longer than {max} bytes',
+                ['max' => self::MAX_PASSWORD_BYTES]);
         }
         $min = (int) Settings::get($pdo, Settings::PASSWORD_MIN_LENGTH);
         $length = function_exists('mb_strlen') ? mb_strlen($password, 'UTF-8') : strlen($password);
-        $rule = ["mindestens $min Zeichen"];
+        $rule = [Msg::of('msg_auth.password_rule_min', 'at least {min} characters', ['min' => $min])];
         $missing = [];
         if ($length < $min) {
-            $missing[] = "mindestens $min Zeichen (bisher $length)";
+            $missing[] = Msg::of('msg_auth.password_missing_min', 'at least {min} characters (so far {length})',
+                ['min' => $min, 'length' => $length]);
         }
         if (Settings::get($pdo, Settings::PASSWORD_REQUIRE_DIGIT)) {
-            $rule[] = 'eine Ziffer';
+            $rule[] = Msg::of('msg_auth.password_rule_digit', 'a digit');
             if (!preg_match('/[0-9]/', $password)) {
-                $missing[] = 'eine Ziffer';
+                $missing[] = Msg::of('msg_auth.password_missing_digit', 'a digit');
             }
         }
         if (Settings::get($pdo, Settings::PASSWORD_REQUIRE_SPECIAL)) {
-            $rule[] = 'ein Sonderzeichen (z. B. ! ? # - _)';
+            $rule[] = Msg::of('msg_auth.password_rule_special', 'a special character (e.g. ! ? # - _)');
             if (preg_match('/[^\p{L}\p{N}\s]/u', $password) !== 1) {
-                $missing[] = 'ein Sonderzeichen';
+                $missing[] = Msg::of('msg_auth.password_missing_special', 'a special character');
             }
         }
         if (Settings::get($pdo, Settings::PASSWORD_REQUIRE_MIXED_CASE)) {
-            $rule[] = 'einen Groß- und einen Kleinbuchstaben';
+            $rule[] = Msg::of('msg_auth.password_rule_mixed', 'an upper-case and a lower-case letter');
             if (preg_match('/\p{Lu}/u', $password) !== 1 || preg_match('/\p{Ll}/u', $password) !== 1) {
-                $missing[] = 'ein Groß- und ein Kleinbuchstabe';
+                $missing[] = Msg::of('msg_auth.password_missing_mixed', 'an upper-case and a lower-case letter');
             }
         }
         if (!$missing) {
             return null;
         }
-        $last = array_pop($rule);
-        return 'Das Passwort muss ' . ($rule ? implode(', ', $rule) . ' und ' : '') . $last . ' enthalten. Es fehlt: '
-            . implode(', ', $missing) . '.';
+        return Msg::of('msg_auth.password_rule', 'The password must contain {rule}. Missing: {missing}.',
+            ['rule' => Msg::andList($rule), 'missing' => Msg::commaList($missing)]);
     }
 
     /** Message for a wrong or missing current_password (deliberately the same: does not reveal what exactly was missing) */
-    public const CURRENT_PASSWORD_WRONG = 'Aktuelles Passwort ist falsch.';
+    private static function currentPasswordWrong(): Msg
+    {
+        return Msg::of('msg_auth.current_password_wrong', 'The current password is wrong.');
+    }
 
     /**
      * PUT /api/me/password - always only for the logged-in user (ID from the session).
@@ -391,10 +386,10 @@ final class Auth
         $pdo = self::usersPdo();
         $user = self::currentUser($pdo);
         if ($user === null) {
-            throw new ApiException(401, ['error' => 'unauthorized', 'message' => 'Anmeldung erforderlich']);
+            throw ApiException::of(401, 'unauthorized', Msg::of('msg_auth.login_required', 'Login required'));
         }
         if ($user['role'] === ApiKeys::ROLE) {
-            throw new ApiException(403, ['error' => 'forbidden', 'message' => 'API-Nutzer haben kein Passwort']);
+            throw ApiException::of(403, 'forbidden', Msg::of('msg_users.api_no_password', 'API users have no password'));
         }
 
         $errors = [];
@@ -405,20 +400,12 @@ final class Auth
             $ip = self::clientIp();
             $wait = self::lockedFor($pdo, $name, $ip);
             if ($wait > 0) {
-                $message = 'Zu viele Fehlversuche, bitte später erneut versuchen';
-                throw new ApiException(
-                    429,
-                    [
-                        'error'               => 'rate_limited',
-                        'retry_after_seconds' => $wait,
-                        'message'             => $message,
-                        'errors'              => ['current_password' => $message],
-                    ],
-                    ['Retry-After' => (string) $wait]
-                );
+                $message = Msg::of('msg_auth.rate_limited', 'Too many failed attempts, please try again later');
+                throw ApiException::of(429, 'rate_limited', $message, ['retry_after_seconds' => $wait]
+                    + ApiException::fields(['current_password' => $message]), ['Retry-After' => (string) $wait]);
             }
             if (!is_string($current) || $current === '') {
-                $errors['current_password'] = self::CURRENT_PASSWORD_WRONG;
+                $errors['current_password'] = self::currentPasswordWrong();
             } else {
                 $stmt = $pdo->prepare('SELECT password_hash FROM users WHERE id = ?');
                 $stmt->execute([$user['id']]);
@@ -426,21 +413,21 @@ final class Auth
                     $pdo->prepare('DELETE FROM login_attempts WHERE username = ?')->execute([$name]);
                 } else {
                     $pdo->prepare('INSERT INTO login_attempts (username, ip) VALUES (?, ?)')->execute([$name, $ip]);
-                    $errors['current_password'] = self::CURRENT_PASSWORD_WRONG;
+                    $errors['current_password'] = self::currentPasswordWrong();
                 }
             }
         }
 
         $password = $input['password'] ?? null;
         if (!is_string($password)) {
-            $errors['password'] = 'Passwort fehlt';
+            $errors['password'] = Msg::of('msg_auth.password_missing', 'Password missing');
         } elseif (($ruleError = self::passwordError($pdo, $password)) !== null) {
             $errors['password'] = $ruleError;
         } elseif ($password === self::DEFAULT_PASSWORD || $password === $user['username']) {
-            $errors['password'] = 'Dieses Passwort ist nicht erlaubt - bitte ein anderes wählen';
+            $errors['password'] = Msg::of('msg_auth.password_not_allowed', 'This password is not allowed - please choose another one');
         }
         if ($errors) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => reset($errors), 'errors' => $errors]);
+            throw ApiException::of(422, 'validation', reset($errors), ApiException::fields($errors));
         }
 
         $pdo->prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?')
@@ -512,20 +499,15 @@ final class Auth
     {
         $user = self::currentUser($pdo);
         if ($user === null) {
-            throw new ApiException(401, ['error' => 'unauthorized', 'message' => 'Anmeldung erforderlich']);
+            throw ApiException::of(401, 'unauthorized', Msg::of('msg_auth.login_required', 'Login required'));
         }
         $method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
         if (!empty($user['api_read_only']) && $method !== 'GET' && $method !== 'HEAD') {
-            throw new ApiException(403, [
-                'error'   => 'read_only',
-                'message' => 'Dieser API-Schlüssel darf nur lesen',
-            ]);
+            throw ApiException::of(403, 'read_only', Msg::of('msg_auth.api_key_read_only', 'This API key may only read'));
         }
         if ($user['must_change_password']) {
-            throw new ApiException(403, [
-                'error'   => 'password_change_required',
-                'message' => 'Bitte zuerst das Passwort ändern',
-            ]);
+            throw ApiException::of(403, 'password_change_required', Msg::of('msg_auth.password_change_required',
+                'Please change the password first'));
         }
         return $user;
     }
@@ -535,7 +517,7 @@ final class Auth
     {
         $user = self::requireSession($pdo);
         if ($user['role'] !== 'admin') {
-            throw new ApiException(403, ['error' => 'forbidden', 'message' => 'Nur für Administratoren']);
+            throw ApiException::of(403, 'forbidden', Msg::of('msg_users.admins_only', 'Administrators only'));
         }
         return $user;
     }
@@ -574,7 +556,7 @@ final class Auth
     private static function retryAfter(PDO $pdo, string $column, string $value, int $max, int $window): int
     {
         if ($column !== 'username' && $column !== 'ip') {
-            throw new \InvalidArgumentException('Ungültige Spalte');
+            throw new \InvalidArgumentException('Invalid column');
         }
         $stmt = $pdo->prepare(
             "SELECT CAST(strftime('%s', attempted_at) AS INTEGER) AS ts, CAST(strftime('%s', 'now') AS INTEGER) AS now
@@ -596,10 +578,8 @@ final class Auth
     {
         $pdo = Database::connectIfExists();
         if ($pdo === null || !Database::tableExists($pdo, 'users')) {
-            throw new ApiException(503, [
-                'error'   => 'not_bootstrapped',
-                'message' => 'Benutzertabelle fehlt - bitte /bootstrap?token=... aufrufen',
-            ]);
+            throw ApiException::of(503, 'not_bootstrapped', Msg::of('msg_auth.users_table_missing',
+                'The users table is missing - please call /bootstrap?token=...'));
         }
         return $pdo;
     }
@@ -642,7 +622,7 @@ final class Auth
             'read_and_close'   => $readOnly,
         ]);
         if (!$ok) {
-            throw new \RuntimeException('session_start() ist fehlgeschlagen.');
+            throw new \RuntimeException('session_start() failed.');
         }
     }
 

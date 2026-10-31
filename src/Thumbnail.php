@@ -154,7 +154,7 @@ final class Thumbnail
             return basename($target);
         } catch (\Throwable $e) {
             @unlink($target);
-            error_log('[LessHeadCMS] Vorschaubild für ' . $filename . ' nicht erzeugt: ' . $e->getMessage());
+            error_log('[LessHeadCMS] Thumbnail for ' . $filename . ' not created: ' . $e->getMessage());
             return '';
         } finally {
             // PHP 8 frees GdImage objects itself; imagedestroy() only for older versions (resources)

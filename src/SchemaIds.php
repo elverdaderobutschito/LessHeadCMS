@@ -174,7 +174,7 @@ final class SchemaIds
      * schema, otherwise a provisional one ("draft:" + key), as 'key' its key and as 'active' the name and label
      * of this counterpart in the active schema (null for a provisional ID). The diagram editor uses this to set
      * {renamed_from:…} when renaming - the migration only matches via the name or this marker (SchemaMigration::identify()),
-     * not via the ID. Writes nothing.
+     * not via the ID. Writes nothing. Rules of a field (Validation) get "<ID of the field>:<rule type>" as their 'id'.
      *
      * @param array<string,string[]> $candidates new key => possible previous keys (SchemaMigration::stableKeys())
      * @param array<string,string> $ids model_key => id (lookup())
@@ -189,7 +189,16 @@ final class SchemaIds
         };
         foreach ($model['entities'] as &$e) {
             $e = $resolve($e);
-            $e['fields'] = array_map($resolve, $e['fields']);
+            $e['fields'] = array_map(function (array $f) use ($resolve): array {
+                $f = $resolve($f);
+                // rules have no schema_ids row of their own: stable via the field (one rule type at most once per field)
+                if (isset($f['rules'])) {
+                    $f['rules'] = array_map(function (array $r) use ($f): array {
+                        return ['id' => $f['id'] . ':' . $r['type'], 'key' => $r['id']] + $r;
+                    }, $f['rules']);
+                }
+                return $f;
+            }, $e['fields']);
             $e['media'] = array_map($resolve, $e['media']);
         }
         unset($e);
@@ -268,7 +277,7 @@ final class SchemaIds
         $positions = null;
         if (array_key_exists('positions', $body)) {
             if (!is_array($body['positions'])) {
-                $errors['positions'] = 'Objekt {id: {x, y}} erwartet';
+                $errors['positions'] = Msg::of('msg_layout.positions_expected', 'Object {id: {x, y}} expected');
             } else {
                 $nodes = $pdo->query("SELECT id FROM schema_ids WHERE kind IN ('entity', 'enum')")->fetchAll(PDO::FETCH_COLUMN);
                 $nodes = array_flip($nodes);
@@ -277,14 +286,14 @@ final class SchemaIds
                     $id = (string) $id;
                     if (!isset($nodes[$id])) {
                         $errors["positions.$id"] = strpos($id, self::DRAFT) === 0
-                            ? 'vorläufige ID (Element noch nicht angewendet) - Position wird nicht gespeichert'
-                            : 'unbekannte ID (keine Entität/kein Enum des aktiven Schemas)';
+                            ? Msg::of('msg_layout.draft_id', 'provisional ID (element not applied yet) - position is not saved')
+                            : Msg::of('msg_layout.unknown_id', 'unknown ID (no entity/enum of the active schema)');
                         continue;
                     }
                     $x = self::number($pos['x'] ?? null, self::COORD_LIMIT);
                     $y = self::number($pos['y'] ?? null, self::COORD_LIMIT);
                     if ($x === null || $y === null) {
-                        $errors["positions.$id"] = 'x und y als Zahlen erwartet';
+                        $errors["positions.$id"] = Msg::of('msg_layout.xy_expected', 'x and y expected as numbers');
                         continue;
                     }
                     $positions[$id] = [$x, $y];
@@ -298,16 +307,18 @@ final class SchemaIds
             $vy = is_array($v) ? self::number($v['y'] ?? null, self::COORD_LIMIT) : null;
             $zoom = is_array($v) ? self::number($v['zoom'] ?? null, self::ZOOM_MAX) : null;
             if ($vx === null || $vy === null || $zoom === null || $zoom < self::ZOOM_MIN) {
-                $errors['viewport'] = '{x, y, zoom} erwartet (zoom ' . self::ZOOM_MIN . ' bis ' . self::ZOOM_MAX . ')';
+                $errors['viewport'] = Msg::of('msg_layout.viewport_expected', '{x, y, zoom} expected (zoom {min} to {max})', [
+                    'min' => self::ZOOM_MIN, 'max' => self::ZOOM_MAX,
+                ]);
             } else {
                 $viewport = ['x' => $vx, 'y' => $vy, 'zoom' => $zoom];
             }
         }
         if ($positions === null && $viewport === null && !$errors) {
-            $errors['positions'] = 'positions und/oder viewport erwartet';
+            $errors['positions'] = Msg::of('msg_layout.nothing', 'positions and/or viewport expected');
         }
         if ($errors) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Layout ungültig', 'errors' => $errors]);
+            throw ApiException::of(422, 'validation', Msg::of('msg_layout.invalid', 'Invalid layout'), ApiException::fields($errors));
         }
         $pdo->beginTransaction();
         try {

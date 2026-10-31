@@ -174,6 +174,10 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   `{cascade}` together with `{label}` on one line (`{cascade}` is only possible on n:1, `{label}` only on n:n; in addition
   `{unique}` or `{symmetric}` may appear at most once, see below). Like every diagram change, adding `{label}` changes the
   hash → `migration_needed` on existing installations.
+* **Field rules** `{minLength: n}`, `{maxLength: n}` (string, text, richtext), `{min: x}`, `{max: x}` (int, decimal, date)
+  and `{pattern: name}` (string, name from the pattern library): `+ teaser: string? {maxLength: 140}`,
+  `+ servings: int {min: 1, max: 20}`. Checked by the server before every save, no table change. Wrong type, invalid
+  value, min > max or an unknown pattern are schema errors. Details: [Field rules (validation)](validation.md).
 * **`{unique}` marker** (composite uniqueness) on fields (`+ code: string {unique}`, combinable with
   `{title}` in any order) and at the end of n:1 relations (`Bestellposition "n" --> "1" Variante {unique}`,
   combinable with `{cascade}`: `… : gehört zu {cascade} {unique}`). **All** columns of a class marked this way together form

@@ -42,11 +42,13 @@ ui_text,sidebar.system_localization,Localization
 ui_text,sidebar.system_languages,Languages
 ui_text,sidebar.system_translations,Translations
 ui_text,sidebar.system_settings,Settings
+ui_text,sidebar.system_violations,Rule violations
 ui_text,sidebar.change_password,Change password
 ui_text,sidebar.language,Language
 ui_text,sidebar.language_aria,Display language
 ui_text,sidebar.logout,Sign out
 ui_text,app.loading,Loading…
+ui_text,app.request_failed,Request failed
 ui_text,app.server_unreachable,Server unreachable: {error}
 ui_text,app.loading_schema,Loading schema…
 ui_text,app.schema_error,The schema could not be loaded: {error}
@@ -70,6 +72,7 @@ ui_text,form.no_create,"No permission to create '{entity}'. You can view the for
 ui_text,form.copy_notice,Copy of {entity} #{id} – not saved yet.
 ui_text,form.copy_one_to_one,“{label}” was cleared (1:1 relation: already assigned to the original).
 ui_text,form.min_warning,⚠ {entity} #{id} has no record in “{child}” yet (at least 1 required).
+ui_text,form.rule_violations,⚠ {entity} #{id} violates current field rules (marked fields). It can only be saved once all rules are met.
 ui_text,form.workflow_heading,Workflow
 ui_text,form.workflow_status,Status
 ui_text,form.workflow_chain,Progress
@@ -471,6 +474,7 @@ ui_text,testdata.min_extra,{count} of them added for the minimum count
 ui_text,testdata.skipped,skipped – {reason}
 ui_text,testdata.links,{count} links
 ui_text,testdata.media_empty,Media fields stay empty (no files are made up): {fields}
+ui_text,testdata.pattern_empty,Optional fields with a pattern but without a matching example value stay empty: {fields}
 ui_text,testdata.media_required,{field} (required – select media when editing)
 ui_text,testdata.nothing,No count greater than 0 selected – nothing generated.
 ui_text,languages.heading,Languages
@@ -547,11 +551,12 @@ ui_text,translations_ui.expand_all,Expand all
 ui_text,translations_ui.collapse_all,Collapse all
 ui_text,translations_ui.tabs_aria,Section
 ui_text,translations_ui.tab_schema,Schema elements
+ui_text,translations_ui.tab_patterns,Pattern messages
 ui_text,translations_ui.tab_ui,Fixed UI texts
 ui_text,translations_ui.unsaved_title,unsaved changes
 ui_text,translations_ui.default_hint,"{language} is the default language – the language of the diagram. Here you can override the label derived from it, for example “Veröffentlicht” for the field {example} (names in the diagram must stay ASCII-safe). Diagram, database and API stay unchanged. Without an entry, the derived label applies; other languages show the override as long as they have no translation of their own."
-ui_text,translations_ui.default_ui_hint,"Fixed UI texts have no override in the default language: the German texts are located directly in frontend/src/i18n-strings.js. To translate, choose another language above."
-ui_text,translations_ui.ui_hint,"Labels of the interface itself. Without a translation, the German text is shown. Please keep placeholders in curly braces such as {example} unchanged. Server messages (e.g. validation errors) and schema editing remain in German for now."
+ui_text,translations_ui.default_ui_hint,"In the default language, an entry replaces the built-in text (for German the German source text, otherwise the language file of the language – shipped like translations/en.csv or a custom file –, otherwise English). Without an entry, the built-in text stays. This way, an installation with a French diagram can be switched to French entirely."
+ui_text,translations_ui.ui_hint,"Labels of the interface and messages of the server. Without a translation, the built-in text of the language is shown (shipped or custom language file), otherwise the text of the default language, otherwise English. Please keep placeholders in curly braces such as {example} unchanged."
 ui_text,translations_ui.schema_empty,The active schema contains nothing to translate.
 ui_text,translations_ui.all_done,Everything in this section is translated.
 ui_text,translations_ui.group_enum,(enum)
@@ -568,6 +573,10 @@ ui_text,translations_ui.placeholder_missing,{text} (not yet translated)
 ui_text,translations_ui.placeholder_override,"{text} (derived, no override)"
 ui_text,translations_ui.missing,not yet translated
 ui_text,translations_ui.no_override,no override – derived label
+ui_text,translations_ui.placeholder_builtin,"{text} (built-in, no override)"
+ui_text,translations_ui.no_override_builtin,no override – built-in text
+ui_text,translations_ui.no_override_shipped,no override – built-in text (shipped language file)
+ui_text,translations_ui.no_override_custom,no override – built-in text (custom language file)
 ui_text,translations_ui.placeholder_warning,Placeholders differ from the original (expected: {expected})
 ui_text,translations_ui.placeholder_none,none
 ui_text,translations_ui.discard_confirm,Discard unsaved translations?
@@ -978,6 +987,7 @@ ui_text,settings.translations_csv_max_mb,Maximum size of a CSV file
 ui_text,settings.translations_csv_max_mb_unit,MB
 ui_text,settings.translations_csv_max_mb_hint,"The import under System → Localization → Translations rejects larger language files (uploaded files and files from translations/). Default: 2, allowed: {min} to {max}."
 ui_text,settings.tab_webhooks,Webhooks
+ui_text,settings.tab_patterns,Patterns
 ui_text,settings.group_webhooks,Calling the webhooks
 ui_text,settings.webhook_timeout_seconds,Longest wait
 ui_text,settings.webhook_timeout_seconds_unit,seconds
@@ -1036,3 +1046,733 @@ ui_text,webhooks.workflow_hint,"In a workflow file, {action} in a transition tri
 ui_text,webhooks.add_submit,Create webhook
 ui_text,webhooks.edit_submit,Save
 ui_text,webhooks.edit_cancel,Cancel
+ui_text,validation.length_min,At least {min} characters (currently {count}).
+ui_text,validation.length_max,At most {max} characters (currently {count}).
+ui_text,validation.length_between,Between {min} and {max} characters (currently {count}).
+ui_text,validation.range_min,At least {min}.
+ui_text,validation.range_max,At most {max}.
+ui_text,validation.range_between,Between {min} and {max}.
+ui_text,validation.date_min,Not before {min}.
+ui_text,validation.date_max,Not after {max}.
+ui_text,validation.date_between,Between {min} and {max}.
+ui_text,validation.pattern_error,The format could not be checked (pattern “{pattern}”). Please enter a different value.
+ui_text,validation.pattern_missing,The pattern “{pattern}” no longer exists. Please inform the administrators.
+ui_text,validation.counter_aria,{count} of at most {max} characters
+ui_text,patterns.heading,Pattern library
+ui_text,patterns.intro,"Named regular expressions for fields of type string. The diagram only contains the name, e.g. + zip: string {pattern: plz}. The expression always has to match the whole value (without / and without ^ $)."
+ui_text,patterns.loading,Loading patterns …
+ui_text,patterns.table_aria,Patterns
+ui_text,patterns.col_name,Name
+ui_text,patterns.col_regex,Regular expression
+ui_text,patterns.col_message,Message for editors
+ui_text,patterns.col_example,Example
+ui_text,patterns.col_used,Used in
+ui_text,patterns.builtin,built-in
+ui_text,patterns.builtin_hint,Built-in patterns are read-only. For a variant choose “Use as template” and save it under a name of your own.
+ui_text,patterns.complex,too complex
+ui_text,patterns.complex_hint,"This expression failed the load test: for certain inputs the check would have to try an extreme number of possibilities. The form therefore checks it only when saving. Please simplify it."
+ui_text,patterns.unused,–
+ui_text,patterns.edit,Edit
+ui_text,patterns.copy,Use as template
+ui_text,patterns.delete,Delete
+ui_text,patterns.delete_used,In use ({fields}) – remove it from the diagram first.
+ui_text,patterns.delete_confirm,Delete pattern “{name}”?
+ui_text,patterns.deleted,Pattern “{name}” deleted.
+ui_text,patterns.created,Pattern “{name}” created.
+ui_text,patterns.saved,Pattern “{name}” saved.
+ui_text,patterns.add_heading,New pattern
+ui_text,patterns.edit_heading,Edit pattern “{name}”
+ui_text,patterns.name,Name
+ui_text,patterns.name_hint,"Lower-case letters, digits and _, starting with a letter – exactly as written in the diagram."
+ui_text,patterns.name_locked,The name cannot be changed while the pattern is in use.
+ui_text,patterns.regex,Regular expression (PCRE)
+ui_text,patterns.regex_hint,"Without delimiters and anchors, e.g. [0-9]{5}. Options such as (?i) are possible."
+ui_text,patterns.regex_server_hint,"This regex cannot be guaranteed to behave identically in the browser and in PHP. In the editing form it is therefore checked when saving, not while typing."
+ui_text,patterns.too_complex,"This expression is too complex: for certain inputs the check would have to try an extreme number of possibilities. Please simplify it, e.g. avoid nested or overlapping repetitions such as (a|a)+ or (a+)+."
+ui_text,patterns.message,Message for editors
+ui_text,patterns.message_hint,"Shown at the field when the value does not match, e.g. “Please enter a five-digit postcode”. Translatable under Localization → Translations."
+ui_text,patterns.example,Example value (optional)
+ui_text,patterns.example_hint,"Placeholder in the form and value for the test data generator; must match the expression."
+ui_text,patterns.test_label,Test
+ui_text,patterns.test_value,Test value
+ui_text,patterns.test_submit,Check
+ui_text,patterns.test_match,Match – the value fits.
+ui_text,patterns.test_no_match,No match – the value does not fit.
+ui_text,patterns.test_invalid,Invalid expression: {error}
+ui_text,patterns.add_submit,Create pattern
+ui_text,patterns.edit_submit,Save
+ui_text,patterns.edit_cancel,Cancel
+ui_text,patterns.impact_heading,Effect of the change
+ui_text,patterns.impact_intro,Existing records are not changed. Records that no longer match appear under “Rule violations” and can only be saved again once they are valid.
+ui_text,patterns.impact_row,{field}: {after} records would violate it (so far {now})
+ui_text,patterns.impact_none,No existing record would be affected.
+ui_text,patterns.impact_confirm,Save anyway
+ui_text,violations.heading,Rule violations
+ui_text,violations.intro,"Records that violate the current field rules – e.g. after a stricter rule or a changed pattern. They are never changed automatically; they can only be saved once they are valid."
+ui_text,violations.refresh,Recalculate
+ui_text,violations.loading,Calculating …
+ui_text,violations.none,No rule violations – all records meet the current rules.
+ui_text,violations.count,{total} violations
+ui_text,violations.count_one,1 violation
+ui_text,violations.truncated,Showing the first {shown} of {total}.
+ui_text,violations.table_aria,Rule violations
+ui_text,violations.col_entity,Entity
+ui_text,violations.col_record,Record
+ui_text,violations.col_field,Field
+ui_text,violations.col_rule,Rule
+ui_text,violations.col_message,Message
+ui_text,violations.open,Open {entity} #{id}
+ui_text,msg_api.invalid_input,Invalid input
+ui_text,msg_api.invalid_json,The request body is not a valid JSON object
+ui_text,msg_api.not_bootstrapped,Database not initialised yet – please call /bootstrap?token=...
+ui_text,msg_api.internal_error,Internal error
+ui_text,msg_api.forbidden_area,No permission for this area
+ui_text,msg_api.maintenance,Maintenance: a schema migration is running. Please try again shortly.
+ui_text,msg_api.route_not_found,Route not found
+ui_text,msg_api.frontend_missing,Frontend missing (assets/index.html).
+ui_text,msg_api.users_no_delete,Users cannot be deleted – set active=false via PUT instead
+ui_text,msg_api.no_active_schema,No active schema found - please call /bootstrap?token=... first (it sets one).
+ui_text,msg_api.schema_text_missing,Schema text missing
+ui_text,msg_api.text_expected,Text expected
+ui_text,msg_api.restore_confirm,"To restore, please type exactly “{confirm}”. Nothing was changed."
+ui_text,msg_api.confirm_expected,{confirm} expected
+ui_text,msg_api.backup_missing,Backup missing
+ui_text,msg_api.timestamp_expected,Timestamp expected
+ui_text,msg_api.workflow_text_missing,Workflow text missing
+ui_text,msg_api.active_schema_unreadable,The text of the active schema cannot be read - please run “Apply” under System → Schema first.
+ui_text,msg_api.language_missing,Language missing
+ui_text,msg_api.id_expected,ID expected
+ui_text,msg_api.record_not_found,Record not found
+ui_text,msg_api.column_list_expected,List of column names expected
+ui_text,msg_api.unknown_column,Unknown column: {column}
+ui_text,msg_api.max_chars,At most {max} characters
+ui_text,msg_api.bool_expected,true or false expected
+ui_text,msg_api.required,Required field
+ui_text,msg_api.and_list,{a} and {b}
+ui_text,msg_api.comma_list,"{a}, {b}"
+ui_text,msg_api.taken,already taken
+ui_text,msg_api.semicolon_list,"{a}; {b}"
+ui_text,msg_api.plain,{text}
+ui_text,msg_api.space_list,{a} {b}
+ui_text,msg_bootstrap.token_missing,"BOOTSTRAP_TOKEN is not configured - create config.php (template: config.example.php), at least 16 characters."
+ui_text,msg_bootstrap.token_invalid,Invalid or missing token.
+ui_text,msg_bootstrap.schema_param_path,The parameter schema may only contain a plain file name (no path).
+ui_text,msg_bootstrap.schema_not_found,File '{file}' not found in schema/.
+ui_text,msg_bootstrap.migration_needed,"The schema has changed, a manual migration is required"
+ui_text,msg_bootstrap.schema_ambiguous,"Several schema files found, please choose one with ?schema=<file name>."
+ui_text,msg_auth.api_key_invalid,API key invalid or revoked
+ui_text,msg_auth.rate_limited,"Too many failed attempts, please try again later"
+ui_text,msg_auth.api_user_no_login,API users cannot sign in – access is only possible with the API key
+ui_text,msg_auth.invalid_credentials,Wrong username or password
+ui_text,msg_auth.session_dir,Session directory not writable
+ui_text,msg_auth.password_too_long,The password must not be longer than {max} bytes
+ui_text,msg_auth.password_rule_min,at least {min} characters
+ui_text,msg_auth.password_missing_min,at least {min} characters (so far {length})
+ui_text,msg_auth.password_rule_digit,a digit
+ui_text,msg_auth.password_missing_digit,a digit
+ui_text,msg_auth.password_rule_special,a special character (e.g. ! ? # - _)
+ui_text,msg_auth.password_missing_special,a special character
+ui_text,msg_auth.password_rule_mixed,an upper-case and a lower-case letter
+ui_text,msg_auth.password_missing_mixed,an upper-case and a lower-case letter
+ui_text,msg_auth.password_rule,The password must contain {rule}. Missing: {missing}.
+ui_text,msg_auth.current_password_wrong,The current password is wrong.
+ui_text,msg_auth.login_required,Login required
+ui_text,msg_auth.password_missing,Password missing
+ui_text,msg_auth.password_not_allowed,This password is not allowed - please choose another one
+ui_text,msg_auth.api_key_read_only,This API key may only read
+ui_text,msg_auth.password_change_required,Please change the password first
+ui_text,msg_auth.users_table_missing,The users table is missing - please call /bootstrap?token=...
+ui_text,msg_users.not_found,User not found
+ui_text,msg_users.api_key_only_api,API keys exist only for API users
+ui_text,msg_users.admin_only_by_admin,Administrators can only be created or changed by administrators
+ui_text,msg_users.api_no_password,API users have no password
+ui_text,msg_users.username_taken,Username '{username}' is already taken
+ui_text,msg_users.api_role_switch,An API user cannot become a login user and vice versa - please create a new user
+ui_text,msg_users.admins_only,Administrators only
+ui_text,msg_users.read_only_api,“Read only” exists only for API users
+ui_text,msg_users.self_deactivation,You cannot deactivate your own account
+ui_text,msg_users.last_admin,At least one active administrator must remain
+ui_text,msg_users.role_invalid,"role must be 'admin', 'redakteur' or 'api'"
+ui_text,msg_settings.unknown,Unknown setting
+ui_text,msg_settings.int_range,Whole number from {min} to {max} expected
+ui_text,msg_settings.default_above_max,The default page size must not be larger than the largest page size
+ui_text,msg_schema.field_in_class,Field '{field}' in class '{class}'
+ui_text,msg_schema.rule_unknown,"{where}: Unknown rule '{rule}' (allowed: {allowed}, each as {rule: value})."
+ui_text,msg_schema.rule_twice,{where}: Rule {{rule}} given twice.
+ui_text,msg_schema.rule_on_id,{where}: The ID takes no rules such as {{rule}}.
+ui_text,msg_schema.rule_type,{where}: The rule {{rule}} does not fit the type '{type}' (allowed for {types}).
+ui_text,msg_schema.rule_min_max,{where}: {{lo}: {low}} is greater than {{hi}: {high}}.
+ui_text,msg_schema.rule_value,{where}: Invalid value '{value}' for {{rule}} ({expected} expected).
+ui_text,msg_schema.expect_int_from,a whole number from {from}
+ui_text,msg_schema.expect_pattern,"the name of a pattern from the pattern library, e.g. plz"
+ui_text,msg_schema.pattern_unknown,{where}: The pattern '{pattern}' does not exist (available: {available}). Please create it under System → Settings → Patterns or use an existing name.
+ui_text,msg_schema.expect_int,a whole number
+ui_text,msg_schema.expect_decimal,a number with a decimal point
+ui_text,msg_schema.expect_date,a date YYYY-MM-DD
+ui_text,msg_schema.enum_is_workflow,enum '{enum}' has the same name as the workflow '{workflow}' of the active workflow file. Please name the enum differently.
+ui_text,msg_schema.interface,Interfaces ('interface') are currently not supported ('{name}'). Please use a normal class ('class {name} { ... }') instead.
+ui_text,msg_schema.warn_class_color,Colour '{color}' on class '{class}' is not taken over
+ui_text,msg_schema.class_twice,Class '{class}' is defined twice.
+ui_text,msg_schema.abstract_workflow,Abstract class '{class}' cannot have a workflow field (a workflow belongs to exactly one class with its own table).
+ui_text,msg_schema.abstract_renamed,Abstract class '{class}' cannot be marked with {renamed_from:…} (it has no table).
+ui_text,msg_schema.stereotype,Stereotypes ('<<...>>') are currently not supported ('{class} {stereotype}'). Please remove the stereotype.
+ui_text,msg_schema.implements,'implements' is currently not supported ('{class} implements {interface}'). Please copy the fields of '{interface}' directly into '{class}' (duplicate) or use 'extends' with an 'abstract class'.
+ui_text,msg_schema.extends_line,"Class line with extends not understood (expected: class B extends A { with ""{"" on the same line and ""}"" alone on a line of its own): {source}"
+ui_text,msg_schema.class_no_body,Class line '{class}' without a body ('{ ... }') not understood. Please add fields in curly braces.
+ui_text,msg_schema.class_line,"Class line not understood (expected: class X { with ""{"" on the same line and ""}"" alone on a line of its own): {source}"
+ui_text,msg_schema.no_classes_abstract,No classes found in the .puml file. (Abstract classes get no table of their own.)
+ui_text,msg_schema.no_classes,No classes found in the .puml file.
+ui_text,msg_schema.enum_is_class,enum '{enum}' has the same name as a class. Please rename one of the two.
+ui_text,msg_schema.warn_package_color,Colour '{color}' on package is not taken over
+ui_text,msg_schema.warn_decoration,'{statement}' is not taken over
+ui_text,msg_schema.warn_arrow_color,Colour in the arrow '{arrow}' is not taken over
+ui_text,msg_schema.relation_markers,"Only one marker per relation possible ({cascade} or {label}, in addition at most once {unique}, {symmetric}, {filter_by:…} or {renamed_from:…}): {source}"
+ui_text,msg_schema.relation_marker_unknown,"Unknown marker '{marker}' on relation (allowed: {cascade}, {label}, {unique}, {symmetric}, {renamed_from:Old label}, {filter_by:field}): {source}"
+ui_text,msg_schema.relation_abstract,"Relationship to abstract class '{class}' not possible - abstract classes have no table of their own (relationships are not inherited; please draw one per subclass): {source}"
+ui_text,msg_schema.package_line,"package line not understood (expected: package ""Name"" { ... } with the classes in it): {source}"
+ui_text,msg_schema.relation_line,"Relation not understood (expected: A ""n"" --> ""1"" B : label): {source}"
+ui_text,msg_schema.warn_unknown,"'{statement}' is not taken over (unknown statement, ignored)"
+ui_text,msg_schema.package_unclosed,"package ""{package}"" is not closed with ""}""."
+ui_text,msg_schema.set_visibility,"Workflow '{workflow}': The transition '{transition}' ({from} -> {to}) uses action=set_visibility, but the class '{class}' has no visibility field."
+ui_text,msg_schema.media_junction_class,Link table '{table}' of the media field {field} collides with a class of the same name.
+ui_text,msg_schema.media_junction_twice,Link table '{table}' of the media field {field} would be created twice (n:n link table of the same name). Please rename the field or the relationship.
+ui_text,msg_schema.junction_class,Link table '{table}' collides with a class of the same name.
+ui_text,msg_schema.warn_line,Line {line}: {text}
+ui_text,msg_schema.enum_empty,enum '{enum}' has no values (expected: enum {enum} { with one value per line }).
+ui_text,msg_schema.renamed_class_line,"Class line with {renamed_from:…} not understood (expected: class New {renamed_from:Old} { with ""{"" on the same line): {source}"
+ui_text,msg_schema.junction_twice,"Link table '{table}' would be created twice. Please give every n:n relationship to the same target table its own unique label (e.g. Artikel ""n"" -- ""n"" Tag : Haupttags)."
+ui_text,msg_schema.media_field_junction_twice,Link table '{table}' of the media field {field} would be created twice (likewise for {other}). Please rename one of the fields.
+ui_text,msg_schema.extends_empty,Class '{class}': extends without a base class.
+ui_text,msg_schema.extends_multiple,Class '{class}': multiple inheritance is not supported ('{source}'). Only one base class per class.
+ui_text,msg_schema.extends_unclear,"Class '{class}': extends not understood ('{source}', expected: class {class} extends <BaseClass> {)."
+ui_text,msg_schema.extends_unknown,Class '{class}' inherits from unknown class '{base}'.
+ui_text,msg_schema.extends_cycle,Cyclic inheritance: {chain}.
+ui_text,msg_schema.extends_concrete,"Class '{class}' inherits from '{base}', which is not an abstract class. Inheritance only copies fields from a template without a table of its own: please write 'abstract class {base}' (which then no longer gets a table of its own)."
+ui_text,msg_schema.field_inherited_twice,Field '{field}' in class '{class}' defined twice (already inherited from '{base}').
+ui_text,msg_schema.section_inherited_twice,Section '{title}' in class '{class}' twice (already inherited from '{base}'). Please name the section differently.
+ui_text,msg_schema.visibility_inherited,"Entity {class} has several visibility fields (inherited ones count too), at most one is allowed"
+ui_text,msg_schema.enum_name,"Invalid enum name '{enum}' (allowed: letters, digits, _ without umlauts, not starting with a digit)."
+ui_text,msg_schema.enum_line,enum line not understood (expected: enum {enum} { ... }): {source}
+ui_text,msg_schema.warn_enum_color,Colour '{color}' on enum '{enum}' is not taken over
+ui_text,msg_schema.enum_unclosed,"enum '{enum}' is not closed with ""}""."
+ui_text,msg_schema.enum_value,"Invalid value '{value}' in enum '{enum}' (expected: one value per line of letters, digits, _ without umlauts, not starting with a digit, e.g. OFFEN)."
+ui_text,msg_schema.enum_value_twice,Value '{value}' given twice in enum '{enum}'.
+ui_text,msg_schema.enum_is_type,enum '{enum}' has the same name as the base type '{type}'. Please name it differently.
+ui_text,msg_schema.enum_twice,enum '{enum}' is defined twice.
+ui_text,msg_schema.package_no_name,package without a name: {source}
+ui_text,msg_schema.package_nested,"Nested packages are not supported (""{package}"" in ""{outer}""). The sidebar knows only one grouping level."
+ui_text,msg_schema.class_name,"Invalid class name '{class}' (allowed: letters, digits, _ without umlauts)."
+ui_text,msg_schema.class_reserved,Class name '{class}' is reserved ({reserved}).
+ui_text,msg_schema.class_underscore,Class name '{class}' must not start with _.
+ui_text,msg_schema.section_twice,Section '{title}' in class '{class}' twice (every section title only once per class).
+ui_text,msg_schema.warn_method,Method '{method}' in class '{class}' is not taken over
+ui_text,msg_schema.field_line,"Line in class '{class}' not understood (expected: + field: type or + field: type? or + field: type {title} and/or {unique}, optionally {renamed_from:old_name} and rules like {maxLength: 140}): {source}"
+ui_text,msg_schema.marker_pattern,Unknown marker {{marker}} in class '{class}'. Did you mean {pattern: {pattern}}?
+ui_text,msg_schema.marker_twice,{where}: marker given twice: {source}
+ui_text,msg_schema.id_renamed,Field 'id' in class '{class}' cannot be marked with {renamed_from:…}.
+ui_text,msg_schema.field_name,Invalid field name '{field}' in class '{class}'.
+ui_text,msg_schema.workflow_field_markers,{where}: A workflow field is always required and knows neither '?' nor {title} or {unique}: {source}
+ui_text,msg_schema.workflow_fields,"Class '{class}' has several workflow fields ('{first}' and '{second}'), exactly one is allowed."
+ui_text,msg_schema.type_unknown,Unknown type '{type}' at {class}.{field} (allowed: {allowed})
+ui_text,msg_schema.id_title,"Field 'id' in class '{class}' cannot be marked with {title} (the ID is always put in front of display labels as ""#<id>"" anyway)."
+ui_text,msg_schema.title_type,{where}: {title} only makes sense with the types {types} and enum types (not with '{type}').
+ui_text,msg_schema.unique_media,"{where}: {unique} is not possible on media fields (a list of media, not a column)."
+ui_text,msg_schema.id_unique,Field 'id' in class '{class}' cannot be marked with {unique} (the ID is unique anyway).
+ui_text,msg_schema.field_twice,Field '{field}' in class '{class}' defined twice.
+ui_text,msg_schema.field_system,"{where}: The name is reserved for the automatic system fields ({fields}; the system sets the time and user of creation and last change itself). Please rename it, e.g. erstellt_am."
+ui_text,msg_schema.field_reason,{where}: The name is reserved for the reason of change when saving (versions). Please rename it.
+ui_text,msg_schema.id_type,The field 'id' in class '{class}' is always 'int' and always required (no '?'). Please remove the line or write it as 'id: int'.
+ui_text,msg_schema.visibility_twice,"Entity {class} has several visibility fields, at most one is allowed"
+ui_text,msg_schema.section_empty,"Section '{title}' in class '{class}' has no fields (the separator line stands directly before another separator line with a title or before ""}""). Please add fields or remove the separator line."
+ui_text,msg_schema.workflow_inactive,"{where}: The type '{type}' is a workflow, but no active workflow is configured. Please first create and apply a workflow file under System → Workflows."
+ui_text,msg_schema.workflow_type,{where}: The workflow field of a class has the type '{expected}' (not '{type}').
+ui_text,msg_schema.workflow_missing,{where}: The workflow '{type}' does not exist in the active workflow file (available: {available}).
+ui_text,msg_schema.workflow_none,{where}: The workflow '{type}' does not exist in the active workflow file (it contains no workflow).
+ui_text,msg_schema.multiplicity,"Unknown multiplicity ""{value}"" (allowed: n, *, 1, 0..1)."
+ui_text,msg_schema.relation_unknown_class,Relation references unknown class '{class}'.
+ui_text,msg_schema.nn_minimum_label,A minimum count on n:n relationships is currently not supported (only '0..*'/'n'). Please define '{label}' between '{a}' and '{b}' without a minimum.
+ui_text,msg_schema.nn_minimum,A minimum count on n:n relationships is currently not supported (only '0..*'/'n'). Please define the relationship between '{a}' and '{b}' without a minimum.
+ui_text,msg_schema.nn_cascade,"{cascade} is only possible on n:1 relations, not on the n:n relation '{a}' -- '{b}' (links in the link table are always deleted along anyway)."
+ui_text,msg_schema.nn_label_empty,"{label} on the n:n relation '{a}' -- '{b}' needs a label before it (e.g. {a} ""n"" -- ""n"" {b} : interessiert an {label}). Without a label the table name is shown anyway."
+ui_text,msg_schema.nn_unique,"{unique} is only possible on fields and n:1 relations, not on the n:n relation '{a}' -- '{b}'."
+ui_text,msg_schema.nn_self_label,"n:n self-reference '{a}' needs a label (e.g. {a} ""n"" -- ""n"" {a} : folgt, or {a} ""n"" -- ""n"" {a} : befreundet mit {symmetric}); the columns of the link table are named after it."
+ui_text,msg_schema.label_not_nn,"{label} is only possible on n:n relations, not on the {kind} relation '{a}' -- '{b}' (there the label is always shown as the field label anyway)."
+ui_text,msg_schema.one_to_one_self,"1:1 self-reference '{a}' with a required side ""1"" is not supported: every row would need another, not yet assigned row of the same table - not even the first row could ever be created. It is possible as optional, e.g. {a} ""0..1"" --> ""0..1"" {a} : Nachfolger von."
+ui_text,msg_schema.filter_where,{marker} on the relation '{a}' -- '{b}'
+ui_text,msg_schema.filter_unclear,{where} not understood (expected: {filter_by:field} or {filter_by:sourcefield=targetfield}).
+ui_text,msg_schema.filter_field,"{where}: Class '{class}' has no field '{field}' (source and target class both need the filter field; id, relationship columns and media fields are not possible for it)."
+ui_text,msg_schema.filter_types,"{where}: The filter fields have different types ('{field_a}': {type_a}, '{field_b}': {type_b}) - both need the same type (for an enum the same enum)."
+ui_text,msg_schema.symmetric_misplaced,"{symmetric} is only possible on an n:n self-reference (e.g. {a} ""n"" -- ""n"" {a} : befreundet mit {symmetric}), not on the {kind} relation '{a}' -- '{b}'."
+ui_text,msg_schema.list_clash,Field name '{field}' in class '{a}' collides with the generated n:n list of the relationship with '{b}'. Please rename it.
+ui_text,msg_schema.column_twice,Column name '{column}' in '{table}' generated more than once. Please give every relationship to the same target table its own unique label.
+ui_text,msg_schema.column_exists,Column '{column}' in '{table}' already exists (conflict with an existing field).
+ui_text,msg_migration.blocked,Apply not possible: {count} conflict(s) with existing data.
+ui_text,msg_migration.missing_both,{confirmations} confirmation(s) missing. {backfills} backfill value(s) missing or invalid.
+ui_text,msg_migration.missing_confirmations,{confirmations} confirmation(s) missing.
+ui_text,msg_migration.missing_backfills,{backfills} backfill value(s) missing or invalid.
+ui_text,msg_migration.workflow_not_writable,The workflow file cannot be written ({file} in the folder {folder}) - please check the write permissions. Nothing was changed.
+ui_text,msg_migration.schema_not_writable,The schema file cannot be written ({file} in the folder {folder}) - please check the write permissions. Nothing was changed.
+ui_text,msg_migration.replace_failed_workflow,"The database was migrated, but the file {file} could not be replaced. Please upload the new text via FTP as {path} (the API already works with the new workflow)."
+ui_text,msg_migration.replace_failed,"The database was migrated, but the file {file} could not be replaced. Please upload the new text via FTP as {path}, otherwise /bootstrap reports migration_needed (the API works with the new schema anyway)."
+ui_text,msg_migration.entity_added,New class {class} (table '{table}').
+ui_text,msg_migration.entity_renamed,"Class {old} renamed to {new} (table '{old_table}' -> '{table}', data is kept)."
+ui_text,msg_migration.entity_removed,"Class {class} removed (table '{table}', {count} row(s))."
+ui_text,msg_migration.confirm_rows,I confirm that {count} row(s) in '{class}' (table '{table}') will be lost.
+ui_text,msg_migration.nn_relabelled,"{what}: renamed, previous label '{label}' (links are kept)."
+ui_text,msg_migration.nn_added,New {what}.
+ui_text,msg_migration.what_colon,{what}: {text}
+ui_text,msg_migration.nn_to_symmetric,"{what}: now {symmetric} - every link applies in both directions from now on; ""A -> B"" and ""B -> A"" are merged into one pair."
+ui_text,msg_migration.nn_to_directed,"{what}: now directed - every previous pair is taken over in both directions (one row becomes two), afterwards the directions are independent."
+ui_text,msg_migration.nn_renamed,{what}: link table '{old}' -> '{new}' (links are kept).
+ui_text,msg_migration.media_field,Media field {field}
+ui_text,msg_migration.media_added,New media field {field}.
+ui_text,msg_migration.media_required,{what} is required: the existing {count} row(s) have no media yet - the form asks for one at the next edit.
+ui_text,msg_migration.media_new_required,New required media field {field}
+ui_text,msg_migration.media_renamed,Media field {old} renamed to {new}.
+ui_text,msg_migration.becomes_required_denied,{what} becomes required but is denied
+ui_text,msg_migration.becomes_required,"{what} becomes required, but"
+ui_text,msg_migration.nn_removed,{what} removed ({count} link(s)).
+ui_text,msg_migration.confirm_links,I confirm that {count} link(s) in '{table}' will be lost.
+ui_text,msg_migration.media_removed,"Media field {field} removed ({count} link(s); the files stay in the media library)."
+ui_text,msg_migration.confirm_media,I confirm that {count} media link(s) of {field} will be lost.
+ui_text,msg_migration.table_rebuilt,"Table '{table}' is rebuilt (structure changed; all rows are taken over)."
+ui_text,msg_migration.workflows_off,Workflows switched off (previously active workflow file: {before}).
+ui_text,msg_migration.workflow_file_active,Workflow file {file} becomes active.
+ui_text,msg_migration.workflow_file_changed,Active workflow file: {before} -> {file}.
+ui_text,msg_migration.workflow_class,(class {class})
+ui_text,msg_migration.workflow_unused,(not used by any class yet)
+ui_text,msg_migration.workflow_added,"New workflow {name} {where}: {states} states, {transitions} transition(s)."
+ui_text,msg_migration.workflow_states,Workflow {name} {where} changed (states: {states}).
+ui_text,msg_migration.workflow_details,"Workflow {name} {where} changed (labels, transitions or assignments)."
+ui_text,msg_migration.workflow_removed,Workflow {name} removed.
+ui_text,msg_migration.no_label,(no label)
+ui_text,msg_migration.quoted_label,"""{label}"""
+ui_text,msg_migration.suggest_entity,New class {class}
+ui_text,msg_migration.option_class,Class {class}
+ui_text,msg_migration.suggest_field_inherited,New field {field} (inherited from {base})
+ui_text,msg_migration.suggest_field,New field {field}
+ui_text,msg_migration.option_field,Field {field} ({type})
+ui_text,msg_migration.media_added_short,New media field {field}
+ui_text,msg_migration.suggest_relation,New relationship {class} → {target} {label}
+ui_text,msg_migration.option_relation,Relationship {label} (column {column})
+ui_text,msg_migration.suggest_nn,New n:n relationship {class} – {target} {label}
+ui_text,msg_migration.option_nn,n:n relationship {label}
+ui_text,msg_migration.renamed_unknown,Class {class} {renamed_from:{from}}: there is no class '{from}' in the current schema.
+ui_text,msg_migration.renamed_both,Class {class} {renamed_from:{from}}: both classes exist so far - unclear which data should apply (swapping names is not supported). Please rename in two steps or remove the marker.
+ui_text,msg_migration.renamed_claimed,The current class '{old}' is claimed by {first} and {second} (rename and new class of the same name). Please make this unambiguous.
+ui_text,msg_migration.relation_both,{what} {marker}: relationships with the old and the new label both exist so far - unclear which values should apply. Please rename in two steps or remove the marker.
+ui_text,msg_migration.single_quoted,'{label}'
+ui_text,msg_migration.relation_none_unlabelled_avail,{what} {marker}: a previous relationship without a label does not exist (available: {available}).
+ui_text,msg_migration.relation_none_unlabelled,{what} {marker}: a previous relationship without a label does not exist.
+ui_text,msg_migration.relation_none_avail,{what} {marker}: a previous relationship with the label '{label}' does not exist (available: {available}).
+ui_text,msg_migration.relation_none,{what} {marker}: a previous relationship with the label '{label}' does not exist.
+ui_text,msg_migration.relation_what,Relationship {class} -> {target}
+ui_text,msg_migration.relation_renamed,"{what} renamed: label '{old}' -> '{new}' (column {old_column} -> {column}, values are kept)."
+ui_text,msg_migration.field_from_missing,Field {field} {marker}: a field '{from}' does not exist in {class} so far.
+ui_text,msg_migration.field_renamed,Field {field} renamed to {name} (values are kept).
+ui_text,msg_migration.field_both,Field {field} {marker}: both fields exist so far - unclear which values should apply (swapping names is not supported). Please rename in two steps or remove the marker.
+ui_text,msg_migration.field_claimed,The previous field {field} is claimed by two fields.
+ui_text,msg_migration.media_from_missing,Media field {field} {marker}: a media field '{from}' does not exist in {class} so far.
+ui_text,msg_migration.field_removed,{what} removed ({count} row(s) with a value).
+ui_text,msg_migration.confirm_values,I confirm that the values of {count} row(s) in '{field}' will be lost.
+ui_text,msg_migration.relation_added_required,New required relationship {field} -> {target}.
+ui_text,msg_migration.relation_added_optional,New optional relationship {field} -> {target}.
+ui_text,msg_migration.field_added_required,New required field {field} ({type}).
+ui_text,msg_migration.field_added_optional,New optional field {field} ({type}).
+ui_text,msg_migration.field_type,{what}: {old} -> {new}.
+ui_text,msg_migration.convert_blocked,{what}: {count} existing value(s) do not fit {type}. Please adjust the data or change the diagram.
+ui_text,msg_migration.now_required,{what}: now required.
+ui_text,msg_migration.now_optional,{what}: now optional.
+ui_text,msg_migration.fk_changed,{what}: delete behaviour/1:1 changed ({old} -> {new}).
+ui_text,msg_migration.min_added,"{what}: minimum count wanted (every row in {parent} should have at least one row in {class}) - existing rows without one are only marked, nothing is changed."
+ui_text,msg_migration.min_removed,{what}: minimum count dropped.
+ui_text,msg_migration.new_relation_denied,"New required relationship {field} points to the entity {target}, which is denied"
+ui_text,msg_migration.relation_required_denied,"{what} becomes required and points to the entity {target}, which is denied"
+ui_text,msg_migration.workflow_backfill,{what}: {count} existing row(s) automatically get the initial state '{state}'.
+ui_text,msg_migration.unique_new_columns,"{class}: the new uniqueness ({columns}) consists only of new required columns - a common backfill value for {count} existing rows would inevitably be duplicated. Please first create the column(s) as optional, fill them and only then make them required or unique."
+ui_text,msg_migration.unique_violated,{class}: the new uniqueness ({columns}) is violated in the existing data - {count} value combination(s) occur more than once. Please clean up the duplicates or leave out the marker.
+ui_text,msg_migration.unique_added,{class}: new uniqueness ({columns}) - existing data fits.
+ui_text,msg_migration.rules_none,(none)
+ui_text,msg_migration.rules_violated_one,"{what}: rules {old} -> {new}. 1 existing record violates the new rules ({ids}). It is not changed; after applying it is listed under ""Rule violations"" and can only be saved again once it is valid."
+ui_text,msg_migration.rules_violated,"{what}: rules {old} -> {new}. {count} existing records violate the new rules ({ids}). They are not changed; after applying they are listed under ""Rule violations"" and can only be saved again once they are valid."
+ui_text,msg_migration.rules_changed,{what}: rules {old} -> {new}.
+ui_text,msg_migration.permission_conflict,{what} ({owners}) – affected users can then no longer create new records in {entity}.
+ui_text,msg_migration.media_conflict_more,{what} cannot be filled without access to the system area 'media' ({owners} and {more} more) – affected users can then no longer create new records in {entity}.
+ui_text,msg_migration.media_conflict,{what} cannot be filled without access to the system area 'media' ({owners}) – affected users can then no longer create new records in {entity}.
+ui_text,msg_migration.backfill_self,{what}: a new required self-reference cannot be filled with a common value (a row would reference itself). Please first create it as optional.
+ui_text,msg_migration.backfill_empty_target,"{what}: {count} existing row(s) would need a value, but the target table {target} is empty. Please first create the relationship as optional."
+ui_text,msg_migration.backfill_one_to_one,{what}: 1:1 relationship - a common value for {count} rows would be assigned twice. Please first create it as optional and assign the rows one by one.
+ui_text,msg_migration.choice_yes,Yes
+ui_text,msg_migration.choice_no,No
+ui_text,msg_migration.choice_published,Published
+ui_text,msg_migration.choice_draft,Draft
+ui_text,msg_migration.backfill,{what} is required: {count} existing row(s) need a value.
+ui_text,msg_migration.target_missing,{target} #{id} does not exist
+ui_text,msg_migration.locked,A bootstrap or another schema change is running right now (data/bootstrap.lock). Please wait a moment and try again.
+ui_text,msg_migration.dangling,{count} reference(s) point to nothing after the change: {list}. Nothing was changed.
+ui_text,msg_migration.apply_failed,The change could not be applied: {error}. Nothing was changed (completely rolled back).
+ui_text,msg_migration.applied,Schema change applied.
+ui_text,msg_migration.copy_failed_row,While taking over '{table}' (row #{id}): {reason}. Nothing was changed (completely rolled back).
+ui_text,msg_migration.copy_failed,While taking over '{table}': {reason}. Nothing was changed (completely rolled back).
+ui_text,msg_migration.value_required,Value required
+ui_text,msg_migration.nn_what_label,n:n relationship {class} – {target} ({label})
+ui_text,msg_migration.nn_what,n:n relationship {class} – {target}
+ui_text,msg_migration.section_renamed,section '{old}' renamed to '{new}'
+ui_text,msg_migration.section_added,new section {titles}
+ui_text,msg_migration.section_removed,section {titles} removed
+ui_text,msg_migration.section_order,order of the sections changed
+ui_text,msg_migration.field_order,order or section assignment of the fields changed
+ui_text,msg_migration.order_changed,"Class {class}: {changes} (only form and list, the table stays unchanged)."
+ui_text,msg_migration.relation_label,Relationship {field}
+ui_text,msg_migration.field_label,Field {field}
+ui_text,msg_migration.becomes_workflow,{what}: becomes a workflow field (changes only via transitions from now on).
+ui_text,msg_migration.no_longer_workflow,{what}: is no longer a workflow field (freely editable).
+ui_text,msg_migration.filter_removed,Selection in the form no longer filtered ({filter_by} dropped).
+ui_text,msg_migration.filter_pair,"Selection in the form filtered by {field} = {target} ({filter_by}); assignments already stored stay unchanged."
+ui_text,msg_migration.filter_field,"Selection in the form filtered by {field} ({filter_by}); assignments already stored stay unchanged."
+ui_text,msg_migration.constraint_unique,uniqueness violated ({columns} would be duplicated)
+ui_text,msg_migration.constraint_not_null,required value missing ({column})
+ui_text,msg_migration.constraint_check,value violates a check rule (CHECK)
+ui_text,msg_export.model_expected,Model JSON expected.
+ui_text,msg_export.list_expected,{where}: '{key}' must be a list.
+ui_text,msg_export.value_invalid_shown,{where}: invalid value for '{key}' ('{value}').
+ui_text,msg_export.value_invalid,{where}: invalid value for '{key}'.
+ui_text,msg_export.bool_expected,{where}: '{key}' must be true or false.
+ui_text,msg_export.object_expected,{where}: object expected.
+ui_text,msg_export.model,Model
+ui_text,msg_export.enum,Enum {n}
+ui_text,msg_export.enum_value,{where}: invalid value {value}.
+ui_text,msg_export.entity,Entity {n}
+ui_text,msg_export.no_name,{where}: '{key}' contains no name.
+ui_text,msg_export.section_invalid,"{where}: invalid section title {title} (one line, not empty, without { and })."
+ui_text,msg_export.section_twice,{where}: section '{title}' twice.
+ui_text,msg_export.section_unknown,{where}: field '{field}' belongs to an unknown section {section}.
+ui_text,msg_export.field_order,{where}: 'field_order' must contain exactly the names of the fields and media fields.
+ui_text,msg_export.field_object,{where}: field expected as an object.
+ui_text,msg_export.rule_invalid,"{where}: field '{field}' has an invalid rule {rule} (expected {type: {types}, value})."
+ui_text,msg_export.media_object,{where}: media field expected as an object.
+ui_text,msg_export.relation,Relationship {n}
+ui_text,msg_export.kind_invalid,"{where}: 'kind' must be n1, one_to_one or nn."
+ui_text,msg_layout.positions_expected,"Object {id: {x, y}} expected"
+ui_text,msg_layout.draft_id,provisional ID (element not applied yet) - position is not saved
+ui_text,msg_layout.unknown_id,unknown ID (no entity/enum of the active schema)
+ui_text,msg_layout.xy_expected,x and y expected as numbers
+ui_text,msg_layout.viewport_expected,"{x, y, zoom} expected (zoom {min} to {max})"
+ui_text,msg_layout.nothing,positions and/or viewport expected
+ui_text,msg_layout.invalid,Invalid layout
+ui_text,msg_backup.action_apply,"""Apply"""
+ui_text,msg_backup.action_restore,"""Restore"""
+ui_text,msg_backup.action_field_order,the field order upgrade
+ui_text,msg_backup.failed,"{reason} {action} was aborted, nothing was changed in the database."
+ui_text,msg_backup.dir_create,The directory data/schema-backups/ cannot be created.
+ui_text,msg_backup.dir_writable,The directory data/schema-backups/ is not writable.
+ui_text,msg_backup.db_write,The database backup could not be written (check disk space or write permissions in data/schema-backups/).
+ui_text,msg_backup.schema_write,The backup of the schema file could not be written.
+ui_text,msg_backup.not_found,A backup '{stamp}' does not exist (any more).
+ui_text,msg_backup.incomplete,This backup contains no database (older backup of the .puml only) and cannot be restored automatically.
+ui_text,msg_backup.locked,A bootstrap or a schema change is running right now (data/bootstrap.lock). Please wait a moment and try again.
+ui_text,msg_backup.restore_failed,{reason} Nothing was changed.
+ui_text,msg_backup.restore_schema_write,The schema file cannot be written ({file} in the folder schema/) - please check the write permissions.
+ui_text,msg_backup.restore_db_replace,The database file data/cms.sqlite could not be replaced (check the write permissions in data/).
+ui_text,msg_backup.restore_copy,The backed-up database could not be copied to data/ (check disk space or write permissions).
+ui_text,msg_backup.restore_file_warning,"The database was restored, but the file {file} could not be replaced. Please upload the text of the backup via FTP as schema/{file}, otherwise /bootstrap reports migration_needed."
+ui_text,msg_backup.restored,Backup of {created} restored.
+ui_text,msg_backup.invalid,The backup cannot be used: {reason} Nothing was changed.
+ui_text,msg_backup.invalid_sqlite,not a readable SQLite database.
+ui_text,msg_backup.invalid_integrity,The database is damaged (integrity_check).
+ui_text,msg_backup.invalid_no_schema,The database contains no active schema.
+ui_text,msg_backup.invalid_name,The name of the schema file is unknown.
+ui_text,msg_backup.invalid_no_file,The schema file is missing in the backup.
+ui_text,msg_backup.size_warning,"The database is already {size} MB. Before every apply it is backed up completely; with {keep} kept backups these together take about {total} MB of disk space in data/schema-backups/."
+ui_text,msg_records.no_workflow,There is no workflow for '{entity}'
+ui_text,msg_records.transition_missing,Transition missing
+ui_text,msg_records.transition_expected,Label of the transition expected
+ui_text,msg_records.transition_unknown,The transition '{transition}' does not exist in the workflow {workflow}
+ui_text,msg_records.unknown,unknown
+ui_text,msg_records.transition_state,The transition '{transition}' is not possible in the state '{state}' (only from '{from}')
+ui_text,msg_records.transition_forbidden,No permission for the transition '{transition}'
+ui_text,msg_records.state_changed,The state has been changed by someone else in the meantime. Please reload.
+ui_text,msg_records.response_too_large,The response would be too large: already {rows} of {per_page} rows of this page exceed {mb} MB. Please reduce per_page (e.g. per_page={fit}).
+ui_text,msg_records.state_via_transition,The state can only be changed via a workflow transition (POST /api/{entity}/{id}/transition).
+ui_text,msg_records.revision_not_found,Version {version} does not exist (any more)
+ui_text,msg_records.skip_workflow,The workflow state only changes via a transition.
+ui_text,msg_records.skip_gone,{entity} {ids} no longer exists.
+ui_text,msg_records.skip_media_gone,Medium {ids} no longer exists.
+ui_text,msg_records.skip_schema,Does not fit the current schema: {reason}
+ui_text,msg_records.dependents,{count} dependent row(s) in '{table}'
+ui_text,msg_records.delete_blocked,Cannot be deleted: {reasons}.
+ui_text,msg_records.min_row,'{entity} #{id}' needs at least one row in '{child}'
+ui_text,msg_records.delete_min,Cannot be deleted: {reasons} (minimum count).
+ui_text,msg_records.referenced,The record is still referenced by other records
+ui_text,msg_records.unknown_entity,Unknown entity '{entity}'
+ui_text,msg_records.entity_forbidden,No permission for '{entity}'
+ui_text,msg_records.create_forbidden,No permission to create in '{entity}'
+ui_text,msg_records.update_forbidden,No permission to edit in '{entity}'
+ui_text,msg_records.delete_forbidden,No permission to delete in '{entity}'
+ui_text,msg_records.cycle,Would create a cycle: the record cannot be placed under itself or one of its descendants
+ui_text,msg_records.one_to_one,{ref} is already assigned to {entity} #{id} (1:1 relationship: at most one assignment per {target}).
+ui_text,msg_records.one_to_one_other,{ref} is already assigned to another record of {entity} (1:1 relationship: at most one assignment per {target}).
+ui_text,msg_records.assigned_to,Already assigned to {entity} #{id}
+ui_text,msg_records.assigned,Already assigned
+ui_text,msg_records.combination_exists_at,The combination {values} already exists ({entity} #{id}).
+ui_text,msg_records.combination_exists,The combination {values} already exists.
+ui_text,msg_records.combination_exists_short,Combination already exists
+ui_text,msg_records.value_taken_at,The value {values} is already taken ({entity} #{id}).
+ui_text,msg_records.value_taken,The value {values} is already taken.
+ui_text,msg_records.value_taken_short,Already taken
+ui_text,msg_records.combination_hidden,This combination already exists (the rule includes a field that is denied for you).
+ui_text,msg_records.media_required,Required field: select at least one medium
+ui_text,msg_records.media_ids_expected,List of media IDs expected
+ui_text,msg_records.media_missing,Medium {ids} does not exist
+ui_text,msg_records.self_link,A record cannot be linked to itself
+ui_text,msg_records.int_expected,Integer expected
+ui_text,msg_records.number_expected,Number expected
+ui_text,msg_records.date_expected,Date in the format YYYY-MM-DD expected
+ui_text,msg_records.enum_invalid,Invalid value for '{field}'. Allowed: {values}.
+ui_text,msg_records.constraint,Reference to a non-existent record or required field missing
+ui_text,msg_list.field_value_expected,{key}[<field>]=<value> expected
+ui_text,msg_list.ids_expected,"IDs separated by commas expected, at most {max}"
+ui_text,msg_list.problem,{key} – {problem}
+ui_text,msg_list.invalid_query,Invalid query: {details}
+ui_text,msg_list.int_expected,whole number from 1 expected
+ui_text,msg_list.per_page_max,at most {max} rows per page – please fetch larger amounts page by page (page)
+ui_text,msg_list.at_most,at most {max}
+ui_text,msg_list.not_filterable,unknown field or a field that cannot be filtered
+ui_text,msg_list.range_expected,Range expected: {key}[from]= and/or {key}[to]=
+ui_text,msg_list.number_expected,Number expected
+ui_text,msg_list.datetime_expected,Date YYYY-MM-DD expected (or YYYY-MM-DD HH:MM:SS in UTC)
+ui_text,msg_list.date_expected,Date YYYY-MM-DD expected
+ui_text,msg_list.unknown_field,unknown field
+ui_text,msg_list.value_expected,Value expected
+ui_text,msg_list.for_id_alone,only together with for=<entity>.<field>
+ui_text,msg_list.for_expected,<entity>.<field> of a relation (FK column or n:n list) to this entity expected
+ui_text,msg_list.order_expected,asc or desc expected
+ui_text,msg_list.not_sortable,unknown field or a field that cannot be sorted
+ui_text,msg_media.kind_unknown,Unknown kind
+ui_text,msg_media.kind_unknown_allowed,Unknown kind (allowed: {allowed})
+ui_text,msg_media.tag_exists,A tag with this name already exists
+ui_text,msg_media.tag_not_found,Tag not found
+ui_text,msg_media.no_file_sent,"No file sent (field ""file"" in a multipart/form-data request)."
+ui_text,msg_media.one_file,Please send exactly one file per upload.
+ui_text,msg_media.partial,The file was only partially uploaded. Please try again.
+ui_text,msg_media.no_file_selected,No file selected.
+ui_text,msg_media.upload_failed,"The server could not accept the file (PHP upload error {error}, e.g. the temporary directory is missing or not writable)."
+ui_text,msg_media.not_uploaded,Not a valid uploaded file.
+ui_text,msg_media.empty,The file is empty.
+ui_text,msg_media.usage,{count}× in {entity}.{field} ({ids})
+ui_text,msg_media.in_use_where,"Cannot be deleted, the medium is still in use: {usages}."
+ui_text,msg_media.in_use,The medium is still in use.
+ui_text,msg_media.not_found,Medium not found
+ui_text,msg_media.tag_ids_expected,List of tag IDs expected
+ui_text,msg_media.tag_ids_unknown,Unknown tag ID(s): {ids}
+ui_text,msg_media.tag_name_expected,Tag name expected
+ui_text,msg_media.tag_name_max,Tag name at most {max} characters
+ui_text,msg_media.no_extension,Files without an extension are not allowed. Allowed: {allowed}.
+ui_text,msg_media.type_not_allowed,File type .{ext} is not allowed. Allowed: {allowed}.
+ui_text,msg_media.type_not_allowed_short,File type not allowed
+ui_text,msg_media.fileinfo_missing,"The PHP extension fileinfo is missing - without it the file content cannot be checked, so uploads are blocked."
+ui_text,msg_media.content_mismatch,The content of the file does not match the extension .{ext} (detected: {detected}). The file was rejected.
+ui_text,msg_media.content_mismatch_short,Content does not match the file extension
+ui_text,msg_media.svg_unsafe,"The SVG file contains scripts, event handlers or external references and was rejected for security reasons."
+ui_text,msg_media.svg_unsafe_short,SVG with active content
+ui_text,msg_media.too_large,The file is too large. At most {max} MB per file are allowed.
+ui_text,msg_media.too_large_size,The file is too large ({size} MB). At most {max} MB per file are allowed.
+ui_text,msg_media.too_large_php,"The file is too large. At most {max} MB per file are allowed. (Limit of the server setting {setting}; a higher limit must be set in the PHP configuration at the hoster.)"
+ui_text,msg_media.too_large_size_php,"The file is too large ({size} MB). At most {max} MB per file are allowed. (Limit of the server setting {setting}; a higher limit must be set in the PHP configuration at the hoster.)"
+ui_text,msg_media.too_large_short,File too large
+ui_text,msg_patterns.builtin_email,Please enter a valid email address.
+ui_text,msg_patterns.builtin_url,Please enter a valid URL.
+ui_text,msg_patterns.builtin_slug,"Only lowercase letters, digits and hyphens."
+ui_text,msg_patterns.builtin_plz,Please enter a five-digit German postal code.
+ui_text,msg_patterns.match_aborted,The check was aborted because the expression is too complex (protection against endless backtracking). The value counts as invalid.
+ui_text,msg_patterns.match_failed,The check failed (PCRE error {error}). The value counts as invalid.
+ui_text,msg_patterns.regex_missing,Regular expression missing.
+ui_text,msg_patterns.regex_too_long,At most {max} characters.
+ui_text,msg_patterns.regex_control,Control characters and line breaks are not allowed.
+ui_text,msg_patterns.regex_encoding,Invalid character encoding (UTF-8 expected).
+ui_text,msg_patterns.regex_invalid_detail,Invalid regular expression ({detail}).
+ui_text,msg_patterns.regex_invalid,Invalid regular expression.
+ui_text,msg_patterns.not_found,Pattern not found (built-in patterns cannot be changed)
+ui_text,msg_patterns.name_invalid,"Name of lower-case letters, digits and _ expected, starting with a letter (at most 50 characters)"
+ui_text,msg_patterns.name_builtin,'{name}' is a built-in pattern - please choose a name of your own
+ui_text,msg_patterns.message_invalid,Message for editors expected (1 to {max} characters)
+ui_text,msg_patterns.example_invalid,At most {max} characters on one line
+ui_text,msg_patterns.example_mismatch,The example value does not match the regular expression
+ui_text,msg_patterns.exists,A pattern '{name}' already exists.
+ui_text,msg_patterns.in_use_rename,The pattern '{name}' cannot be renamed: the active schema uses it ({fields}). Please remove {pattern: {name}} from the diagram first and apply the schema.
+ui_text,msg_patterns.in_use_delete,The pattern '{name}' cannot be deleted: the active schema uses it ({fields}). Please remove {pattern: {name}} from the diagram first and apply the schema.
+ui_text,msg_permissions.no_schema,The active schema is not readable - permissions on entities and fields can only be set after /bootstrap or applying the schema.
+ui_text,msg_permissions.one_admin_role,There is exactly one built-in admin role
+ui_text,msg_permissions.not_settable,cannot be set
+ui_text,msg_permissions.role_exists,The role '{name}' already exists
+ui_text,msg_permissions.group_exists,The group '{name}' already exists
+ui_text,msg_permissions.role_not_found,Role not found
+ui_text,msg_permissions.group_not_found,Group not found
+ui_text,msg_permissions.builtin_rename,The built-in role '{name}' cannot be renamed
+ui_text,msg_permissions.builtin_delete,The built-in role '{name}' cannot be deleted
+ui_text,msg_permissions.owner_role,Role '{name}'
+ui_text,msg_permissions.owner_group,Group '{name}'
+ui_text,msg_permissions.owner_user,User '{name}'
+ui_text,msg_permissions.admin_not_assignable,The built-in admin role cannot be assigned - administrators are set in the user management (role = 'admin').
+ui_text,msg_permissions.admin_not_assignable_short,Admin role cannot be assigned
+ui_text,msg_permissions.not_found,Permission not found
+ui_text,msg_permissions.owner_expected,"role, group or user and owner_id expected"
+ui_text,msg_permissions.owner_type_expected,"role, group or user expected"
+ui_text,msg_permissions.scope_expected,"entity, field, systable or action expected"
+ui_text,msg_permissions.effect_expected,allow or deny expected
+ui_text,msg_permissions.admin_full_access,The built-in role '{name}' always has full access - permissions on it would have no effect.
+ui_text,msg_permissions.admin_role,Admin role
+ui_text,msg_permissions.one_of,one of: {values}
+ui_text,msg_permissions.only_action,only with scope action
+ui_text,msg_permissions.only_ref,only with scope entity/field/action
+ui_text,msg_permissions.only_systable,only with scope systable
+ui_text,msg_permissions.required_media_short,Required media field
+ui_text,msg_permissions.media_role_one,"The system area 'media' cannot be denied: '{fields}' is a required media field, and this role has access to '{entities}'."
+ui_text,msg_permissions.media_role_many,"The system area 'media' cannot be denied: '{fields}' are required media fields, and this role has access to '{entities}'."
+ui_text,msg_permissions.media_group_one,"The system area 'media' cannot be denied: '{fields}' is a required media field, and this group has access to '{entities}'."
+ui_text,msg_permissions.media_group_many,"The system area 'media' cannot be denied: '{fields}' are required media fields, and this group has access to '{entities}'."
+ui_text,msg_permissions.media_user_one,"The system area 'media' cannot be denied: '{fields}' is a required media field, and this user has access to '{entities}'."
+ui_text,msg_permissions.media_user_many,"The system area 'media' cannot be denied: '{fields}' are required media fields, and this user has access to '{entities}'."
+ui_text,msg_permissions.ref_expected,stable ID (ref_id) or key (ref) of an element of the active schema expected - see GET /api/_permissions/targets
+ui_text,msg_permissions.field_expected,"Field, media field or relationship expected"
+ui_text,msg_permissions.entity_expected,Entity expected
+ui_text,msg_permissions.workflow_field,The workflow field '{name}' is outside the field permissions: who may change the state is set only by allowed= of the transitions in the workflow file.
+ui_text,msg_permissions.workflow_field_short,Workflow field
+ui_text,msg_permissions.required_field,"The required field '{name}' cannot be denied, since otherwise no valid record could be created."
+ui_text,msg_permissions.primary_key,The field '{name}' (primary key) cannot be denied.
+ui_text,msg_permissions.primary_key_short,Primary key
+ui_text,msg_permissions.required_relation,The entity '{name}' cannot be denied: '{relations}' is a required relationship to this entity.
+ui_text,msg_permissions.required_relations,The entity '{name}' cannot be denied: '{relations}' are required relationships to this entity.
+ui_text,msg_permissions.required_relation_short,Required relationship
+ui_text,msg_permissions.duplicate,There already is a permission for this owner and target (#{id}) - please change that one.
+ui_text,msg_permissions.max_chars,at most {max} characters
+ui_text,msg_permissions.ids_expected,List of IDs expected
+ui_text,msg_permissions.roles_missing,Role {ids} does not exist
+ui_text,msg_permissions.groups_missing,Group {ids} does not exist
+ui_text,msg_permissions.unknown_id,unknown ID
+ui_text,msg_workflows.ext_expected,Extension {ext} expected
+ui_text,msg_workflows.old_ext,Workflow files end in {ext} (no longer in {old}).
+ui_text,msg_workflows.file_name_invalid,"Invalid file name (allowed: letters, digits, _ and -, extension {ext})."
+ui_text,msg_workflows.file_name_expected,File name like artikel.lhwf expected
+ui_text,msg_workflows.file_not_found,The workflow file '{name}' does not exist.
+ui_text,msg_workflows.not_writable,The folder schema/workflows/ cannot be created or written - please check the write permissions.
+ui_text,msg_workflows.file_exists,The workflow file '{name}' already exists.
+ui_text,msg_workflows.exists_short,already exists
+ui_text,msg_workflows.missing_group,"Workflow '{workflow}', transition '{transition}' ({from} -> {to}): group '{name}' from {key}= does not exist"
+ui_text,msg_workflows.missing_role,"Workflow '{workflow}', transition '{transition}' ({from} -> {to}): role '{name}' from {key}= does not exist"
+ui_text,msg_workflows.missing_user,"Workflow '{workflow}', transition '{transition}' ({from} -> {to}): user '{name}' from {key}= does not exist"
+ui_text,msg_workflows.missing_list,{items}. Please create them under System → Rights management or adjust the workflow file.
+ui_text,msg_workflows.missing_list_more,{items} and {more} more. Please create them under System → Rights management or adjust the workflow file.
+ui_text,msg_workflows.at_line,"Workflow '{workflow}', line {line}"
+ui_text,msg_workflows.file_line,"Workflow file, line {line}"
+ui_text,msg_workflows.at_transition,"Workflow '{workflow}', line {line} (transition '{transition}')"
+ui_text,msg_workflows.or_list,{a} or {b}
+ui_text,msg_workflows.transition_unclosed_at,"{where}: The transition '{transition}' (line {start}) is not closed with ""}""."
+ui_text,msg_workflows.header_unclear,"{where}: not understood (expected: workflow <Class>Workflow { with ""{"" on the same line): {source}"
+ui_text,msg_workflows.name_invalid,"{where}: Invalid workflow name '{name}' (expected: <ClassName>Workflow, e.g. ArticleWorkflow; letters, digits, _ without umlauts)."
+ui_text,msg_workflows.duplicate,{where}: Workflow '{name}' is defined twice.
+ui_text,msg_workflows.unclosed_next,"Workflow '{workflow}' (line {start}) is not closed with ""}"" (line {line} already starts the next workflow - is the ""}"" of a transition missing before it?)."
+ui_text,msg_workflows.state_unclear,"{where}: state line not understood (expected: state <name> ""Label""): {source}"
+ui_text,msg_workflows.state_invalid,"{where}: Invalid state name '{state}' (allowed: letters, digits, _ without umlauts, not starting with a digit)."
+ui_text,msg_workflows.state_duplicate,{where}: State '{state}' is defined twice.
+ui_text,msg_workflows.flow_twice,{where}: Only one flow line per workflow is possible.
+ui_text,msg_workflows.flow_unclear,{where}: flow line not understood (expected: flow a -> b -> c): {source}
+ui_text,msg_workflows.flow_unknown_state,{where}: flow names the unknown state '{state}' (states must be declared with state before).
+ui_text,msg_workflows.flow_repeated,{where}: State '{state}' appears more than once in flow.
+ui_text,msg_workflows.transition_no_brace,"{where}: Transition without ""{"" (expected: from -> to : label { with allowed=... in the following lines): {source}"
+ui_text,msg_workflows.transition_unknown_state,{where}: Transition names the unknown state '{state}'.
+ui_text,msg_workflows.label_missing,"{where}: Transition without a label (expected: from -> to : label {, label of letters, digits, _ - and spaces)."
+ui_text,msg_workflows.label_invalid,"{where}: Invalid transition label '{label}' (expected: from -> to : label {, label of letters, digits, _ - and spaces)."
+ui_text,msg_workflows.label_duplicate,{where}: The label '{label}' already exists at state '{state}' (labels must be unique per source state).
+ui_text,msg_workflows.line_unclear,"{where}: not understood (expected: state, flow, a transition ""from -> to : label {"" or ""}""): {source}"
+ui_text,msg_workflows.transition_unclosed,"Workflow '{workflow}': The transition '{transition}' (line {start}) is not closed with ""}""."
+ui_text,msg_workflows.unclosed,"Workflow '{workflow}' (line {start}) is not closed with ""}""."
+ui_text,msg_workflows.property_unclear,"{where}: not understood (expected: allowed=..., assign=... or action=...): {source}"
+ui_text,msg_workflows.allowed_twice,{where}: allowed= is given twice (separate several entries with commas).
+ui_text,msg_workflows.allowed_invalid,"{where}: allowed= expects group:<name> or role:<name>, separated by commas ('{value}')."
+ui_text,msg_workflows.assign_twice,{where}: assign= is given twice (only one assignment target per transition).
+ui_text,msg_workflows.assign_invalid,"{where}: assign= expects group:<name>, user:<name> or initiator ('{value}')."
+ui_text,msg_workflows.action_unknown,{where}: Unknown action '{value}' (allowed: {allowed}).
+ui_text,msg_workflows.action_value,{where}: action={type} expects {choices} ('{value}').
+ui_text,msg_workflows.action_twice,{where}: action={type} is given twice.
+ui_text,msg_workflows.property_unknown,"{where}: Unknown property '{key}=' (allowed: allowed=, assign=, action=)."
+ui_text,msg_workflows.webhook_name,"{where}: action=webhook expects the name of a webhook (letters, digits, _ and -, starting with a letter, at most 50 characters; '{name}')."
+ui_text,msg_workflows.webhook_twice,{where}: action=webhook:{name} is given twice.
+ui_text,msg_workflows.allowed_missing,{where}: The transition '{transition}' ({from} -> {to}) has no allowed= (who may execute it? e.g. allowed=group:redaktion).
+ui_text,msg_workflows.no_states,"Workflow '{workflow}' has no states (expected: state <name> ""Label"")."
+ui_text,msg_workflows.no_flow,"Workflow '{workflow}' has no flow line (expected: flow a -> b -> c; the first state is the initial state of new records)."
+ui_text,msg_workflows.flow_step_missing,Workflow '{workflow}': There is no transition for the flow step {from} -> {to} (expected: {from} -> {to} : label { allowed=... }).
+ui_text,msg_webhooks.not_found,Webhook not found
+ui_text,msg_webhooks.name_invalid,"Name of letters, digits, _ and - expected, starting with a letter (at most 50 characters)"
+ui_text,msg_webhooks.url_invalid,Full address with http:// or https:// expected
+ui_text,msg_webhooks.token_invalid,At most {max} characters without spaces and umlauts (the token is sent as a header)
+ui_text,msg_webhooks.events_expected,List of {events} expected
+ui_text,msg_webhooks.entities_expected,null (all entities) or a list of entities expected
+ui_text,msg_webhooks.entities_unknown,Unknown entity '{entities}'
+ui_text,msg_webhooks.entities_none,Select at least one entity (or all)
+ui_text,msg_webhooks.exists,A webhook '{name}' already exists.
+ui_text,msg_webhooks.ref,"{workflow}, transition '{transition}' ({from} -> {to})"
+ui_text,msg_webhooks.in_use_rename,The webhook '{name}' cannot be renamed: the active workflow file calls it ({where}). Please first remove or adjust action=webhook:{name} there and apply the workflow file.
+ui_text,msg_webhooks.in_use_delete,The webhook '{name}' cannot be deleted: the active workflow file calls it ({where}). Please first remove or adjust action=webhook:{name} there and apply the workflow file.
+ui_text,msg_webhooks.missing,"Workflow '{workflow}', transition '{transition}' ({from} -> {to}): webhook '{name}' from action= does not exist"
+ui_text,msg_webhooks.missing_list,{items}. Please create them under System → Settings → Webhooks or adjust the workflow file.
+ui_text,msg_webhooks.missing_list_more,{items} and {more} more. Please create them under System → Settings → Webhooks or adjust the workflow file.
+ui_text,msg_webhooks.call_timeout,Timeout (no response within {seconds} s) – {detail}
+ui_text,msg_webhooks.call_refused,Connection refused or not possible – {detail}
+ui_text,msg_webhooks.call_host,Host not found – {detail}
+ui_text,msg_webhooks.call_tls,TLS connection failed – {detail}
+ui_text,msg_webhooks.call_failed,Call failed – {detail}
+ui_text,msg_webhooks.call_no_response,No valid HTTP response
+ui_text,msg_webhooks.unknown_error,unknown error
+ui_text,msg_i18n.default_no_delete,The default language “{name}” cannot be deleted (it describes the texts of the diagram). Renaming is possible.
+ui_text,msg_i18n.no_items,No items
+ui_text,msg_i18n.list_expected,List expected
+ui_text,msg_i18n.item_expected,"{kind, ref_id, value?, text} expected"
+ui_text,msg_i18n.ui_key_expected,Key of a UI text expected (e.g. “login.submit”)
+ui_text,msg_i18n.element_unknown,The element does not exist in the active schema
+ui_text,msg_i18n.at_most_chars,at most {max} characters
+ui_text,msg_i18n.items_invalid,{count} item(s) invalid
+ui_text,msg_i18n.language_not_found,Language not found
+ui_text,msg_i18n.format_no_placeholder,Format without placeholders – expected e.g. “{example}” (supported: {supported})
+ui_text,msg_i18n.decimal_separator,"Exactly one character expected (no digit, no sign), e.g. “,” or “.”"
+ui_text,msg_i18n.thousands_separator,"At most one character expected (no digit, no sign); empty = no grouping"
+ui_text,msg_i18n.separators_equal,Must differ from the decimal separator
+ui_text,msg_i18n.code_invalid,"Code of 1–20 characters (letters, digits, - and _), e.g. “de” or “en-GB”"
+ui_text,msg_i18n.code_taken,The code “{code}” is already taken
+ui_text,msg_i18n.name_invalid,"Name of 1–{max} characters expected, e.g. “Deutsch”"
+ui_text,msg_i18n.language_invalid,Invalid language
+ui_text,msg_i18n.target_language_missing,Target language missing
+ui_text,msg_i18n.csv_three_columns,"Three columns expected (kind, ref, text)"
+ui_text,msg_i18n.csv_kind_unknown,Unknown kind “{kind}” (allowed: {allowed})
+ui_text,msg_i18n.csv_not_ui_key,“{ref}” is not the key of a UI text (e.g. “login.submit”)
+ui_text,msg_i18n.csv_element_unknown,Element “{ref}” not found in the current schema
+ui_text,msg_i18n.csv_empty,Empty text (an existing translation stays)
+ui_text,msg_i18n.csv_too_long,Text longer than {max} characters
+ui_text,msg_i18n.csv_duplicate,Duplicate – already in line {line}
+ui_text,msg_i18n.csv_source,Give either the content of a CSV file (content) or a file from translations/ (file)
+ui_text,msg_i18n.csv_file_not_found,File not found in translations/
+ui_text,msg_i18n.csv_unreadable,translations/{file} cannot be read (check the file permissions)
+ui_text,msg_i18n.csv_too_large,The CSV file is too large (at most {mb} MB)
+ui_text,msg_i18n.csv_not_utf8,The file is not UTF-8 encoded.
+ui_text,msg_i18n.csv_header,"Not a translation CSV: the first line must be “kind,ref,text”."
+ui_text,msg_i18n.type_entity,Entity
+ui_text,msg_i18n.type_enum_field,Field (Enum {enum})
+ui_text,msg_i18n.type_field,Field ({type})
+ui_text,msg_i18n.type_media,Media field
+ui_text,msg_i18n.type_relation,{kind} relationship → {target}
+ui_text,msg_i18n.type_nn,n:n relationship – {target}
+ui_text,msg_i18n.type_enum,Enum
+ui_text,msg_i18n.type_enum_value,Enum value
+ui_text,msg_testdata.mutual,Tables reference each other via required foreign keys ({tables}) – so the first row cannot be created.
+ui_text,msg_testdata.aborted,Aborted after {rows} row(s): {reason}
+ui_text,msg_testdata.no_unique,no further free combination found for the {unique} fields ({fields}).
+ui_text,msg_testdata.counts_object,counts must be an object
+ui_text,msg_testdata.object_expected,Object expected
+ui_text,msg_testdata.unknown_entity,Unknown entity
+ui_text,msg_testdata.count_range,Allowed: 0 to {max}
+ui_text,msg_testdata.invalid_count,Invalid count
+ui_text,msg_testdata.pattern_no_example,Required field '{field}' with {marker}: The pattern has no example value - please enter one under System → Settings → Patterns.
+ui_text,msg_testdata.pattern_example_bad,Required field '{field}' with {marker}: The example value '{example}' violates another rule of the field.
+ui_text,msg_testdata.self_ref,"Required self-reference '{field}': The first row would need a parent, but the table is empty."
+ui_text,msg_testdata.fk_empty,"Required foreign key '{field}' references '{table}', which has no rows."
+ui_text,msg_testdata.one_to_one_full,Required 1:1 '{field}': all rows in '{table}' are already assigned.

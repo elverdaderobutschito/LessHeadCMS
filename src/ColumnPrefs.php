@@ -96,21 +96,18 @@ final class ColumnPrefs
         $given = $input['visible_columns'] ?? null;
         $error = null;
         if (!is_array($given) || array_values($given) !== $given) {
-            $error = 'Liste von Spaltennamen erwartet';
+            $error = Msg::of('msg_api.column_list_expected', 'List of column names expected');
         } else {
             foreach ($given as $name) {
                 if (!is_string($name) || !in_array($name, $known, true)) {
-                    $error = 'Unbekannte Spalte: ' . (is_scalar($name) ? (string) $name : gettype($name));
+                    $error = Msg::of('msg_api.unknown_column', 'Unknown column: {column}',
+                        ['column' => is_scalar($name) ? (string) $name : gettype($name)]);
                     break;
                 }
             }
         }
         if ($error !== null) {
-            throw new ApiException(422, [
-                'error'   => 'validation',
-                'message' => 'Ungültige Eingabe',
-                'errors'  => ['visible_columns' => $error],
-            ]);
+            throw ApiException::invalid(['visible_columns' => $error]);
         }
 
         $columns = self::normalize($given, $known);

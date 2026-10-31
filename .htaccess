@@ -15,7 +15,8 @@ DirectoryIndex index.php
     # Hochgeladene Dateien der Mediathek direkt ausliefern (öffentlich; media/.htaccess verhindert jede Skriptausführung)
     RewriteRule ^media/ - [L]
 
-    # Alles andere (auch src/, vendor/, schema/, data/) läuft über Flight -> nie als Datei erreichbar
+    # Alles andere (auch src/, vendor/, schema/, data/, translations/, custom_translations/) läuft über Flight -> nie als
+    # Datei erreichbar
     RewriteRule ^index\.php$ - [L]
     RewriteRule ^ index.php [QSA,L]
 </IfModule>

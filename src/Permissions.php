@@ -55,7 +55,7 @@ use PDOException;
 final class Permissions
 {
     /** System areas of this permission system (default: denied) */
-    public const SYSTABLES = ['users', 'media', 'languages', 'translations', 'testdata'];
+    public const SYSTABLES = ['users', 'media', 'languages', 'translations', 'testdata', 'violations'];
 
     public const TABLES = ['roles', 'groups', 'group_roles', 'user_roles', 'user_groups', 'permissions'];
 
@@ -248,7 +248,7 @@ final class Permissions
         }
         $access = self::access($pdo, $user, ['entities' => []]);
         if ($access === null || !$access->systable($systable)) {
-            throw new ApiException(403, ['error' => 'forbidden', 'message' => 'Keine Berechtigung für diesen Bereich']);
+            throw ApiException::of(403, 'forbidden', Msg::of('msg_api.forbidden_area', 'No permission for this area'));
         }
     }
 
@@ -269,8 +269,8 @@ final class Permissions
      * owners and without the derived denials (references to a denied entity). Owners for whom the denial has no
      * effect (administrators, deleted users) are missing.
      *
-     * @return array{entities:array<string,array<string,string>>,fields:array<string,array<string,array<string,string>>>}
-     *         table [=> API name] => [owner key => label like "Rolle 'Redaktion'"]
+     * @return array{entities:array<string,array<string,Msg>>,fields:array<string,array<string,array<string,Msg>>>}
+     *         table [=> API name] => [owner key => label like "Role 'Redaktion'" (ownerLabel())]
      */
     public static function denials(PDO $pdo, array $model): array
     {
@@ -289,9 +289,9 @@ final class Permissions
         )->fetchAll();
         $tablesOf = self::tableResolver($pdo, $model);
         foreach ($rows as $r) {
-            $owner = $r['owner_type'] === 'role' ? ($r['role_name'] !== null ? "Rolle '{$r['role_name']}'" : null)
-                : ($r['owner_type'] === 'group' ? ($r['group_name'] !== null ? "Gruppe '{$r['group_name']}'" : null)
-                : ($r['username'] !== null && $r['user_role'] !== 'admin' ? "Nutzer '{$r['username']}'" : null));
+            $owner = $r['owner_type'] === 'role' ? ($r['role_name'] !== null ? self::ownerLabel('role', $r['role_name']) : null)
+                : ($r['owner_type'] === 'group' ? ($r['group_name'] !== null ? self::ownerLabel('group', $r['group_name']) : null)
+                : ($r['username'] !== null && $r['user_role'] !== 'admin' ? self::ownerLabel('user', $r['username']) : null));
             if ($owner === null) {
                 continue;
             }
@@ -351,7 +351,7 @@ final class Permissions
                 $explained += $o['members'];
             }
             foreach (array_diff_key($affected, $explained) as $uid => $_) {
-                $out[] = "Nutzer '{$data['users'][$uid]['username']}'";
+                $out[] = self::ownerLabel('user', $data['users'][$uid]['username']);
             }
             return $out;
         };
@@ -417,7 +417,7 @@ final class Permissions
                     array_push($data['users'][$uid]['keys'], ...$keys);
                 }
             }
-            $data['owners'][] = ['label' => "Gruppe '{$g['name']}'", 'keys' => $keys, 'members' => $members($groupUsers[$id] ?? [])];
+            $data['owners'][] = ['label' => self::ownerLabel('group', $g['name']), 'keys' => $keys, 'members' => $members($groupUsers[$id] ?? [])];
         }
         foreach ($pdo->query('SELECT id, name FROM roles WHERE is_admin = 0 ORDER BY id')->fetchAll() as $r) {
             $id = (int) $r['id'];
@@ -426,7 +426,7 @@ final class Permissions
                     $data['users'][$uid]['keys'][] = "role:$id";
                 }
             }
-            $data['owners'][] = ['label' => "Rolle '{$r['name']}'", 'keys' => ["role:$id"],
+            $data['owners'][] = ['label' => self::ownerLabel('role', $r['name']), 'keys' => ["role:$id"],
                 'members' => ($roleMembers[$id] ?? []) + $members($roleUsers[$id] ?? [])];
         }
         return $data;
@@ -623,8 +623,8 @@ final class Permissions
         $json = self::modelJson($pdo);
         $model = Database::loadModel($pdo);
         if ($json === null || $model === null) {
-            throw new ApiException(409, ['error' => 'no_active_schema', 'message' => 'Das aktive Schema ist nicht lesbar - '
-                . 'Berechtigungen auf Entitäten und Felder lassen sich erst nach /bootstrap bzw. dem Anwenden des Schemas setzen.']);
+            throw ApiException::of(409, 'no_active_schema', Msg::of('msg_permissions.no_schema', 'The active schema is not readable - '
+                . 'permissions on entities and fields can only be set after /bootstrap or applying the schema.'));
         }
         $ids = SchemaIds::lookup($pdo);
         $tableOf = array_column($json['entities'], 'table', 'name');
@@ -670,33 +670,31 @@ final class Permissions
     public static function createRole(PDO $pdo, array $body): array
     {
         if (!empty($body['is_admin'])) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Es gibt genau eine eingebaute Admin-Rolle',
-                'errors' => ['is_admin' => 'nicht setzbar']]);
+            throw self::oneAdminRole();
         }
         $name = self::validName($body);
         self::unique(function () use ($pdo, $name) {
             $pdo->prepare('INSERT INTO roles (name, is_admin) VALUES (?, 0)')->execute([$name]);
-        }, "Die Rolle '$name' gibt es bereits");
+        }, Msg::of('msg_permissions.role_exists', "The role '{name}' already exists", ['name' => $name]));
         return self::role($pdo, (int) $pdo->lastInsertId());
     }
 
     public static function updateRole(PDO $pdo, int $id, array $body): array
     {
-        self::customRole($pdo, $id, 'umbenannt');
+        self::customRole($pdo, $id, true);
         if (!empty($body['is_admin'])) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Es gibt genau eine eingebaute Admin-Rolle',
-                'errors' => ['is_admin' => 'nicht setzbar']]);
+            throw self::oneAdminRole();
         }
         $name = self::validName($body);
         self::unique(function () use ($pdo, $name, $id) {
             $pdo->prepare('UPDATE roles SET name = ? WHERE id = ?')->execute([$name, $id]);
-        }, "Die Rolle '$name' gibt es bereits");
+        }, Msg::of('msg_permissions.role_exists', "The role '{name}' already exists", ['name' => $name]));
         return self::role($pdo, $id);
     }
 
     public static function deleteRole(PDO $pdo, int $id): array
     {
-        self::customRole($pdo, $id, 'gelöscht');
+        self::customRole($pdo, $id, false);
         self::transaction($pdo, function () use ($pdo, $id) {
             $pdo->prepare("DELETE FROM permissions WHERE owner_type = 'role' AND owner_id = ?")->execute([$id]);
             $pdo->prepare('DELETE FROM roles WHERE id = ?')->execute([$id]); // assignments: ON DELETE CASCADE
@@ -710,20 +708,39 @@ final class Permissions
         $stmt->execute([$id]);
         $r = $stmt->fetch();
         if ($r === false) {
-            throw new ApiException(404, ['error' => 'not_found', 'message' => 'Rolle nicht gefunden']);
+            throw ApiException::of(404, 'not_found', Msg::of('msg_permissions.role_not_found', 'Role not found'));
         }
         return ['id' => (int) $r['id'], 'name' => $r['name'], 'is_admin' => (bool) (int) $r['is_admin']];
     }
 
     /** 404 unknown, 409 for the built-in admin role */
-    private static function customRole(PDO $pdo, int $id, string $verb): array
+    private static function customRole(PDO $pdo, int $id, bool $rename): array
     {
         $role = self::role($pdo, $id);
         if ($role['is_admin']) {
-            throw new ApiException(409, ['error' => 'builtin_role',
-                'message' => "Die eingebaute Rolle '{$role['name']}' kann nicht $verb werden"]);
+            throw ApiException::of(409, 'builtin_role', $rename
+                ? Msg::of('msg_permissions.builtin_rename', "The built-in role '{name}' cannot be renamed", ['name' => $role['name']])
+                : Msg::of('msg_permissions.builtin_delete', "The built-in role '{name}' cannot be deleted", ['name' => $role['name']]));
         }
         return $role;
+    }
+
+    private static function oneAdminRole(): ApiException
+    {
+        return ApiException::of(422, 'validation', Msg::of('msg_permissions.one_admin_role', 'There is exactly one built-in admin role'),
+            ApiException::fields(['is_admin' => Msg::of('msg_permissions.not_settable', 'cannot be set')]));
+    }
+
+    /** "Role 'X'", "Group 'X'", "User 'X'" - owner in messages of the schema analysis */
+    public static function ownerLabel(string $type, string $name): Msg
+    {
+        if ($type === 'role') {
+            return Msg::of('msg_permissions.owner_role', "Role '{name}'", ['name' => $name]);
+        }
+        if ($type === 'group') {
+            return Msg::of('msg_permissions.owner_group', "Group '{name}'", ['name' => $name]);
+        }
+        return Msg::of('msg_permissions.owner_user', "User '{name}'", ['name' => $name]);
     }
 
     // ---------------------------------------------------------------- Groups
@@ -743,7 +760,7 @@ final class Permissions
         $name = self::validName($body);
         self::unique(function () use ($pdo, $name) {
             $pdo->prepare('INSERT INTO "groups" (name) VALUES (?)')->execute([$name]);
-        }, "Die Gruppe '$name' gibt es bereits");
+        }, Msg::of('msg_permissions.group_exists', "The group '{name}' already exists", ['name' => $name]));
         return self::group($pdo, (int) $pdo->lastInsertId());
     }
 
@@ -753,7 +770,7 @@ final class Permissions
         $name = self::validName($body);
         self::unique(function () use ($pdo, $name, $id) {
             $pdo->prepare('UPDATE "groups" SET name = ? WHERE id = ?')->execute([$name, $id]);
-        }, "Die Gruppe '$name' gibt es bereits");
+        }, Msg::of('msg_permissions.group_exists', "The group '{name}' already exists", ['name' => $name]));
         return self::group($pdo, $id);
     }
 
@@ -774,7 +791,7 @@ final class Permissions
                 return $g;
             }
         }
-        throw new ApiException(404, ['error' => 'not_found', 'message' => 'Gruppe nicht gefunden']);
+        throw ApiException::of(404, 'not_found', Msg::of('msg_permissions.group_not_found', 'Group not found'));
     }
 
     // ---------------------------------------------------------------- Assignments
@@ -802,7 +819,7 @@ final class Permissions
     {
         self::user($pdo, $userId);
         $ids = self::idList($body, 'group_ids');
-        self::known($pdo, 'SELECT id FROM "groups"', $ids, 'group_ids', 'Gruppe');
+        self::known($pdo, 'SELECT id FROM "groups"', $ids, 'group_ids', 'group');
         self::replace($pdo, 'user_groups', 'user_id', $userId, 'group_id', $ids);
         return self::userAssignments($pdo, $userId);
     }
@@ -819,12 +836,13 @@ final class Permissions
     private static function roleIds(PDO $pdo, array $body): array
     {
         $ids = self::idList($body, 'role_ids');
-        self::known($pdo, 'SELECT id FROM roles', $ids, 'role_ids', 'Rolle');
+        self::known($pdo, 'SELECT id FROM roles', $ids, 'role_ids', 'role');
         $admin = array_map('intval', $pdo->query('SELECT id FROM roles WHERE is_admin = 1')->fetchAll(PDO::FETCH_COLUMN));
         if (array_intersect($ids, $admin)) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Die eingebaute Admin-Rolle lässt sich nicht '
-                . "zuweisen - Administratoren werden über die Nutzerverwaltung festgelegt (role = 'admin').",
-                'errors' => ['role_ids' => 'Admin-Rolle nicht zuweisbar']]);
+            throw ApiException::of(422, 'validation', Msg::of('msg_permissions.admin_not_assignable', 'The built-in admin role cannot '
+                . "be assigned - administrators are set in the user management (role = 'admin')."), ApiException::fields([
+                'role_ids' => Msg::of('msg_permissions.admin_not_assignable_short', 'Admin role cannot be assigned'),
+            ]));
         }
         return $ids;
     }
@@ -861,7 +879,7 @@ final class Permissions
         $stmt->execute([$id]);
         $row = $stmt->fetch();
         if ($row === false) {
-            throw new ApiException(404, ['error' => 'not_found', 'message' => 'Berechtigung nicht gefunden']);
+            throw ApiException::of(404, 'not_found', Msg::of('msg_permissions.not_found', 'Permission not found'));
         }
         return self::present($row);
     }
@@ -913,8 +931,7 @@ final class Permissions
         $ownerType = $query['owner_type'] ?? null;
         $ownerId = $query['owner_id'] ?? null;
         if (!in_array($ownerType, self::OWNER_TYPES, true) || !is_scalar($ownerId) || !preg_match('/^[0-9]+$/', (string) $ownerId)) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Ungültige Eingabe',
-                'errors' => ['owner_type' => 'role, group oder user und owner_id erwartet']]);
+            throw ApiException::invalid(['owner_type' => Msg::of('msg_permissions.owner_expected', 'role, group or user and owner_id expected')]);
         }
         $ownerId = (int) $ownerId;
         // source "type:id" => [type, id, name, via]; the order here is the order in the display
@@ -998,23 +1015,25 @@ final class Permissions
         $scope = $body['scope'] ?? null;
         $effect = $body['effect'] ?? null;
         if (!in_array($ownerType, self::OWNER_TYPES, true)) {
-            $errors['owner_type'] = 'role, group oder user erwartet';
+            $errors['owner_type'] = Msg::of('msg_permissions.owner_type_expected', 'role, group or user expected');
         }
         if (!is_int($ownerId)) {
-            $errors['owner_id'] = 'ID erwartet';
+            $errors['owner_id'] = Msg::of('msg_api.id_expected', 'ID expected');
         }
         if (!in_array($scope, self::SCOPES, true)) {
-            $errors['scope'] = 'entity, field, systable oder action erwartet';
+            $errors['scope'] = Msg::of('msg_permissions.scope_expected', 'entity, field, systable or action expected');
         }
         if (!in_array($effect, self::EFFECTS, true)) {
-            $errors['effect'] = 'allow oder deny erwartet';
+            $errors['effect'] = Msg::of('msg_permissions.effect_expected', 'allow or deny expected');
         }
         if (!isset($errors['owner_type']) && !isset($errors['owner_id'])) {
             if ($ownerType === 'role') {
                 $role = self::role($pdo, $ownerId);
                 if ($role['is_admin']) {
-                    throw new ApiException(422, ['error' => 'validation', 'message' => "Die eingebaute Rolle '{$role['name']}' hat "
-                        . 'immer vollen Zugriff - Berechtigungen an ihr wären wirkungslos.', 'errors' => ['owner_id' => 'Admin-Rolle']]);
+                    throw ApiException::of(422, 'validation', Msg::of('msg_permissions.admin_full_access', "The built-in role '{name}' "
+                        . 'always has full access - permissions on it would have no effect.', ['name' => $role['name']]), ApiException::fields([
+                        'owner_id' => Msg::of('msg_permissions.admin_role', 'Admin role'),
+                    ]));
                 }
             } elseif ($ownerType === 'group') {
                 self::group($pdo, $ownerId);
@@ -1030,35 +1049,34 @@ final class Permissions
         if ($scope === 'action') {
             $action = $body['action'] ?? null;
             if (!in_array($action, self::ACTIONS, true)) {
-                $errors['action'] = 'einer von: ' . implode(', ', self::ACTIONS);
+                $errors['action'] = Msg::of('msg_permissions.one_of', 'one of: {values}', ['values' => implode(', ', self::ACTIONS)]);
             }
         } elseif (($body['action'] ?? null) !== null) {
-            $errors['action'] = 'nur bei scope action';
+            $errors['action'] = Msg::of('msg_permissions.only_action', 'only with scope action');
         }
         if ($scope === 'systable') {
             $systable = $body['systable_name'] ?? null;
             if (!in_array($systable, self::SYSTABLES, true)) {
-                $errors['systable_name'] = 'einer von: ' . implode(', ', self::SYSTABLES);
+                $errors['systable_name'] = Msg::of('msg_permissions.one_of', 'one of: {values}', ['values' => implode(', ', self::SYSTABLES)]);
             }
             if (($body['ref_id'] ?? null) !== null || ($body['ref'] ?? null) !== null) {
-                $errors['ref_id'] = 'nur bei scope entity/field/action';
+                $errors['ref_id'] = Msg::of('msg_permissions.only_ref', 'only with scope entity/field/action');
             }
             // explicit denial on 'media' (not the default without allow): only where it newly arises, see above
             if (!$errors && $systable === 'media' && $effect === 'deny'
                 && !($current !== null && $current['systable_name'] === 'media' && $current['effect'] === 'deny')) {
                 [$fields, $entities] = self::requiredMediaFor($pdo, $ownerType, $ownerId);
                 if ($fields) {
-                    $who = ['role' => 'diese Rolle', 'group' => 'diese Gruppe', 'user' => 'dieser Nutzer'][$ownerType];
-                    $message = "Der Systembereich 'media' kann nicht gesperrt werden: '" . implode("', '", $fields) . "' "
-                        . (count($fields) === 1 ? 'ist ein Pflicht-Medien-Feld' : 'sind Pflicht-Medien-Felder')
-                        . ", und $who hat Zugriff auf '" . implode("', '", $entities) . "'.";
-                    $errors['systable_name'] = 'Pflicht-Medien-Feld';
+                    $message = self::mediaMessage($ownerType, count($fields) === 1, [
+                        'fields' => implode("', '", $fields), 'entities' => implode("', '", $entities),
+                    ]);
+                    $errors['systable_name'] = Msg::of('msg_permissions.required_media_short', 'Required media field');
                     $extra = ['error' => 'required_media', 'fields' => $fields];
                 }
             }
         } elseif ($scope === 'entity' || $scope === 'field' || $scope === 'action') {
             if (($body['systable_name'] ?? null) !== null) {
-                $errors['systable_name'] = 'nur bei scope systable';
+                $errors['systable_name'] = Msg::of('msg_permissions.only_systable', 'only with scope systable');
             }
             $elements = self::elements($pdo);
             $el = null;
@@ -1072,37 +1090,44 @@ final class Permissions
                 }
             }
             if ($el === null) {
-                $errors['ref_id'] = 'stabile ID (ref_id) oder Schlüssel (ref) eines Elements des aktiven Schemas erwartet - '
-                    . 'siehe GET /api/_permissions/targets';
+                $errors['ref_id'] = Msg::of('msg_permissions.ref_expected', 'stable ID (ref_id) or key (ref) of an element of the active '
+                    . 'schema expected - see GET /api/_permissions/targets');
             } elseif ($el['scope'] !== ($scope === 'action' ? 'entity' : $scope)) {
-                $errors['ref_id'] = $scope === 'field' ? 'Feld, Medien-Feld oder Beziehung erwartet' : 'Entität erwartet';
+                $errors['ref_id'] = $scope === 'field'
+                    ? Msg::of('msg_permissions.field_expected', 'Field, media field or relationship expected')
+                    : Msg::of('msg_permissions.entity_expected', 'Entity expected');
             } else {
                 $refId = $el['ref_id'];
                 if ($scope === 'field' && $effect === 'deny' && !empty($el['workflow'])) {
                     // state changes are controlled exclusively by allowed= of the transitions, never by the field denial
-                    $message = "Das Workflow-Feld '{$el['name']}' steht außerhalb der Feld-Rechte: Wer den Zustand wechseln darf, "
-                        . 'legt ausschließlich allowed= der Transitionen in der Workflow-Datei fest.';
-                    $errors['ref_id'] = 'Workflow-Feld';
+                    $message = Msg::of('msg_permissions.workflow_field', "The workflow field '{name}' is outside the field permissions: "
+                        . 'who may change the state is set only by allowed= of the transitions in the workflow file.', ['name' => $el['name']]);
+                    $errors['ref_id'] = Msg::of('msg_permissions.workflow_field_short', 'Workflow field');
                     $extra = ['error' => 'workflow_field'];
                 } elseif ($scope === 'field' && $effect === 'deny' && $el['required']) {
-                    $message = "Das Pflichtfeld '{$el['name']}' kann nicht gesperrt werden, da sonst kein gültiger Datensatz anlegbar wäre.";
-                    $errors['ref_id'] = 'Pflichtfeld';
+                    $message = Msg::of('msg_permissions.required_field', "The required field '{name}' cannot be denied, since otherwise "
+                        . 'no valid record could be created.', ['name' => $el['name']]);
+                    $errors['ref_id'] = Msg::of('msg_api.required', 'Required field');
                 } elseif ($scope === 'field' && $effect === 'deny' && !$el['lockable']) {
-                    $message = "Das Feld '{$el['name']}' (Primärschlüssel) kann nicht gesperrt werden.";
-                    $errors['ref_id'] = 'Primärschlüssel';
+                    $message = Msg::of('msg_permissions.primary_key', "The field '{name}' (primary key) cannot be denied.", ['name' => $el['name']]);
+                    $errors['ref_id'] = Msg::of('msg_permissions.primary_key_short', 'Primary key');
                 } elseif ($scope === 'entity' && $effect === 'deny'
                     && !($current !== null && $current['scope'] === 'entity' && $current['effect'] === 'deny' && $current['ref_id'] === $refId)
                     && ($relations = self::requiredRelationsTo($pdo, $refId))) {
-                    $message = "Die Entität '{$el['name']}' kann nicht gesperrt werden: '" . implode("', '", $relations) . "' "
-                        . (count($relations) === 1 ? 'ist eine Pflicht-Beziehung' : 'sind Pflicht-Beziehungen') . ' zu dieser Entität.';
-                    $errors['ref_id'] = 'Pflicht-Beziehung';
+                    $params = ['name' => $el['name'], 'relations' => implode("', '", $relations)];
+                    $message = count($relations) === 1
+                        ? Msg::of('msg_permissions.required_relation', "The entity '{name}' cannot be denied: '{relations}' is a required "
+                            . 'relationship to this entity.', $params)
+                        : Msg::of('msg_permissions.required_relations', "The entity '{name}' cannot be denied: '{relations}' are required "
+                            . 'relationships to this entity.', $params);
+                    $errors['ref_id'] = Msg::of('msg_permissions.required_relation_short', 'Required relationship');
                     $extra = ['error' => 'required_relation', 'relations' => $relations];
                 }
             }
         }
         if ($errors) {
-            throw new ApiException(422, $extra + ['error' => $message !== null ? 'required_field' : 'validation',
-                'message' => $message ?? 'Ungültige Eingabe', 'errors' => $errors]);
+            throw ApiException::of(422, $extra['error'] ?? ($message !== null ? 'required_field' : 'validation'),
+                $message ?? Msg::of('msg_api.invalid_input', 'Invalid input'), $extra + ApiException::fields($errors));
         }
         // the same permission (owner + target) only once - allow and deny side by side would be deny anyway
         $stmt = $pdo->prepare('SELECT id FROM permissions WHERE owner_type = ? AND owner_id = ? AND scope = ?
@@ -1110,8 +1135,8 @@ final class Permissions
         $stmt->execute([$ownerType, $ownerId, $scope, $refId, $systable, $action, $id]);
         $existing = $stmt->fetchColumn();
         if ($existing !== false) {
-            throw new ApiException(409, ['error' => 'duplicate', 'message' => 'Für diesen Besitzer und dieses Ziel gibt es '
-                . "bereits eine Berechtigung (#$existing) - bitte diese ändern.", 'existing_id' => (int) $existing]);
+            throw ApiException::of(409, 'duplicate', Msg::of('msg_permissions.duplicate', 'There already is a permission for this owner '
+                . 'and target (#{id}) - please change that one.', ['id' => (int) $existing]), ['existing_id' => (int) $existing]);
         }
         return ['owner_type' => $ownerType, 'owner_id' => $ownerId, 'scope' => $scope, 'ref_id' => $refId,
             'systable_name' => $systable, 'effect' => $effect, 'action' => $action];
@@ -1142,7 +1167,7 @@ final class Permissions
         $stmt = $pdo->prepare('SELECT 1 FROM users WHERE id = ?');
         $stmt->execute([$id]);
         if ($stmt->fetchColumn() === false) {
-            throw new ApiException(404, ['error' => 'not_found', 'message' => 'Nutzer nicht gefunden']);
+            throw ApiException::of(404, 'not_found', Msg::of('msg_users.not_found', 'User not found'));
         }
     }
 
@@ -1150,8 +1175,8 @@ final class Permissions
     {
         $name = is_string($body['name'] ?? null) ? trim($body['name']) : '';
         if ($name === '' || Languages::length($name) > self::NAME_MAX) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Ungültige Eingabe',
-                'errors' => ['name' => $name === '' ? 'Pflichtfeld' : 'höchstens ' . self::NAME_MAX . ' Zeichen']]);
+            throw ApiException::invalid(['name' => $name === '' ? Msg::of('msg_api.required', 'Required field')
+                : Msg::of('msg_permissions.max_chars', 'at most {max} characters', ['max' => self::NAME_MAX])]);
         }
         return $name;
     }
@@ -1165,19 +1190,50 @@ final class Permissions
             $ok = $ok && is_int($v);
         }
         if (!$ok) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Ungültige Eingabe',
-                'errors' => [$key => 'Liste von IDs erwartet']]);
+            throw ApiException::invalid([$key => Msg::of('msg_permissions.ids_expected', 'List of IDs expected')]);
         }
         return array_values(array_unique($list));
     }
 
+    /** @param string $what 'role' or 'group' */
     private static function known(PDO $pdo, string $sql, array $ids, string $key, string $what): void
     {
         $missing = array_diff($ids, array_map('intval', $pdo->query($sql)->fetchAll(PDO::FETCH_COLUMN)));
         if ($missing) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => "$what #" . implode(', #', $missing) . ' gibt es nicht',
-                'errors' => [$key => 'unbekannte ID']]);
+            $params = ['ids' => '#' . implode(', #', $missing)];
+            throw ApiException::of(422, 'validation', $what === 'role'
+                ? Msg::of('msg_permissions.roles_missing', 'Role {ids} does not exist', $params)
+                : Msg::of('msg_permissions.groups_missing', 'Group {ids} does not exist', $params),
+                ApiException::fields([$key => Msg::of('msg_permissions.unknown_id', 'unknown ID')]));
         }
+    }
+
+    /**
+     * 409 text for denying 'media' while required media fields need it
+     *
+     * @param array{fields:string,entities:string} $params
+     */
+    private static function mediaMessage(string $ownerType, bool $one, array $params): Msg
+    {
+        if ($ownerType === 'role') {
+            return $one
+                ? Msg::of('msg_permissions.media_role_one', "The system area 'media' cannot be denied: '{fields}' is a required media "
+                    . "field, and this role has access to '{entities}'.", $params)
+                : Msg::of('msg_permissions.media_role_many', "The system area 'media' cannot be denied: '{fields}' are required media "
+                    . "fields, and this role has access to '{entities}'.", $params);
+        }
+        if ($ownerType === 'group') {
+            return $one
+                ? Msg::of('msg_permissions.media_group_one', "The system area 'media' cannot be denied: '{fields}' is a required media "
+                    . "field, and this group has access to '{entities}'.", $params)
+                : Msg::of('msg_permissions.media_group_many', "The system area 'media' cannot be denied: '{fields}' are required media "
+                    . "fields, and this group has access to '{entities}'.", $params);
+        }
+        return $one
+            ? Msg::of('msg_permissions.media_user_one', "The system area 'media' cannot be denied: '{fields}' is a required media "
+                . "field, and this user has access to '{entities}'.", $params)
+            : Msg::of('msg_permissions.media_user_many', "The system area 'media' cannot be denied: '{fields}' are required media "
+                . "fields, and this user has access to '{entities}'.", $params);
     }
 
     /** Completely replace the assignments of one side ($table/$ownerCol/$col are fixed identifiers of this class) */
@@ -1210,13 +1266,13 @@ final class Permissions
         return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
     }
 
-    private static function unique(callable $write, string $message): void
+    private static function unique(callable $write, Msg $message): void
     {
         try {
             $write();
         } catch (PDOException $ex) {
             if ((string) $ex->getCode() === '23000') {
-                throw new ApiException(409, ['error' => 'duplicate', 'message' => $message]);
+                throw ApiException::of(409, 'duplicate', $message);
             }
             throw $ex;
         }

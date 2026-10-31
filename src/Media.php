@@ -175,10 +175,10 @@ final class Media
         $kind = $query['kind'] ?? null;
         if (is_string($kind) && $kind !== '') {
             if (!in_array($kind, self::KINDS, true)) {
-                throw new ApiException(422, [
-                    'error' => 'validation', 'message' => 'Unbekannte Art (erlaubt: ' . implode(', ', self::KINDS) . ')',
-                    'errors' => ['kind' => 'Unbekannte Art'],
-                ]);
+                $unknown = Msg::of('msg_media.kind_unknown', 'Unknown kind');
+                throw ApiException::of(422, 'validation', Msg::of('msg_media.kind_unknown_allowed', 'Unknown kind (allowed: {allowed})', [
+                    'allowed' => implode(', ', self::KINDS),
+                ]), ApiException::fields(['kind' => $unknown]));
             }
             $where[] = 'm.kind = ?';
             $params[] = $kind;
@@ -229,7 +229,7 @@ final class Media
         $name = $input['name'] ?? null;
         $error = $this->tagNameError($name);
         if ($error !== null) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => $error, 'errors' => ['name' => $error]]);
+            throw ApiException::of(422, 'validation', $error, ApiException::fields(['name' => $error]));
         }
         $id = $this->tagIds([trim($name)])[0];
         return ['id' => $id, 'name' => $this->pdo->query('SELECT name FROM media_tags WHERE id = ' . $id)->fetchColumn()];
@@ -248,11 +248,11 @@ final class Media
             $stmt = $this->pdo->prepare('SELECT 1 FROM media_tags WHERE name = ? AND id <> ?'); // column is COLLATE NOCASE
             $stmt->execute([trim($name), $id]);
             if ($stmt->fetchColumn() !== false) {
-                $error = 'Es gibt bereits einen Tag mit diesem Namen';
+                $error = Msg::of('msg_media.tag_exists', 'A tag with this name already exists');
             }
         }
         if ($error !== null) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => $error, 'errors' => ['name' => $error]]);
+            throw ApiException::of(422, 'validation', $error, ApiException::fields(['name' => $error]));
         }
         $this->pdo->prepare('UPDATE media_tags SET name = ? WHERE id = ?')->execute([trim($name), $id]);
         return $this->tagRow($id);
@@ -287,7 +287,7 @@ final class Media
         $stmt->execute([$id]);
         $row = $stmt->fetch();
         if ($row === false) {
-            throw new ApiException(404, ['error' => 'not_found', 'message' => 'Tag nicht gefunden']);
+            throw ApiException::of(404, 'not_found', Msg::of('msg_media.tag_not_found', 'Tag not found'));
         }
         return ['id' => (int) $row['id'], 'name' => (string) $row['name'], 'count' => (int) $row['count']];
     }
@@ -342,10 +342,10 @@ final class Media
             if ($postMax !== null && $postMax > 0 && $length > $postMax) {
                 throw self::tooLarge($limits, $length, 'post_max_size');
             }
-            throw self::invalid('file', 'Keine Datei übertragen (Feld "file" im multipart/form-data-Request).');
+            throw self::invalid('file', Msg::of('msg_media.no_file_sent', 'No file sent (field "file" in a multipart/form-data request).'));
         }
         if (is_array($file['error'] ?? null)) {
-            throw self::invalid('file', 'Bitte genau eine Datei je Upload senden.');
+            throw self::invalid('file', Msg::of('msg_media.one_file', 'Please send exactly one file per upload.'));
         }
         switch ((int) ($file['error'] ?? UPLOAD_ERR_NO_FILE)) {
             case UPLOAD_ERR_OK:
@@ -354,27 +354,27 @@ final class Media
             case UPLOAD_ERR_FORM_SIZE:
                 throw self::tooLarge($limits, null, 'upload_max_filesize');
             case UPLOAD_ERR_PARTIAL:
-                throw self::invalid('file', 'Die Datei wurde nur teilweise übertragen. Bitte erneut versuchen.');
+                throw self::invalid('file', Msg::of('msg_media.partial', 'The file was only partially uploaded. Please try again.'));
             case UPLOAD_ERR_NO_FILE:
-                throw self::invalid('file', 'Keine Datei ausgewählt.');
+                throw self::invalid('file', Msg::of('msg_media.no_file_selected', 'No file selected.'));
             default:
                 // NO_TMP_DIR, CANT_WRITE, EXTENSION: server configuration, not the user
-                throw new ApiException(500, [
-                    'error'   => 'upload_failed',
-                    'message' => 'Der Server konnte die Datei nicht annehmen (PHP-Upload-Fehler ' . (int) $file['error']
-                        . ', z. B. temporäres Verzeichnis fehlt oder nicht beschreibbar).',
-                ]);
+                throw ApiException::of(500, 'upload_failed', Msg::of(
+                    'msg_media.upload_failed',
+                    'The server could not accept the file (PHP upload error {error}, e.g. the temporary directory is missing or not writable).',
+                    ['error' => (int) $file['error']]
+                ));
         }
         $tmp = (string) ($file['tmp_name'] ?? '');
         if ($tmp === '' || !is_uploaded_file($tmp)) {
-            throw self::invalid('file', 'Keine gültige hochgeladene Datei.');
+            throw self::invalid('file', Msg::of('msg_media.not_uploaded', 'Not a valid uploaded file.'));
         }
         $size = (int) filesize($tmp);
         if ($size > $limits['max_bytes']) {
             throw self::tooLarge($limits, $size, null);
         }
         if ($size === 0) {
-            throw self::invalid('file', 'Die Datei ist leer.');
+            throw self::invalid('file', Msg::of('msg_media.empty', 'The file is empty.'));
         }
 
         $original = self::cleanOriginalName((string) ($file['name'] ?? ''));
@@ -398,7 +398,7 @@ final class Media
         $filename = bin2hex(random_bytes(16)) . '.' . $ext;
         $target = Config::mediaDir() . '/' . $filename;
         if (!move_uploaded_file($tmp, $target)) {
-            throw new \RuntimeException('Hochgeladene Datei kann nicht nach media/ verschoben werden.');
+            throw new \RuntimeException('Cannot move the uploaded file to media/.');
         }
         @chmod($target, 0644);
         $thumb = !Thumbnail::applies($ext) ? '' : (Thumbnail::available() ? Thumbnail::create(Config::mediaDir(), $filename, $thumbnailSize) : null);
@@ -429,7 +429,7 @@ final class Media
         $meta = $this->collectMeta($post, $errors);
         $tagIds = $this->collectTags($post, $errors);
         if ($errors) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Ungültige Eingabe', 'errors' => $errors]);
+            throw ApiException::invalid($errors);
         }
 
         [$filename, $thumb] = self::store($file['tmp'], $ext, $this->thumbnailSize());
@@ -494,7 +494,7 @@ final class Media
         $meta = $this->collectMeta($input, $errors);
         $tagIds = $this->collectTags($input, $errors);
         if ($errors) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Ungültige Eingabe', 'errors' => $errors]);
+            throw ApiException::invalid($errors);
         }
         $this->pdo->beginTransaction();
         try {
@@ -527,24 +527,26 @@ final class Media
             $parts = [];
             $dependents = [];
             foreach ($usages as $u) {
-                $parts[] = count($u['ids']) . "× in {$u['entity_name']}.{$u['field']} (" . implode(', ', array_map(function ($i) {
-                    return "#$i";
-                }, array_slice($u['ids'], 0, 10))) . (count($u['ids']) > 10 ? ', …' : '') . ')';
+                $parts[] = Msg::of('msg_media.usage', '{count}× in {entity}.{field} ({ids})', [
+                    'count' => count($u['ids']), 'entity' => $u['entity_name'], 'field' => $u['field'],
+                    'ids'   => implode(', ', array_map(function ($i) {
+                        return "#$i";
+                    }, array_slice($u['ids'], 0, 10))) . (count($u['ids']) > 10 ? ', …' : ''),
+                ]);
                 $dependents["{$u['entity']}.{$u['field']}"] = count($u['ids']);
             }
-            throw new ApiException(409, [
-                'error'      => 'in_use',
-                'message'    => 'Kann nicht gelöscht werden, das Medium wird noch verwendet: ' . implode(', ', $parts) . '.',
-                'dependents' => $dependents,
-                'usages'     => $usages,
-            ]);
+            throw ApiException::of(409, 'in_use', Msg::of(
+                'msg_media.in_use_where',
+                'Cannot be deleted, the medium is still in use: {usages}.',
+                ['usages' => Msg::commaList($parts)]
+            ), ['dependents' => $dependents, 'usages' => $usages]);
         }
         try {
             $this->pdo->prepare('DELETE FROM media WHERE id = ?')->execute([$id]);
         } catch (\PDOException $e) {
             // newly linked in parallel (the FK of the link table kicks in)
             if ((string) $e->getCode() === '23000') {
-                throw new ApiException(409, ['error' => 'in_use', 'message' => 'Das Medium wird noch verwendet.']);
+                throw ApiException::of(409, 'in_use', Msg::of('msg_media.in_use', 'The medium is still in use.'));
             }
             throw $e;
         }
@@ -652,7 +654,7 @@ final class Media
         $stmt->execute([$id]);
         $row = $stmt->fetch();
         if ($row === false) {
-            throw new ApiException(404, ['error' => 'not_found', 'message' => 'Medium nicht gefunden']);
+            throw ApiException::of(404, 'not_found', Msg::of('msg_media.not_found', 'Medium not found'));
         }
         return $row;
     }
@@ -744,12 +746,12 @@ final class Media
             }
             $v = $input[$key];
             if ($v !== null && !is_string($v)) {
-                $errors[$key] = 'Text erwartet';
+                $errors[$key] = Msg::of('msg_api.text_expected', 'Text expected');
                 continue;
             }
             $v = $v === null ? '' : trim($v);
             if (mb_strlen($v, 'UTF-8') > $max) {
-                $errors[$key] = "Höchstens $max Zeichen";
+                $errors[$key] = Msg::of('msg_api.max_chars', 'At most {max} characters', ['max' => $max]);
                 continue;
             }
             $meta[$key] = $v === '' ? null : $v;
@@ -778,7 +780,7 @@ final class Media
         };
         foreach ($list($input['tag_ids'] ?? null) as $v) {
             if (!is_int($v) && !(is_string($v) && ctype_digit(trim($v)))) {
-                $errors['tag_ids'] = 'Liste von Tag-IDs erwartet';
+                $errors['tag_ids'] = Msg::of('msg_media.tag_ids_expected', 'List of tag IDs expected');
                 return null;
             }
             $ids[(int) $v] = true;
@@ -789,7 +791,7 @@ final class Media
             $stmt->execute(array_keys($ids));
             $missing = array_diff(array_keys($ids), array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN)));
             if ($missing) {
-                $errors['tag_ids'] = 'Unbekannte Tag-ID(s): ' . implode(', ', $missing);
+                $errors['tag_ids'] = Msg::of('msg_media.tag_ids_unknown', 'Unknown tag ID(s): {ids}', ['ids' => implode(', ', $missing)]);
                 return null;
             }
         }
@@ -812,14 +814,14 @@ final class Media
     }
 
     /** @param mixed $name */
-    private function tagNameError($name): ?string
+    private function tagNameError($name): ?Msg
     {
         $max = (int) Settings::get($this->pdo, Settings::MEDIA_TAG_MAX);
         if (!is_string($name) || trim($name) === '') {
-            return 'Tag-Name erwartet';
+            return Msg::of('msg_media.tag_name_expected', 'Tag name expected');
         }
         if (mb_strlen(trim($name), 'UTF-8') > $max) {
-            return 'Tag-Name höchstens ' . $max . ' Zeichen';
+            return Msg::of('msg_media.tag_name_max', 'Tag name at most {max} characters', ['max' => $max]);
         }
         return null;
     }
@@ -890,20 +892,19 @@ final class Media
             foreach (self::TYPES as $e => [$kind]) {
                 $allowed[] = $e;
             }
-            throw new ApiException(422, [
-                'error'   => 'type_not_allowed',
-                'message' => ($ext === '' ? 'Dateien ohne Endung sind' : "Dateityp .$ext ist") . ' nicht erlaubt. Erlaubt: '
-                    . implode(', ', $allowed) . '.',
-                'errors'  => ['file' => 'Dateityp nicht erlaubt'],
-            ]);
+            $message = $ext === ''
+                ? Msg::of('msg_media.no_extension', 'Files without an extension are not allowed. Allowed: {allowed}.', ['allowed' => implode(', ', $allowed)])
+                : Msg::of('msg_media.type_not_allowed', 'File type .{ext} is not allowed. Allowed: {allowed}.', ['ext' => $ext, 'allowed' => implode(', ', $allowed)]);
+            throw ApiException::of(422, 'type_not_allowed', $message, ApiException::fields([
+                'file' => Msg::of('msg_media.type_not_allowed_short', 'File type not allowed'),
+            ]));
         }
         [$kind, $mime, $accepted] = self::TYPES[$ext];
         if (!class_exists(\finfo::class)) {
-            throw new ApiException(500, [
-                'error'   => 'fileinfo_missing',
-                'message' => 'Die PHP-Erweiterung fileinfo fehlt - ohne sie kann der Dateiinhalt nicht geprüft werden, '
-                    . 'Uploads sind deshalb gesperrt.',
-            ]);
+            throw ApiException::of(500, 'fileinfo_missing', Msg::of(
+                'msg_media.fileinfo_missing',
+                'The PHP extension fileinfo is missing - without it the file content cannot be checked, so uploads are blocked.'
+            ));
         }
         $detected = strtolower((string) (new \finfo(FILEINFO_MIME_TYPE))->file($path));
         $ok = in_array($detected, $accepted, true);
@@ -925,12 +926,11 @@ final class Media
             [$width, $height] = self::webmDimensions($path);
         }
         if (!$ok) {
-            throw new ApiException(422, [
-                'error'   => 'content_mismatch',
-                'message' => "Der Inhalt der Datei passt nicht zur Endung .$ext (erkannt: $detected). Die Datei wurde "
-                    . 'abgelehnt.',
-                'errors'  => ['file' => 'Inhalt passt nicht zur Dateiendung'],
-            ]);
+            throw ApiException::of(422, 'content_mismatch', Msg::of(
+                'msg_media.content_mismatch',
+                'The content of the file does not match the extension .{ext} (detected: {detected}). The file was rejected.',
+                ['ext' => $ext, 'detected' => $detected]
+            ), ApiException::fields(['file' => Msg::of('msg_media.content_mismatch_short', 'Content does not match the file extension')]));
         }
         return [$kind, $mime, $width ?: null, $height ?: null];
     }
@@ -949,12 +949,10 @@ final class Media
             return [false, null, null];
         }
         if (preg_match('/<\s*script|\bon[a-z]+\s*=|javascript\s*:|<\s*foreignObject|<!ENTITY|xlink:href\s*=\s*["\']\s*(?!#|data:image\/)/i', $src)) {
-            throw new ApiException(422, [
-                'error'   => 'svg_unsafe',
-                'message' => 'Die SVG-Datei enthält Skripte, Event-Handler oder externe Verweise und wurde aus Sicherheitsgründen '
-                    . 'abgelehnt.',
-                'errors'  => ['file' => 'SVG mit aktivem Inhalt'],
-            ]);
+            throw ApiException::of(422, 'svg_unsafe', Msg::of(
+                'msg_media.svg_unsafe',
+                'The SVG file contains scripts, event handlers or external references and was rejected for security reasons.'
+            ), ApiException::fields(['file' => Msg::of('msg_media.svg_unsafe_short', 'SVG with active content')]));
         }
         $width = null;
         $height = null;
@@ -1134,31 +1132,37 @@ final class Media
         return (int) $n;
     }
 
-    private static function invalid(string $field, string $message): ApiException
+    private static function invalid(string $field, Msg $message): ApiException
     {
-        return new ApiException(422, ['error' => 'validation', 'message' => $message, 'errors' => [$field => $message]]);
+        return ApiException::of(422, 'validation', $message, ApiException::fields([$field => $message]));
     }
 
     /**
-     * 422 "Datei zu groß" with the effective limit. $php: which PHP limit kicked in (then the text says that it is
+     * 422 "File too large" with the effective limit. $php: which PHP limit kicked in (then the text says that it is
      * a server setting), null = the configured limit of the CMS.
      */
     private static function tooLarge(array $limits, ?int $size, ?string $php): ApiException
     {
-        $mb = function (int $bytes): string {
-            return number_format($bytes / 1048576, $bytes % 1048576 === 0 ? 0 : 1, ',', '.') . ' MB';
+        $mb = function (int $bytes): array {
+            return Msg::number($bytes / 1048576, $bytes % 1048576 === 0 ? 0 : 1);
         };
-        $message = 'Die Datei ist zu groß' . ($size !== null ? ' (' . $mb($size) . ')' : '') . '. Erlaubt sind höchstens '
-            . $mb($limits['max_bytes']) . ' je Datei.';
-        if ($php !== null) {
-            $message .= " (Grenze der Server-Einstellung $php; ein höheres Limit muss beim Hoster in der PHP-Konfiguration "
-                . 'gesetzt werden.)';
+        $params = ['max' => $mb($limits['max_bytes'])];
+        if ($size !== null) {
+            $params['size'] = $mb($size);
         }
-        return new ApiException(422, [
-            'error'     => 'too_large',
-            'message'   => $message,
-            'max_bytes' => $limits['max_bytes'],
-            'errors'    => ['file' => 'Datei zu groß'],
-        ]);
+        if ($php !== null) {
+            $params['setting'] = $php;
+            $message = $size !== null
+                ? Msg::of('msg_media.too_large_size_php', 'The file is too large ({size} MB). At most {max} MB per file are allowed. '
+                    . '(Limit of the server setting {setting}; a higher limit must be set in the PHP configuration at the hoster.)', $params)
+                : Msg::of('msg_media.too_large_php', 'The file is too large. At most {max} MB per file are allowed. '
+                    . '(Limit of the server setting {setting}; a higher limit must be set in the PHP configuration at the hoster.)', $params);
+        } else {
+            $message = $size !== null
+                ? Msg::of('msg_media.too_large_size', 'The file is too large ({size} MB). At most {max} MB per file are allowed.', $params)
+                : Msg::of('msg_media.too_large', 'The file is too large. At most {max} MB per file are allowed.', $params);
+        }
+        return ApiException::of(422, 'too_large', $message, ['max_bytes' => $limits['max_bytes']]
+            + ApiException::fields(['file' => Msg::of('msg_media.too_large_short', 'File too large')]));
     }
 }

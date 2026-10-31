@@ -43,6 +43,10 @@ use PDOException;
  *    confirmation; empty required values (new required field, optional -> required, new required relationship) ->
  *    backfill value; values that cannot be converted (type change, removed enum value) and duplicates of a new
  *    uniqueness rule -> blocker with the affected rows.
+ *  - Field rules ({maxLength: 140}, {pattern: plz}, ..., see Validation) are part of the model only (no table changes):
+ *    changed rules of an existing field are reported with the number of existing records that would violate them
+ *    (severity 'warning', see ruleChanges()) - a notice, never a blocker; records are never changed. A backfill value has
+ *    to satisfy the rules of its field.
  *  - Comparison with existing permissions (Permissions::denials()): if a denied field becomes required or a
  *    required relationship to a denied entity arises, the analysis reports a "Berechtigungs-Konflikt" (severity
  *    'permission') with the affected roles/groups/users. Likewise if a media field becomes required or is newly
@@ -144,10 +148,10 @@ final class SchemaMigration
     public function previewModel(string $source): array
     {
         try {
-            $model = PumlParser::modelJson($source, $this->workflows());
-            $new = PumlParser::parse($source, $this->workflows());
+            $model = PumlParser::modelJson($source, $this->workflows(), Patterns::names($this->pdo));
+            $new = PumlParser::parse($source, $this->workflows(), Patterns::names($this->pdo));
         } catch (SchemaException $e) {
-            throw new ApiException(422, ['error' => 'schema_error', 'message' => $e->getMessage()]);
+            throw ApiException::of(422, 'schema_error', $e->msg);
         }
         return SchemaIds::decorate(
             $model, self::stableKeys($this->identify($new), $new, $model), SchemaIds::lookup($this->pdo),
@@ -165,8 +169,8 @@ final class SchemaMigration
     {
         $plan = $this->plan($source);
         if ($plan['blockers']) {
-            throw new ApiException(409, ['error' => 'blocked', 'message' => 'Anwenden nicht möglich: '
-                . count($plan['blockers']) . ' Konflikt(e) mit vorhandenen Daten.'] + self::publicPlan($plan));
+            throw ApiException::of(409, 'blocked', Msg::of('msg_migration.blocked', 'Apply not possible: {count} conflict(s) with '
+                . 'existing data.', ['count' => count($plan['blockers'])]), self::publicPlan($plan));
         }
         $confirmed = is_array($input['confirm'] ?? null) ? $input['confirm'] : [];
         $missing = array_values(array_diff(array_column($plan['confirmations'], 'key'), $confirmed));
@@ -175,23 +179,28 @@ final class SchemaMigration
         $backfill = [];
         foreach ($plan['backfills'] as $b) {
             if (!array_key_exists($b['key'], $values) || $values[$b['key']] === null || $values[$b['key']] === '') {
-                $errors[$b['key']] = 'Wert erforderlich';
+                $errors[$b['key']] = self::valueRequired();
                 continue;
             }
             try {
                 $backfill[$b['key']] = $this->backfillValue($b, $values[$b['key']]);
             } catch (\InvalidArgumentException $e) {
-                $errors[$b['key']] = $e->getMessage();
+                $errors[$b['key']] = ValueException::msgOf($e);
             }
         }
         if ($missing || $errors) {
-            throw new ApiException(422, [
-                'error'   => $missing ? 'confirmation_required' : 'backfill_invalid',
-                'message' => trim(($missing ? count($missing) . ' Bestätigung(en) fehlen. ' : '')
-                    . ($errors ? count($errors) . ' Backfill-Wert(e) fehlen oder sind ungültig.' : '')),
+            $params = ['confirmations' => count($missing), 'backfills' => count($errors)];
+            if ($missing && $errors) {
+                $message = Msg::of('msg_migration.missing_both', '{confirmations} confirmation(s) missing. {backfills} backfill value(s) '
+                    . 'missing or invalid.', $params);
+            } elseif ($missing) {
+                $message = Msg::of('msg_migration.missing_confirmations', '{confirmations} confirmation(s) missing.', $params);
+            } else {
+                $message = Msg::of('msg_migration.missing_backfills', '{backfills} backfill value(s) missing or invalid.', $params);
+            }
+            throw ApiException::of(422, $missing ? 'confirmation_required' : 'backfill_invalid', $message, [
                 'missing_confirmations' => $missing,
-                'errors'  => $errors,
-            ] + self::publicPlan($plan));
+            ] + ApiException::fields($errors) + self::publicPlan($plan));
         }
 
         // write the file on a trial basis beforehand: if schema/ is not writable, this is noticed before any DB change
@@ -205,11 +214,12 @@ final class SchemaMigration
         }
         $tmp = $target !== null ? $target . '.neu' : null;
         if ($tmp !== null && @file_put_contents($tmp, $content) === false) {
-            throw new ApiException(500, [
-                'error'   => 'schema_not_writable',
-                'message' => 'Die ' . ($writeWorkflow ? 'Workflow-Datei' : 'Schema-Datei') . ' kann nicht geschrieben werden ('
-                    . basename($target) . " im Ordner $folder) - bitte Schreibrechte prüfen. Es wurde nichts geändert.",
-            ]);
+            $params = ['file' => basename($target), 'folder' => $folder];
+            throw ApiException::of(500, 'schema_not_writable', $writeWorkflow
+                ? Msg::of('msg_migration.workflow_not_writable', 'The workflow file cannot be written ({file} in the folder {folder}) - '
+                    . 'please check the write permissions. Nothing was changed.', $params)
+                : Msg::of('msg_migration.schema_not_writable', 'The schema file cannot be written ({file} in the folder {folder}) - '
+                    . 'please check the write permissions. Nothing was changed.', $params));
         }
         try {
             $summary = $this->execute($plan, $backfill, $source, $schemaFile, PumlParser::modelJson($source, $this->workflows()));
@@ -221,10 +231,15 @@ final class SchemaMigration
         }
         // only after the COMMIT: new version in place of the old one (which is already in the backup pair or in the database)
         if ($tmp !== null && !@rename($tmp, $target)) {
-            $summary['warning'] = 'Die Datenbank wurde migriert, aber die Datei ' . basename($target) . ' konnte nicht ersetzt '
-                . 'werden. Bitte den neuen Text per FTP als ' . $folder . basename($target) . ' hochladen' . ($writeWorkflow
-                    ? ' (die API arbeitet bereits mit dem neuen Workflow).'
-                    : ', sonst meldet /bootstrap migration_needed (die API arbeitet trotzdem mit dem neuen Schema).');
+            $params = ['file' => basename($target), 'path' => $folder . basename($target)];
+            $warning = $writeWorkflow
+                ? Msg::of('msg_migration.replace_failed_workflow', 'The database was migrated, but the file {file} could not be replaced. '
+                    . 'Please upload the new text via FTP as {path} (the API already works with the new workflow).', $params)
+                : Msg::of('msg_migration.replace_failed', 'The database was migrated, but the file {file} could not be replaced. Please '
+                    . 'upload the new text via FTP as {path}, otherwise /bootstrap reports migration_needed (the API works with the new '
+                    . 'schema anyway).', $params);
+            $summary['warning'] = $warning->text();
+            $summary['warning_code'] = $warning->codeOnly();
         }
         return $summary;
     }
@@ -241,7 +256,7 @@ final class SchemaMigration
         try {
             $defs = $this->workflows();
         } catch (SchemaException $e) {
-            throw new ApiException(422, ['error' => 'schema_error', 'message' => $e->getMessage()] + Workflows::linePayload([$e->sourceLine]));
+            throw ApiException::of(422, 'schema_error', $e->msg, Workflows::linePayload([$e->sourceLine]));
         }
         $positions = $defs ? WorkflowParser::positions((string) $this->workflow['source']) : [];
         if ($defs) {
@@ -249,12 +264,11 @@ final class SchemaMigration
             Webhooks::checkWorkflows($this->pdo, $defs, $positions); // webhooks from action=webhook:<name> (422 schema_error)
         }
         try {
-            $new = PumlParser::parse($source, $defs);
+            $new = PumlParser::parse($source, $defs, Patterns::names($this->pdo)); // {pattern: x} must exist
         } catch (SchemaException $e) {
             $w = $e->where; // error of the main schema caused by a transition of the workflow file
             $pos = $w !== null ? ($positions[$w['workflow']][$w['transition']] ?? []) : [];
-            throw new ApiException(422, ['error' => 'schema_error', 'message' => $e->getMessage()]
-                + Workflows::linePayload($pos ? [$pos[$w['key']] ?? $pos['line'] ?? null] : []));
+            throw ApiException::of(422, 'schema_error', $e->msg, Workflows::linePayload($pos ? [$pos[$w['key']] ?? $pos['line'] ?? null] : []));
         }
         $old = $this->old;
         $id = $this->identify($new);
@@ -274,13 +288,17 @@ final class SchemaMigration
             $t0 = $p['entityMap'][$t1];
             $e0 = $t0 !== null ? $old['entities'][$t0] : null;
             if ($e0 === null) {
-                $p['changes'][] = self::change('entity_added', 'info', "Neue Klasse {$e1['name']} (Tabelle '$t1').");
+                $p['changes'][] = self::change('entity_added', 'info', Msg::of('msg_migration.entity_added', "New class {class} (table '{table}').", [
+                    'class' => $e1['name'], 'table' => $t1,
+                ]));
                 $p['ops'][] = ['table' => $t1, 'ddl' => $statements[$t1], 'source' => null, 'cols' => [], 'keep' => false, 'kind' => 'entity'];
                 continue;
             }
             if ($t0 !== $t1) {
-                $p['changes'][] = self::change('entity_renamed', 'info',
-                    "Klasse {$e0['name']} umbenannt in {$e1['name']} (Tabelle '$t0' -> '$t1', Daten bleiben erhalten).");
+                $p['changes'][] = self::change('entity_renamed', 'info', Msg::of('msg_migration.entity_renamed', "Class {old} renamed to "
+                    . "{new} (table '{old_table}' -> '{table}', data is kept).", [
+                        'old' => $e0['name'], 'new' => $e1['name'], 'old_table' => $t0, 'table' => $t1,
+                    ]));
             }
             $usedOld[$t0] = true;
             $cols = $id['cols'][$t1];
@@ -301,11 +319,12 @@ final class SchemaMigration
         foreach ($old['entities'] as $t0 => $e0) {
             if (!in_array($t0, $p['entityMap'], true)) {
                 $n = $this->count($t0);
-                $p['changes'][] = self::change('entity_removed', $n ? 'confirm' : 'warning',
-                    "Klasse {$e0['name']} entfernt (Tabelle '$t0', $n Zeile(n)).");
+                $params = ['class' => $e0['name'], 'table' => $t0, 'count' => $n];
+                $p['changes'][] = self::change('entity_removed', $n ? 'confirm' : 'warning', Msg::of('msg_migration.entity_removed',
+                    "Class {class} removed (table '{table}', {count} row(s)).", $params));
                 if ($n) {
-                    $p['confirmations'][] = ['key' => "drop_table:$t0", 'count' => $n,
-                        'text' => "Ich bestätige, dass $n Zeile(n) in '{$e0['name']}' (Tabelle '$t0') verloren gehen."];
+                    $p['confirmations'][] = ['key' => "drop_table:$t0", 'count' => $n] + Msg::of('msg_migration.confirm_rows',
+                        "I confirm that {count} row(s) in '{class}' (table '{table}') will be lost.", $params)->fields('text');
                 }
                 // the users' column selection for this entity is dropped (see execute())
             }
@@ -315,20 +334,22 @@ final class SchemaMigration
         foreach ($new['entities'] as $t1 => $e1) {
             $t0 = $p['entityMap'][$t1];
             foreach ($e1['many_to_many'] as $i => $m1) {
-                $what = "n:n-Beziehung {$e1['name']} – " . $new['entities'][$m1['table']]['name'] . ($m1['label'] !== '' ? " ({$m1['label']})" : '');
+                $what = self::nnWhat($e1['name'], $new['entities'][$m1['table']]['name'], $m1['label']);
                 $m0 = $id['nnMatch'][$t1][$i];
                 if ($m0 !== null && PumlParser::normalizeLabel($m0['label']) !== PumlParser::normalizeLabel($m1['label'])) {
-                    $p['changes'][] = self::change('relation_renamed', 'info',
-                        "$what: umbenannt, bisheriges Label '{$m0['label']}' (Verknüpfungen bleiben erhalten).");
+                    $p['changes'][] = self::change('relation_renamed', 'info', Msg::of('msg_migration.nn_relabelled', "{what}: renamed, "
+                        . "previous label '{label}' (links are kept).", ['what' => $what, 'label' => $m0['label']]));
                 }
                 if ($m0 === null) {
-                    $p['changes'][] = self::change('nn_added', 'info', "Neue $what.");
+                    $p['changes'][] = self::change('nn_added', 'info', Msg::of('msg_migration.nn_added', 'New {what}.', ['what' => $what]));
                     $p['ops'][] = ['table' => $m1['junction'], 'ddl' => $statements[$m1['junction']], 'source' => null, 'cols' => [],
                         'keep' => false, 'kind' => 'junction'];
                     continue;
                 }
                 if (($m0['filter_by'] ?? null) !== ($m1['filter_by'] ?? null)) {
-                    $p['changes'][] = self::change('filter_by', 'info', "$what: " . self::filterChange($m1['filter_by'] ?? null));
+                    $p['changes'][] = self::change('filter_by', 'info', Msg::of('msg_migration.what_colon', '{what}: {text}', [
+                        'what' => $what, 'text' => self::filterChange($m1['filter_by'] ?? null),
+                    ]));
                 }
                 $usedOld[$m0['junction']] = true;
                 $p['listMaps'][$t1][$m1['name']] = $m0['name'];
@@ -337,16 +358,16 @@ final class SchemaMigration
                 if ($m0['symmetric'] !== !empty($m1['symmetric'])) {
                     $symChange = $m1['symmetric'] ? 'to_symmetric' : 'to_directed';
                     $p['changes'][] = self::change('nn_symmetric', 'warning', $symChange === 'to_symmetric'
-                        ? "$what: jetzt {symmetric} - jede Verknüpfung gilt künftig in beiden Richtungen; \"A -> B\" und \"B -> A\" "
-                            . 'werden zu einem Paar zusammengeführt.'
-                        : "$what: jetzt gerichtet - jedes bisherige Paar wird in beide Richtungen übernommen (aus einer Zeile werden zwei), "
-                            . 'danach sind die Richtungen unabhängig.');
+                        ? Msg::of('msg_migration.nn_to_symmetric', '{what}: now {symmetric} - every link applies in both directions from '
+                            . 'now on; "A -> B" and "B -> A" are merged into one pair.', ['what' => $what, 'symmetric' => '{symmetric}'])
+                        : Msg::of('msg_migration.nn_to_directed', '{what}: now directed - every previous pair is taken over in both '
+                            . 'directions (one row becomes two), afterwards the directions are independent.', ['what' => $what]));
                 }
                 $keep = $symChange === null && $m0['junction'] === $m1['junction']
                     && ($oldDdl[$m1['junction']] ?? null) === $statements[$m1['junction']] && self::identity($cols);
                 if (!$keep && $m0['junction'] !== $m1['junction']) {
-                    $p['changes'][] = self::change('nn_renamed', 'info',
-                        "$what: Zwischentabelle '{$m0['junction']}' -> '{$m1['junction']}' (Verknüpfungen bleiben erhalten).");
+                    $p['changes'][] = self::change('nn_renamed', 'info', Msg::of('msg_migration.nn_renamed', "{what}: link table '{old}' -> "
+                        . "'{new}' (links are kept).", ['what' => $what, 'old' => $m0['junction'], 'new' => $m1['junction']]));
                 }
                 $p['ops'][] = ['table' => $m1['junction'], 'ddl' => $statements[$m1['junction']], 'source' => $m0['junction'],
                     'cols' => $cols, 'keep' => $keep, 'kind' => 'junction', 'symmetric_change' => $symChange];
@@ -354,28 +375,36 @@ final class SchemaMigration
             // media fields
             foreach ($e1['media'] as $i => $md1) {
                 $md0 = $id['mediaMatch'][$t1][$i];
-                $what = "Medien-Feld {$e1['name']}.{$md1['name']}";
+                $what = Msg::of('msg_migration.media_field', 'Media field {field}', ['field' => "{$e1['name']}.{$md1['name']}"]);
                 if ($md0 === null) {
-                    $p['changes'][] = self::change('media_added', 'info', "Neues $what.");
+                    $p['changes'][] = self::change('media_added', 'info', Msg::of('msg_migration.media_added', 'New media field {field}.', [
+                        'field' => "{$e1['name']}.{$md1['name']}",
+                    ]));
                     $p['ops'][] = ['table' => $md1['junction'], 'ddl' => $statements[$md1['junction']], 'source' => null, 'cols' => [],
                         'keep' => false, 'kind' => 'media'];
                     if ($md1['required'] && $t0 !== null && $this->count($t0)) {
-                        $p['changes'][] = self::change('media_required', 'warning', "$what ist Pflicht: Die vorhandenen "
-                            . $this->count($t0) . ' Zeile(n) haben noch keine Medien - das Formular verlangt beim nächsten Bearbeiten eins.');
+                        $p['changes'][] = self::change('media_required', 'warning', Msg::of('msg_migration.media_required', '{what} is required: '
+                            . 'the existing {count} row(s) have no media yet - the form asks for one at the next edit.', [
+                                'what' => $what, 'count' => $this->count($t0),
+                            ]));
                     }
                     if ($md1['required']) {
-                        $this->mediaConflict($p, $t0, "Neues Pflicht-Medien-Feld {$e1['name']}.{$md1['name']} lässt sich", $e1['name']);
+                        $this->mediaConflict($p, $t0, Msg::of('msg_migration.media_new_required', 'New required media field {field}', [
+                            'field' => "{$e1['name']}.{$md1['name']}",
+                        ]), $e1['name']);
                     }
                     continue;
                 }
                 $usedOld[$md0['junction']] = true;
                 $p['listMaps'][$t1][$md1['name']] = $md0['name'];
                 if ($md0['name'] !== $md1['name']) {
-                    $p['changes'][] = self::change('media_renamed', 'info', "Medien-Feld {$md0['name']} umbenannt in {$md1['name']}.");
+                    $p['changes'][] = self::change('media_renamed', 'info', Msg::of('msg_migration.media_renamed', 'Media field {old} renamed '
+                        . 'to {new}.', ['old' => $md0['name'], 'new' => $md1['name']]));
                 }
                 if ($md1['required'] && !$md0['required']) {
-                    $this->permissionConflict($p, $t0, $md0['name'], null, "$what wird Pflicht, ist aber gesperrt", $e1['name']);
-                    $this->mediaConflict($p, $t0, "$what wird Pflicht, lässt sich aber", $e1['name']);
+                    $this->permissionConflict($p, $t0, $md0['name'], null, Msg::of('msg_migration.becomes_required_denied', '{what} becomes '
+                        . 'required but is denied', ['what' => $what]), $e1['name']);
+                    $this->mediaConflict($p, $t0, Msg::of('msg_migration.becomes_required', '{what} becomes required, but', ['what' => $what]), $e1['name']);
                 }
                 $cols = [$md1['own_column'] => ['from' => $md0['own_column']], 'media_id' => ['from' => 'media_id'], 'position' => ['from' => 'position']];
                 $keep = $md0['junction'] === $md1['junction'] && ($oldDdl[$md1['junction']] ?? null) === $statements[$md1['junction']]
@@ -389,23 +418,25 @@ final class SchemaMigration
             foreach ($e0['many_to_many'] as $m0) {
                 if (!isset($usedOld[$m0['junction']])) {
                     $n = $this->count($m0['junction']);
-                    $text = "n:n-Beziehung {$e0['name']} – " . $old['entities'][$m0['table']]['name']
-                        . ($m0['label'] !== '' ? " ({$m0['label']})" : '') . " entfernt ($n Verknüpfung(en)).";
-                    $p['changes'][] = self::change('nn_removed', $n ? 'confirm' : 'warning', $text);
+                    $p['changes'][] = self::change('nn_removed', $n ? 'confirm' : 'warning', Msg::of('msg_migration.nn_removed',
+                        '{what} removed ({count} link(s)).', [
+                            'what' => self::nnWhat($e0['name'], $old['entities'][$m0['table']]['name'], $m0['label']), 'count' => $n,
+                        ]));
                     if ($n) {
-                        $p['confirmations'][] = ['key' => "drop_links:{$m0['junction']}", 'count' => $n,
-                            'text' => "Ich bestätige, dass $n Verknüpfung(en) in '{$m0['junction']}' verloren gehen."];
+                        $p['confirmations'][] = ['key' => "drop_links:{$m0['junction']}", 'count' => $n] + Msg::of('msg_migration.confirm_links',
+                            "I confirm that {count} link(s) in '{table}' will be lost.", ['count' => $n, 'table' => $m0['junction']])->fields('text');
                     }
                 }
             }
             foreach ($e0['media'] as $md0) {
                 if (!isset($usedOld[$md0['junction']])) {
                     $n = $this->count($md0['junction']);
-                    $p['changes'][] = self::change('media_removed', $n ? 'confirm' : 'warning',
-                        "Medien-Feld {$e0['name']}.{$md0['name']} entfernt ($n Verknüpfung(en); die Dateien bleiben in der Mediathek).");
+                    $params = ['field' => "{$e0['name']}.{$md0['name']}", 'count' => $n];
+                    $p['changes'][] = self::change('media_removed', $n ? 'confirm' : 'warning', Msg::of('msg_migration.media_removed',
+                        'Media field {field} removed ({count} link(s); the files stay in the media library).', $params));
                     if ($n) {
-                        $p['confirmations'][] = ['key' => "drop_links:{$md0['junction']}", 'count' => $n,
-                            'text' => "Ich bestätige, dass $n Medien-Verknüpfung(en) von {$e0['name']}.{$md0['name']} verloren gehen."];
+                        $p['confirmations'][] = ['key' => "drop_links:{$md0['junction']}", 'count' => $n] + Msg::of('msg_migration.confirm_media',
+                            'I confirm that {count} media link(s) of {field} will be lost.', $params)->fields('text');
                     }
                 }
             }
@@ -436,8 +467,8 @@ final class SchemaMigration
         });
         foreach ($rebuilt as $op) {
             if ($op['source'] === $op['table'] && $op['kind'] === 'entity') {
-                $p['changes'][] = self::change('table_rebuilt', 'info',
-                    "Tabelle '{$op['table']}' wird neu aufgebaut (Struktur geändert; alle Zeilen werden übernommen).");
+                $p['changes'][] = self::change('table_rebuilt', 'info', Msg::of('msg_migration.table_rebuilt', "Table '{table}' is rebuilt "
+                    . '(structure changed; all rows are taken over).', ['table' => $op['table']]));
             }
         }
         return $p;
@@ -453,24 +484,37 @@ final class SchemaMigration
         $fileBefore = Workflows::activeFile($this->pdo);
         $file = $defs !== null ? $this->workflow['file'] : null;
         if ($fileBefore !== $file) {
+            $params = ['before' => $fileBefore, 'file' => $file];
             $p['changes'][] = self::change('workflow_file', 'info', $file === null
-                ? "Workflows abgeschaltet (bisher aktive Workflow-Datei: $fileBefore)."
-                : ($fileBefore === null ? "Workflow-Datei $file wird aktiv." : "Aktive Workflow-Datei: $fileBefore -> $file."));
+                ? Msg::of('msg_migration.workflows_off', 'Workflows switched off (previously active workflow file: {before}).', $params)
+                : ($fileBefore === null ? Msg::of('msg_migration.workflow_file_active', 'Workflow file {file} becomes active.', $params)
+                    : Msg::of('msg_migration.workflow_file_changed', 'Active workflow file: {before} -> {file}.', $params)));
         }
         $used = array_column(Workflows::usedBy($p['model']), 'entity', 'workflow');
         foreach ($defs ?? [] as $name => $def) {
-            $where = isset($used[$name]) ? " (Klasse {$used[$name]})" : ' (noch von keiner Klasse verwendet)';
+            $where = isset($used[$name])
+                ? Msg::of('msg_migration.workflow_class', '(class {class})', ['class' => $used[$name]])
+                : Msg::of('msg_migration.workflow_unused', '(not used by any class yet)');
             if (!isset($before[$name])) {
-                $p['changes'][] = self::change('workflow_added', 'info', "Neuer Workflow $name$where: " . count($def['states'])
-                    . ' Zustände, ' . count($def['transitions']) . ' Transition(en).');
+                $p['changes'][] = self::change('workflow_added', 'info', Msg::of('msg_migration.workflow_added', 'New workflow {name} {where}: '
+                    . '{states} states, {transitions} transition(s).', [
+                        'name' => $name, 'where' => $where, 'states' => count($def['states']), 'transitions' => count($def['transitions']),
+                    ]));
             } elseif ($before[$name] !== $def) {
-                $p['changes'][] = self::change('workflow_changed', 'info', "Workflow $name$where geändert"
-                    . (array_column($before[$name]['states'], 'name') !== array_column($def['states'], 'name') ? ' (Zustände: '
-                        . implode(', ', array_column($def['states'], 'name')) . ')' : ' (Beschriftungen, Transitionen bzw. Zuweisungen)') . '.');
+                $p['changes'][] = self::change('workflow_changed', 'info',
+                    array_column($before[$name]['states'], 'name') !== array_column($def['states'], 'name')
+                        ? Msg::of('msg_migration.workflow_states', 'Workflow {name} {where} changed (states: {states}).', [
+                            'name' => $name, 'where' => $where, 'states' => implode(', ', array_column($def['states'], 'name')),
+                        ])
+                        : Msg::of('msg_migration.workflow_details', 'Workflow {name} {where} changed (labels, transitions or assignments).', [
+                            'name' => $name, 'where' => $where,
+                        ]));
             }
         }
         foreach (array_diff_key($before ?? [], $defs ?? []) as $name => $def) {
-            $p['changes'][] = self::change('workflow_removed', 'info', "Workflow $name entfernt.");
+            $p['changes'][] = self::change('workflow_removed', 'info', Msg::of('msg_migration.workflow_removed', 'Workflow {name} removed.', [
+                'name' => $name,
+            ]));
         }
     }
 
@@ -512,7 +556,7 @@ final class SchemaMigration
                         $cands[$k] = $cand['label'];
                     }
                 }
-                $what = "n:n-Beziehung {$e1['name']} – " . $new['entities'][$m1['table']]['name'] . ($m1['label'] !== '' ? " ({$m1['label']})" : '');
+                $what = self::nnWhat($e1['name'], $new['entities'][$m1['table']]['name'], $m1['label']);
                 $k = self::matchRelation($cands, $m1['label'], $m1['renamed_from'] ?? null, $what);
                 if ($k !== null) {
                     $used[$k] = true;
@@ -558,15 +602,19 @@ final class SchemaMigration
             return null;
         };
         $out = [];
-        $add = function (string $key, string $kind, string $text, ?int $line, array $options) use (&$out, $loc) {
+        $add = function (string $key, string $kind, Msg $text, ?int $line, array $options) use (&$out, $loc) {
             if ($line === null || !$options || isset($out[$line])) {
                 return;
             }
-            $out[$line] = ['key' => $key, 'kind' => $kind, 'text' => $text, 'line' => $line + 1, 'original' => $loc->line($line),
+            $out[$line] = ['key' => $key, 'kind' => $kind] + $text->fields('text') + ['line' => $line + 1, 'original' => $loc->line($line),
                 'options' => $options];
         };
-        $relLabel = function (string $l): string {
-            return $l === '' ? '(ohne Label)' : "„{$l}“";
+        // option of a suggestion: label (English text + code/params for the UI), value and replacement line
+        $option = function (string $value, Msg $label, string $replacement): array {
+            return ['value' => $value] + $label->fields('label') + ['replacement' => $replacement];
+        };
+        $relLabel = function (string $l): Msg {
+            return $l === '' ? Msg::of('msg_migration.no_label', '(no label)') : Msg::of('msg_migration.quoted_label', '"{label}"', ['label' => $l]);
         };
 
         // classes
@@ -576,11 +624,11 @@ final class SchemaMigration
                 continue;
             }
             $line = $loc->classHead($e1['name']);
-            $add("entity:$t1", 'entity', "Neue Klasse {$e1['name']}", $line, $line === null ? [] : array_values(array_map(
-                function ($t0) use ($old, $loc, $line, $e1) {
+            $add("entity:$t1", 'entity', Msg::of('msg_migration.suggest_entity', 'New class {class}', ['class' => $e1['name']]), $line,
+                $line === null ? [] : array_values(array_map(function ($t0) use ($old, $loc, $line, $e1, $option) {
                     $name = $old['entities'][$t0]['name'];
-                    return ['value' => $name, 'label' => "Klasse $name",
-                        'replacement' => $loc->classMarked($line, $e1['name'], "{renamed_from:$name}")];
+                    return $option($name, Msg::of('msg_migration.option_class', 'Class {class}', ['class' => $name]),
+                        $loc->classMarked($line, $e1['name'], "{renamed_from:$name}"));
                 }, $removed)));
         }
 
@@ -601,10 +649,14 @@ final class SchemaMigration
                 }
                 $decl = $declaring($e1['name'], $name, 'fields');
                 $line = $decl !== null ? $loc->field($decl, $name) : null;
-                $add("field:$t1." . strtolower($name), 'field', "Neues Feld {$e1['name']}.$name" . ($decl !== $e1['name'] && $decl !== null
-                    ? " (geerbt von $decl)" : ''), $line, $line === null ? [] : array_map(function ($f0) use ($loc, $line) {
-                        return ['value' => $f0['name'], 'label' => "Feld {$f0['name']} ({$f0['type']})",
-                            'replacement' => $loc->appended($line, "{renamed_from:{$f0['name']}}")];
+                $params = ['field' => "{$e1['name']}.$name", 'base' => $decl];
+                $add("field:$t1." . strtolower($name), 'field', $decl !== $e1['name'] && $decl !== null
+                    ? Msg::of('msg_migration.suggest_field_inherited', 'New field {field} (inherited from {base})', $params)
+                    : Msg::of('msg_migration.suggest_field', 'New field {field}', $params), $line, $line === null ? [] : array_map(
+                    function ($f0) use ($loc, $line, $option) {
+                        return $option($f0['name'], Msg::of('msg_migration.option_field', 'Field {field} ({type})', [
+                            'field' => $f0['name'], 'type' => $f0['type'],
+                        ]), $loc->appended($line, "{renamed_from:{$f0['name']}}"));
                     }, $goneFields));
             }
             // media fields
@@ -618,11 +670,12 @@ final class SchemaMigration
                 }
                 $decl = $declaring($e1['name'], $md1['name'], 'media');
                 $line = $decl !== null ? $loc->field($decl, $md1['name']) : null;
-                $add("media:$t1." . strtolower($md1['name']), 'media', "Neues Medien-Feld {$e1['name']}.{$md1['name']}", $line,
-                    $line === null ? [] : array_map(function ($m0) use ($loc, $line) {
-                        return ['value' => $m0['name'], 'label' => "Medien-Feld {$m0['name']}",
-                            'replacement' => $loc->appended($line, "{renamed_from:{$m0['name']}}")];
-                    }, $goneMedia));
+                $add("media:$t1." . strtolower($md1['name']), 'media', Msg::of('msg_migration.media_added_short', 'New media field {field}', [
+                    'field' => "{$e1['name']}.{$md1['name']}",
+                ]), $line, $line === null ? [] : array_map(function ($m0) use ($loc, $line, $option) {
+                    return $option($m0['name'], Msg::of('msg_migration.media_field', 'Media field {field}', ['field' => $m0['name']]),
+                        $loc->appended($line, "{renamed_from:{$m0['name']}}"));
+                }, $goneMedia));
             }
             // FK relationships (n:1, 1:1)
             foreach ($id['cols'][$t1] as $name => $c) {
@@ -639,11 +692,13 @@ final class SchemaMigration
                 }
                 $target = $new['entities'][$fk['table']]['name'];
                 $line = $loc->relation($e1['name'], $target, $fk['label']);
-                $add("relation:$t1.$name", 'relation', "Neue Beziehung {$e1['name']} → $target {$relLabel($fk['label'])}", $line,
-                    $line === null ? [] : array_map(function ($f0) use ($loc, $line, $relLabel) {
-                        return ['value' => $f0['foreign_key']['label'], 'label' => "Beziehung {$relLabel($f0['foreign_key']['label'])} "
-                            . "(Spalte {$f0['name']})", 'replacement' => $loc->appended($line, "{renamed_from:{$f0['foreign_key']['label']}}")];
-                    }, $cands));
+                $add("relation:$t1.$name", 'relation', Msg::of('msg_migration.suggest_relation', 'New relationship {class} → {target} {label}', [
+                    'class' => $e1['name'], 'target' => $target, 'label' => $relLabel($fk['label']),
+                ]), $line, $line === null ? [] : array_map(function ($f0) use ($loc, $line, $relLabel, $option) {
+                    return $option($f0['foreign_key']['label'], Msg::of('msg_migration.option_relation', 'Relationship {label} (column {column})', [
+                        'label' => $relLabel($f0['foreign_key']['label']), 'column' => $f0['name'],
+                    ]), $loc->appended($line, "{renamed_from:{$f0['foreign_key']['label']}}"));
+                }, $cands));
             }
             // n:n
             $usedNn = array_column(array_filter($id['nnMatch'][$t1] ?? []), 'junction');
@@ -660,11 +715,12 @@ final class SchemaMigration
                 }
                 $target = $new['entities'][$m1['table']]['name'];
                 $line = $loc->relation($e1['name'], $target, $m1['label']);
-                $add("nn:{$m1['junction']}", 'nn', "Neue n:n-Beziehung {$e1['name']} – $target {$relLabel($m1['label'])}", $line,
-                    $line === null ? [] : array_map(function ($m0) use ($loc, $line, $relLabel) {
-                        return ['value' => $m0['label'], 'label' => "n:n-Beziehung {$relLabel($m0['label'])}",
-                            'replacement' => $loc->appended($line, "{renamed_from:{$m0['label']}}")];
-                    }, $cands));
+                $add("nn:{$m1['junction']}", 'nn', Msg::of('msg_migration.suggest_nn', 'New n:n relationship {class} – {target} {label}', [
+                    'class' => $e1['name'], 'target' => $target, 'label' => $relLabel($m1['label']),
+                ]), $line, $line === null ? [] : array_map(function ($m0) use ($loc, $line, $relLabel, $option) {
+                    return $option($m0['label'], Msg::of('msg_migration.option_nn', 'n:n relationship {label}', ['label' => $relLabel($m0['label'])]),
+                        $loc->appended($line, "{renamed_from:{$m0['label']}}"));
+                }, $cands));
             }
         }
         ksort($out);
@@ -795,27 +851,23 @@ final class SchemaMigration
                 $r = strtolower($e1['renamed_from']);
                 if ($src === null) {
                     if (!isset($old['entities'][$r])) {
-                        throw self::schemaError(
-                            "Klasse {$e1['name']} {renamed_from:{$e1['renamed_from']}}: Eine Klasse '{$e1['renamed_from']}' gibt es im "
-                            . 'bisherigen Schema nicht.'
-                        );
+                        throw self::schemaError(Msg::of('msg_migration.renamed_unknown', "Class {class} {renamed_from:{from}}: there is "
+                            . "no class '{from}' in the current schema.", ['class' => $e1['name'], 'from' => $e1['renamed_from']]));
                     }
                     $src = $r;
                 } elseif ($r !== $t1 && isset($old['entities'][$r])) {
                     // both names exist so far (also: two classes swapping names) - a silently ignored marker would be
                     // just as wrong as a guessed matching
-                    throw self::schemaError(
-                        "Klasse {$e1['name']} {renamed_from:{$e1['renamed_from']}}: Beide Klassen gibt es bisher - unklar, welche "
-                        . 'Daten gelten sollen (ein Namenstausch wird nicht unterstützt). Bitte in zwei Schritten umbenennen '
-                        . 'oder die Markierung entfernen.'
-                    );
+                    throw self::schemaError(Msg::of('msg_migration.renamed_both', 'Class {class} {renamed_from:{from}}: both classes '
+                        . 'exist so far - unclear which data should apply (swapping names is not supported). Please rename in two steps '
+                        . 'or remove the marker.', ['class' => $e1['name'], 'from' => $e1['renamed_from']]));
                 }
             }
             if ($src !== null && isset($claimed[$src])) {
-                throw self::schemaError(
-                    "Die bisherige Klasse '{$old['entities'][$src]['name']}' wird von {$claimed[$src]} und {$e1['name']} beansprucht "
-                    . '(Umbenennung und gleichnamige neue Klasse). Bitte eindeutig machen.'
-                );
+                throw self::schemaError(Msg::of('msg_migration.renamed_claimed', "The current class '{old}' is claimed by {first} and "
+                    . '{second} (rename and new class of the same name). Please make this unambiguous.', [
+                        'old' => $old['entities'][$src]['name'], 'first' => $claimed[$src], 'second' => $e1['name'],
+                    ]));
             }
             if ($src !== null) {
                 $claimed[$src] = $e1['name'];
@@ -834,7 +886,7 @@ final class SchemaMigration
      * @param array<int|string,string> $cands
      * @return int|string|null
      */
-    private static function matchRelation(array $cands, string $label, ?string $renamedFrom, string $what)
+    private static function matchRelation(array $cands, string $label, ?string $renamedFrom, Msg $what)
     {
         $find = function (string $l) use ($cands) {
             foreach ($cands as $k => $cl) {
@@ -851,17 +903,30 @@ final class SchemaMigration
         $old = $find($renamedFrom);
         if ($own !== null) {
             if ($old !== null && $old !== $own) {
-                throw self::schemaError("$what {renamed_from:$renamedFrom}: Beziehungen mit dem alten und dem neuen Label gibt es "
-                    . 'bisher beide - unklar, welche Werte gelten sollen. Bitte in zwei Schritten umbenennen oder die Markierung entfernen.');
+                throw self::schemaError(Msg::of('msg_migration.relation_both', '{what} {marker}: relationships with the old and the new '
+                    . 'label both exist so far - unclear which values should apply. Please rename in two steps or remove the marker.', [
+                        'what' => $what, 'marker' => '{renamed_from:' . $renamedFrom . '}',
+                    ]));
             }
             return $own;
         }
         if ($old === null) {
-            throw self::schemaError("$what {renamed_from:$renamedFrom}: Eine bisherige Beziehung "
-                . ($renamedFrom === '' ? 'ohne Label' : "mit dem Label '$renamedFrom'") . ' gibt es nicht'
-                . ($cands ? ' (vorhanden: ' . implode(', ', array_map(function ($l) {
-                    return $l === '' ? '(ohne Label)' : "'$l'";
-                }, $cands)) . ')' : '') . '.');
+            $params = ['what' => $what, 'marker' => '{renamed_from:' . $renamedFrom . '}', 'label' => $renamedFrom,
+                'available' => $cands ? Msg::commaList(array_map(function ($l) {
+                    return $l === '' ? Msg::of('msg_migration.no_label', '(no label)') : Msg::of('msg_migration.single_quoted', "'{label}'", ['label' => $l]);
+                }, array_values($cands))) : ''];
+            if ($renamedFrom === '') {
+                throw self::schemaError($cands
+                    ? Msg::of('msg_migration.relation_none_unlabelled_avail', '{what} {marker}: a previous relationship without a label '
+                        . 'does not exist (available: {available}).', $params)
+                    : Msg::of('msg_migration.relation_none_unlabelled', '{what} {marker}: a previous relationship without a label does '
+                        . 'not exist.', $params));
+            }
+            throw self::schemaError($cands
+                ? Msg::of('msg_migration.relation_none_avail', "{what} {marker}: a previous relationship with the label '{label}' does "
+                    . 'not exist (available: {available}).', $params)
+                : Msg::of('msg_migration.relation_none', "{what} {marker}: a previous relationship with the label '{label}' does not "
+                    . 'exist.', $params));
         }
         return $old;
     }
@@ -904,41 +969,44 @@ final class SchemaMigration
                     }
                 }
                 $target = $p['model']['entities'][$f1['foreign_key']['table']]['name'];
-                $k = self::matchRelation($cands, $f1['foreign_key']['label'], $f1['foreign_key']['renamed_from'] ?? null,
-                    "Beziehung {$e1['name']} -> $target");
+                $what = Msg::of('msg_migration.relation_what', 'Relationship {class} -> {target}', ['class' => $e1['name'], 'target' => $target]);
+                $k = self::matchRelation($cands, $f1['foreign_key']['label'], $f1['foreign_key']['renamed_from'] ?? null, $what);
                 $from = $k !== null ? $oldFks[$k] : null;
                 if ($from !== null && PumlParser::normalizeLabel($from['foreign_key']['label'])
                     !== PumlParser::normalizeLabel($f1['foreign_key']['label'])) {
-                    $p['changes'][] = self::change('relation_renamed', 'info', "Beziehung {$e1['name']} -> $target umbenannt: Label '"
-                        . $from['foreign_key']['label'] . "' -> '{$f1['foreign_key']['label']}' (Spalte {$from['name']} -> {$f1['name']}, "
-                        . 'Werte bleiben erhalten).');
+                    $p['changes'][] = self::change('relation_renamed', 'info', Msg::of('msg_migration.relation_renamed', "{what} renamed: "
+                        . "label '{old}' -> '{new}' (column {old_column} -> {column}, values are kept).", [
+                            'what' => $what, 'old' => $from['foreign_key']['label'], 'new' => $f1['foreign_key']['label'],
+                            'old_column' => $from['name'], 'column' => $f1['name'],
+                        ]));
                 }
             } else {
                 $own = $oldByName[strtolower($f1['name'])] ?? null;
                 if (isset($f1['renamed_from']) && $own === null) {
                     $from = $oldByName[strtolower($f1['renamed_from'])] ?? null;
                     if ($from === null) {
-                        throw self::schemaError(
-                            "Feld {$e1['name']}.{$f1['name']} {renamed_from:{$f1['renamed_from']}}: Ein Feld '{$f1['renamed_from']}' "
-                            . "gibt es in {$e0['name']} bisher nicht."
-                        );
+                        throw self::schemaError(Msg::of('msg_migration.field_from_missing', "Field {field} {marker}: a field '{from}' does "
+                            . 'not exist in {class} so far.', [
+                                'field' => "{$e1['name']}.{$f1['name']}", 'marker' => '{renamed_from:' . $f1['renamed_from'] . '}',
+                                'from' => $f1['renamed_from'], 'class' => $e0['name'],
+                            ]));
                     }
-                    $p['changes'][] = self::change('field_renamed', 'info',
-                        "Feld {$e1['name']}.{$from['name']} umbenannt in {$f1['name']} (Werte bleiben erhalten).");
+                    $p['changes'][] = self::change('field_renamed', 'info', Msg::of('msg_migration.field_renamed', 'Field {field} renamed to '
+                        . '{name} (values are kept).', ['field' => "{$e1['name']}.{$from['name']}", 'name' => $f1['name']]));
                 } else {
                     if ($own !== null && isset($f1['renamed_from']) && strtolower($f1['renamed_from']) !== strtolower($f1['name'])
                         && isset($oldByName[strtolower($f1['renamed_from'])])) {
-                        throw self::schemaError(
-                            "Feld {$e1['name']}.{$f1['name']} {renamed_from:{$f1['renamed_from']}}: Beide Felder gibt es bisher - "
-                            . 'unklar, welche Werte gelten sollen (ein Namenstausch wird nicht unterstützt). Bitte in zwei Schritten '
-                            . 'umbenennen oder die Markierung entfernen.'
-                        );
+                        throw self::schemaError(Msg::of('msg_migration.field_both', 'Field {field} {marker}: both fields exist so far - '
+                            . 'unclear which values should apply (swapping names is not supported). Please rename in two steps or remove '
+                            . 'the marker.', ['field' => "{$e1['name']}.{$f1['name']}", 'marker' => '{renamed_from:' . $f1['renamed_from'] . '}']));
                     }
                     $from = $own;
                 }
             }
             if ($from !== null && isset($used[$from['name']])) {
-                throw self::schemaError("Das bisherige Feld {$e0['name']}.{$from['name']} wird von zwei Feldern beansprucht.");
+                throw self::schemaError(Msg::of('msg_migration.field_claimed', 'The previous field {field} is claimed by two fields.', [
+                    'field' => "{$e0['name']}.{$from['name']}",
+                ]));
             }
             if ($from !== null) {
                 $used[$from['name']] = true;
@@ -977,10 +1045,11 @@ final class SchemaMigration
         }
         $from = $find($md1['renamed_from']);
         if ($from === null) {
-            throw self::schemaError(
-                "Medien-Feld {$e1['name']}.{$md1['name']} {renamed_from:{$md1['renamed_from']}}: Ein Medien-Feld "
-                . "'{$md1['renamed_from']}' gibt es in {$e0['name']} bisher nicht."
-            );
+            throw self::schemaError(Msg::of('msg_migration.media_from_missing', "Media field {field} {marker}: a media field '{from}' "
+                . 'does not exist in {class} so far.', [
+                    'field' => "{$e1['name']}.{$md1['name']}", 'marker' => '{renamed_from:' . $md1['renamed_from'] . '}',
+                    'from' => $md1['renamed_from'], 'class' => $e0['name'],
+                ]));
         }
         return $from;
     }
@@ -995,11 +1064,14 @@ final class SchemaMigration
         $rows = $this->count($t0);
         foreach ($p['removedColumns'][$t0] ?? [] as $f0) {
             $n = $this->nonEmpty($t0, $f0['name']);
-            $label = $f0['foreign_key'] ? "Beziehung {$e0['name']}.{$f0['name']}" : "Feld {$e0['name']}.{$f0['name']}";
-            $p['changes'][] = self::change('field_removed', $n ? 'confirm' : 'warning', "$label entfernt ($n Zeile(n) mit Wert).");
+            $label = self::fieldLabel($e0['name'], $f0);
+            $p['changes'][] = self::change('field_removed', $n ? 'confirm' : 'warning', Msg::of('msg_migration.field_removed',
+                '{what} removed ({count} row(s) with a value).', ['what' => $label, 'count' => $n]));
             if ($n) {
-                $p['confirmations'][] = ['key' => "drop_column:$t0.{$f0['name']}", 'count' => $n,
-                    'text' => "Ich bestätige, dass die Werte von $n Zeile(n) in '{$e0['name']}.{$f0['name']}' verloren gehen."];
+                $p['confirmations'][] = ['key' => "drop_column:$t0.{$f0['name']}", 'count' => $n] + Msg::of('msg_migration.confirm_values',
+                    "I confirm that the values of {count} row(s) in '{field}' will be lost.", [
+                        'count' => $n, 'field' => "{$e0['name']}.{$f0['name']}",
+                    ])->fields('text');
             }
         }
         foreach ($cols as $name => &$c) {
@@ -1008,17 +1080,27 @@ final class SchemaMigration
             if ($f1['primary']) {
                 continue;
             }
-            $label = $f1['foreign_key'] ? "Beziehung {$e1['name']}.$name" : "Feld {$e1['name']}.$name";
+            $label = self::fieldLabel($e1['name'], $f1);
             if ($f0 === null) {
-                $p['changes'][] = self::change('field_added', 'info', ($f1['foreign_key']
-                    ? ($f1['required'] ? 'Neue Pflicht-Beziehung' : 'Neue optionale Beziehung')
-                    : ($f1['required'] ? 'Neues Pflichtfeld' : 'Neues optionales Feld')) . " {$e1['name']}.$name"
-                    . ($f1['foreign_key'] ? ' -> ' . $p['model']['entities'][$f1['foreign_key']['table']]['name'] : " ({$f1['type']})") . '.');
+                $params = ['field' => "{$e1['name']}.$name", 'type' => $f1['type'],
+                    'target' => $f1['foreign_key'] ? $p['model']['entities'][$f1['foreign_key']['table']]['name'] : null];
+                if ($f1['foreign_key']) {
+                    $added = $f1['required']
+                        ? Msg::of('msg_migration.relation_added_required', 'New required relationship {field} -> {target}.', $params)
+                        : Msg::of('msg_migration.relation_added_optional', 'New optional relationship {field} -> {target}.', $params);
+                } else {
+                    $added = $f1['required']
+                        ? Msg::of('msg_migration.field_added_required', 'New required field {field} ({type}).', $params)
+                        : Msg::of('msg_migration.field_added_optional', 'New optional field {field} ({type}).', $params);
+                }
+                $p['changes'][] = self::change('field_added', 'info', $added);
             }
             // type change / enum values: every existing value must be valid under the new field rules
             $c['convert'] = $f0 !== null && !$f1['foreign_key'] && self::typeSignature($f0) !== self::typeSignature($f1);
             if ($c['convert']) {
-                $p['changes'][] = self::change('field_type', 'info', "$label: " . self::typeLabel($f0) . ' -> ' . self::typeLabel($f1) . '.');
+                $p['changes'][] = self::change('field_type', 'info', Msg::of('msg_migration.field_type', '{what}: {old} -> {new}.', [
+                    'what' => $label, 'old' => self::typeLabel($f0), 'new' => self::typeLabel($f1),
+                ]));
                 $bad = [];
                 $total = 0;
                 $stmt = $this->pdo->query('SELECT "id", ' . SqlGenerator::q($f0['name']) . ' AS v FROM ' . SqlGenerator::q($t0)
@@ -1029,51 +1111,65 @@ final class SchemaMigration
                     } catch (\InvalidArgumentException $e) {
                         $total++;
                         if (count($bad) < self::LIST_LIMIT) {
-                            $bad[] = ['id' => (int) $r['id'], 'value' => $r['v'], 'problem' => $e->getMessage()];
+                            $problem = ValueException::msgOf($e);
+                            $bad[] = ['id' => (int) $r['id'], 'value' => $r['v'], 'problem' => $problem->text(),
+                                'problem_code' => $problem->codeOnly()];
                         }
                     }
                 }
                 if ($total) {
-                    $p['blockers'][] = ['key' => "convert:$t1.$name", 'count' => $total, 'rows' => $bad,
-                        'text' => "$label: $total vorhandene(r) Wert(e) passen nicht zu " . self::typeLabel($f1)
-                            . '. Bitte die Daten anpassen oder das Diagramm ändern.'];
+                    $p['blockers'][] = ['key' => "convert:$t1.$name", 'count' => $total, 'rows' => $bad]
+                        + Msg::of('msg_migration.convert_blocked', '{what}: {count} existing value(s) do not fit {type}. Please adjust the '
+                            . 'data or change the diagram.', ['what' => $label, 'count' => $total, 'type' => self::typeLabel($f1)])->fields('text');
                 }
                 if (isset($f0['workflow']) !== isset($f1['workflow'])) {
-                    $p['changes'][] = self::change('field_workflow', 'info', "$label: " . (isset($f1['workflow'])
-                        ? 'wird zum Workflow-Feld (Wechsel künftig nur über Transitionen).' : 'ist kein Workflow-Feld mehr (frei bearbeitbar).'));
+                    $p['changes'][] = self::change('field_workflow', 'info', self::workflowFieldChange($label, isset($f1['workflow'])));
                 }
             } elseif ($f0 !== null && isset($f0['workflow']) !== isset($f1['workflow'])) {
-                $p['changes'][] = self::change('field_workflow', 'info', "$label: " . (isset($f1['workflow'])
-                    ? 'wird zum Workflow-Feld (Wechsel künftig nur über Transitionen).' : 'ist kein Workflow-Feld mehr (frei bearbeitbar).'));
+                $p['changes'][] = self::change('field_workflow', 'info', self::workflowFieldChange($label, isset($f1['workflow'])));
             } elseif ($f0 !== null && $f0['required'] !== $f1['required']) {
-                $p['changes'][] = self::change('field_required', 'info', "$label: " . ($f1['required'] ? 'jetzt Pflicht' : 'jetzt optional') . '.');
+                $p['changes'][] = self::change('field_required', 'info', $f1['required']
+                    ? Msg::of('msg_migration.now_required', '{what}: now required.', ['what' => $label])
+                    : Msg::of('msg_migration.now_optional', '{what}: now optional.', ['what' => $label]));
             } elseif ($f0 !== null && $f1['foreign_key'] && self::fkSignature($f0) !== self::fkSignature($f1)) {
-                $p['changes'][] = self::change('fk_changed', 'info', "$label: Löschverhalten/1:1 geändert ("
-                    . self::fkSignature($f0) . ' -> ' . self::fkSignature($f1) . ').');
+                $p['changes'][] = self::change('fk_changed', 'info', Msg::of('msg_migration.fk_changed', '{what}: delete behaviour/1:1 '
+                    . 'changed ({old} -> {new}).', ['what' => $label, 'old' => self::fkSignature($f0), 'new' => self::fkSignature($f1)]));
+            }
+            if ($f0 !== null && !$f1['foreign_key']) {
+                $this->ruleChanges($t0, $f0, $f1, $label, (bool) $c['convert'], $p);
             }
             // minimum count ("1..*" on the n side): soft rule, the table stays the same - only the model changes
             if ($f0 !== null && $f1['foreign_key'] && $f0['foreign_key']
                 && !empty($f0['foreign_key']['min_required']) !== !empty($f1['foreign_key']['min_required'])) {
                 $parent = $p['model']['entities'][$f1['foreign_key']['table']]['name'];
                 $p['changes'][] = self::change('fk_min', 'info', !empty($f1['foreign_key']['min_required'])
-                    ? "$label: Mindestanzahl gewünscht (jede Zeile in $parent soll mindestens eine Zeile in {$e1['name']} haben) - "
-                        . 'vorhandene Zeilen ohne eine solche werden nur markiert, nichts wird geändert.'
-                    : "$label: Mindestanzahl entfällt.");
+                    ? Msg::of('msg_migration.min_added', '{what}: minimum count wanted (every row in {parent} should have at least one row '
+                        . 'in {class}) - existing rows without one are only marked, nothing is changed.', [
+                            'what' => $label, 'parent' => $parent, 'class' => $e1['name'],
+                        ])
+                    : Msg::of('msg_migration.min_removed', '{what}: minimum count dropped.', ['what' => $label]));
             }
             if ($f0 !== null && $f1['foreign_key'] && $f0['foreign_key']
                 && ($f0['foreign_key']['filter_by'] ?? null) !== ($f1['foreign_key']['filter_by'] ?? null)) {
-                $p['changes'][] = self::change('filter_by', 'info', "$label: " . self::filterChange($f1['foreign_key']['filter_by'] ?? null));
+                $p['changes'][] = self::change('filter_by', 'info', Msg::of('msg_migration.what_colon', '{what}: {text}', [
+                    'what' => $label, 'text' => self::filterChange($f1['foreign_key']['filter_by'] ?? null),
+                ]));
             }
             // permission conflict: a denied field becomes required, or a (new) required relationship to a denied entity
             if ($f1['required'] && ($f0 === null || !$f0['required'])) {
                 if ($f0 !== null) {
-                    $this->permissionConflict($p, $t0, $f0['name'], null, "$label wird Pflicht, ist aber gesperrt", $e1['name']);
+                    $this->permissionConflict($p, $t0, $f0['name'], null, Msg::of('msg_migration.becomes_required_denied', '{what} becomes '
+                        . 'required but is denied', ['what' => $label]), $e1['name']);
                 }
                 $target = $f1['foreign_key'] ? ($p['entityMap'][$f1['foreign_key']['table']] ?? null) : null;
                 if ($target !== null) {
-                    $this->permissionConflict($p, $t0, null, $target, ($f0 === null ? "Neue Pflicht-Beziehung {$e1['name']}.$name zeigt"
-                        : "$label wird Pflicht und zeigt") . " auf die Entität {$p['model']['entities'][$f1['foreign_key']['table']]['name']}, "
-                        . 'die gesperrt ist', $e1['name']);
+                    $params = ['field' => "{$e1['name']}.$name", 'what' => $label,
+                        'target' => $p['model']['entities'][$f1['foreign_key']['table']]['name']];
+                    $this->permissionConflict($p, $t0, null, $target, $f0 === null
+                        ? Msg::of('msg_migration.new_relation_denied', 'New required relationship {field} points to the entity {target}, '
+                            . 'which is denied', $params)
+                        : Msg::of('msg_migration.relation_required_denied', '{what} becomes required and points to the entity {target}, '
+                            . 'which is denied', $params), $e1['name']);
                 }
             }
             // empty required values -> backfill (new required column, optional -> required, type change with NULL values)
@@ -1084,8 +1180,8 @@ final class SchemaMigration
                 if ($empty && isset($f1['workflow'])) {
                     // workflow field: existing rows automatically start in the initial state (no backfill dialog)
                     $c['auto'] = $p['model']['workflows'][$f1['workflow']]['initial'];
-                    $p['changes'][] = self::change('workflow_backfill', 'info', "$label: $empty vorhandene Zeile(n) erhalten "
-                        . "automatisch den Startzustand '{$c['auto']}'.");
+                    $p['changes'][] = self::change('workflow_backfill', 'info', Msg::of('msg_migration.workflow_backfill', '{what}: {count} '
+                        . "existing row(s) automatically get the initial state '{state}'.", ['what' => $label, 'count' => $empty, 'state' => $c['auto']]));
                 } elseif ($empty) {
                     $this->requireBackfill($t1, $e1, $f1, $empty, $p, $c);
                 }
@@ -1119,10 +1215,12 @@ final class SchemaMigration
                 $names[] = $col;
             }
             if (!$sources) {
-                $p['blockers'][] = ['key' => "unique:$t1." . implode('+', $g), 'count' => $rows, 'rows' => [],
-                    'text' => "{$e1['name']}: Die neue Eindeutigkeit (" . implode(', ', $g) . ') besteht nur aus neuen Pflichtspalten - '
-                        . "ein gemeinsamer Backfill-Wert für $rows vorhandene Zeilen wäre zwangsläufig doppelt. Bitte die Spalte(n) "
-                        . 'zunächst optional anlegen, befüllen und erst danach zur Pflicht bzw. eindeutig machen.'];
+                $p['blockers'][] = ['key' => "unique:$t1." . implode('+', $g), 'count' => $rows, 'rows' => []]
+                    + Msg::of('msg_migration.unique_new_columns', '{class}: the new uniqueness ({columns}) consists only of new required '
+                        . 'columns - a common backfill value for {count} existing rows would inevitably be duplicated. Please first create the '
+                        . 'column(s) as optional, fill them and only then make them required or unique.', [
+                            'class' => $e1['name'], 'columns' => implode(', ', $g), 'count' => $rows,
+                        ])->fields('text');
                 continue;
             }
             $q = implode(', ', array_map([SqlGenerator::class, 'q'], $sources));
@@ -1140,14 +1238,65 @@ final class SchemaMigration
                     }
                     $list[] = ['ids' => array_map('intval', explode(',', $d['ids'])), 'values' => $values];
                 }
-                $p['blockers'][] = ['key' => "unique:$t1." . implode('+', $g), 'count' => count($dups), 'rows' => $list,
-                    'text' => "{$e1['name']}: Die neue Eindeutigkeit (" . implode(', ', $g) . ') ist in den vorhandenen Daten verletzt - '
-                        . count($dups) . ' Wert-Kombination(en) kommen mehrfach vor. Bitte die Duplikate bereinigen oder die '
-                        . 'Markierung weglassen.'];
+                $p['blockers'][] = ['key' => "unique:$t1." . implode('+', $g), 'count' => count($dups), 'rows' => $list]
+                    + Msg::of('msg_migration.unique_violated', '{class}: the new uniqueness ({columns}) is violated in the existing data - '
+                        . '{count} value combination(s) occur more than once. Please clean up the duplicates or leave out the marker.', [
+                            'class' => $e1['name'], 'columns' => implode(', ', $g), 'count' => count($dups),
+                        ])->fields('text');
             } else {
-                $p['changes'][] = self::change('unique_added', 'info', "{$e1['name']}: neue Eindeutigkeit (" . implode(', ', $g) . ') - vorhandene Daten passen.');
+                $p['changes'][] = self::change('unique_added', 'info', Msg::of('msg_migration.unique_added', '{class}: new uniqueness '
+                    . '({columns}) - existing data fits.', ['class' => $e1['name'], 'columns' => implode(', ', $g)]));
             }
         }
+    }
+
+    /**
+     * Changed field rules (Validation): only a notice, never a blocker - existing records are not changed. Severity 'warning'
+     * with the number of existing records that violate the new rules ('count', first IDs in 'ids'), otherwise 'info'. Values
+     * that cannot be converted for a type change are left out here (the type change blocks for them anyway).
+     */
+    private function ruleChanges(string $t0, array $f0, array $f1, Msg $label, bool $convert, array &$p): void
+    {
+        $r0 = $f0['rules'] ?? [];
+        $r1 = $f1['rules'] ?? [];
+        if ($r0 === $r1) {
+            return;
+        }
+        $none = Msg::of('msg_migration.rules_none', '(none)');
+        $rules = ['what' => $label, 'old' => $r0 ? trim(Validation::markers($r0)) : $none, 'new' => $r1 ? trim(Validation::markers($r1)) : $none];
+        $ids = [];
+        $count = 0;
+        if ($r1) {
+            $validation = new Validation($this->pdo);
+            $col = SqlGenerator::q($f0['name']);
+            $stmt = $this->pdo->query("SELECT \"id\", $col AS v FROM " . SqlGenerator::q($t0) . " WHERE $col IS NOT NULL AND $col <> '' ORDER BY \"id\"");
+            foreach ($stmt as $r) {
+                try {
+                    $value = $convert ? Cms::coerce($f1, self::raw($f1, $r['v'])) : $r['v'];
+                } catch (\InvalidArgumentException $e) {
+                    continue;
+                }
+                if ($validation->check($f1, $value)) {
+                    $count++;
+                    if (count($ids) < self::LIST_LIMIT) {
+                        $ids[] = (int) $r['id'];
+                    }
+                }
+            }
+        }
+        $params = $rules + ['count' => $count, 'ids' => '#' . implode(', #', $ids) . ($count > count($ids) ? ', …' : '')];
+        if ($count === 1) {
+            $text = Msg::of('msg_migration.rules_violated_one', '{what}: rules {old} -> {new}. 1 existing record violates the new rules '
+                . '({ids}). It is not changed; after applying it is listed under "Rule violations" and can only be saved again once it is '
+                . 'valid.', $params);
+        } elseif ($count) {
+            $text = Msg::of('msg_migration.rules_violated', '{what}: rules {old} -> {new}. {count} existing records violate the new rules '
+                . '({ids}). They are not changed; after applying they are listed under "Rule violations" and can only be saved again once '
+                . 'they are valid.', $params);
+        } else {
+            $text = Msg::of('msg_migration.rules_changed', '{what}: rules {old} -> {new}.', $params);
+        }
+        $p['changes'][] = self::change('rules_changed', $count ? 'warning' : 'info', $text) + ['count' => $count, 'ids' => $ids];
     }
 
     /**
@@ -1156,15 +1305,17 @@ final class SchemaMigration
      * them at all, or its selection cannot be loaded). Owners who have also denied $t0 itself
      * do not count - they do not create anything there anyway.
      */
-    private function permissionConflict(array &$p, string $t0, ?string $prop, ?string $target, string $what, string $entity): void
+    private function permissionConflict(array &$p, string $t0, ?string $prop, ?string $target, Msg $what, string $entity): void
     {
         $owners = array_diff_key(
             $prop !== null ? $p['denials']['fields'][$t0][$prop] ?? [] : $p['denials']['entities'][$target] ?? [],
             $p['denials']['entities'][$t0] ?? []
         );
         if ($owners) {
-            $p['changes'][] = self::change('permission_conflict', 'permission', "$what (" . implode(', ', $owners)
-                . ") – betroffene Nutzer können danach keine neuen Datensätze in $entity mehr anlegen.");
+            $p['changes'][] = self::change('permission_conflict', 'permission', Msg::of('msg_migration.permission_conflict', '{what} '
+                . '({owners}) – affected users can then no longer create new records in {entity}.', [
+                    'what' => $what, 'owners' => Msg::commaList($owners), 'entity' => $entity,
+                ]));
         }
     }
 
@@ -1172,14 +1323,18 @@ final class SchemaMigration
      * Notice "Berechtigungs-Konflikt" for a (future) required media field: whoever has no access to the system area
      * 'media' cannot select a medium (see Permissions::mediaBlocked()). $t0 = null: new entity.
      */
-    private function mediaConflict(array &$p, ?string $t0, string $what, string $entity): void
+    private function mediaConflict(array &$p, ?string $t0, Msg $what, string $entity): void
     {
         $owners = ($p['mediaBlocked'])($t0);
         if ($owners) {
             $more = count($owners) - self::LIST_LIMIT;
-            $p['changes'][] = self::change('permission_conflict', 'permission', "$what ohne Zugriff auf den Systembereich 'media' nicht "
-                . 'befüllen (' . implode(', ', array_slice($owners, 0, self::LIST_LIMIT)) . ($more > 0 ? " und $more weitere" : '')
-                . ") – betroffene Nutzer können danach keine neuen Datensätze in $entity mehr anlegen.");
+            $params = ['what' => $what, 'owners' => Msg::commaList(array_slice($owners, 0, self::LIST_LIMIT)), 'more' => $more,
+                'entity' => $entity];
+            $p['changes'][] = self::change('permission_conflict', 'permission', $more > 0
+                ? Msg::of('msg_migration.media_conflict_more', "{what} cannot be filled without access to the system area 'media' "
+                    . '({owners} and {more} more) – affected users can then no longer create new records in {entity}.', $params)
+                : Msg::of('msg_migration.media_conflict', "{what} cannot be filled without access to the system area 'media' ({owners}) "
+                    . '– affected users can then no longer create new records in {entity}.', $params));
         }
     }
 
@@ -1187,28 +1342,30 @@ final class SchemaMigration
     private function requireBackfill(string $t1, array $e1, array $f1, int $empty, array &$p, array &$c): void
     {
         $key = "$t1.{$f1['name']}";
-        $label = ($f1['foreign_key'] ? 'Beziehung ' : 'Feld ') . "{$e1['name']}.{$f1['name']}";
+        $label = self::fieldLabel($e1['name'], $f1);
         $b = ['key' => $key, 'entity' => $e1['name'], 'table' => $t1, 'field' => $f1['name'], 'type' => $f1['type'],
-            'rows' => $empty, 'label' => $label];
+            'rows' => $empty, 'label' => $label->text(), 'label_code' => $label->codeOnly()];
         if ($f1['foreign_key']) {
             $target = $f1['foreign_key']['table'];
             $oldTarget = $p['entityMap'][$target] ?? null;
             if ($target === $t1) {
-                $p['blockers'][] = ['key' => "backfill:$key", 'count' => $empty, 'rows' => [], 'text' => "$label: Eine neue Pflicht-"
-                    . 'Selbstreferenz lässt sich nicht mit einem gemeinsamen Wert befüllen (eine Zeile verwiese auf sich selbst). '
-                    . 'Bitte zunächst optional anlegen.'];
+                $p['blockers'][] = ['key' => "backfill:$key", 'count' => $empty, 'rows' => []] + Msg::of('msg_migration.backfill_self',
+                    '{what}: a new required self-reference cannot be filled with a common value (a row would reference itself). Please '
+                    . 'first create it as optional.', ['what' => $label])->fields('text');
                 return;
             }
             $targetRows = $oldTarget !== null ? $this->count($oldTarget) : 0;
             if (!$targetRows) {
-                $p['blockers'][] = ['key' => "backfill:$key", 'count' => $empty, 'rows' => [], 'text' => "$label: $empty vorhandene "
-                    . 'Zeile(n) bräuchten einen Wert, aber die Zieltabelle ' . $p['model']['entities'][$target]['name']
-                    . ' ist leer. Bitte die Beziehung zunächst optional anlegen.'];
+                $p['blockers'][] = ['key' => "backfill:$key", 'count' => $empty, 'rows' => []] + Msg::of('msg_migration.backfill_empty_target',
+                    '{what}: {count} existing row(s) would need a value, but the target table {target} is empty. Please first create the '
+                    . 'relationship as optional.', ['what' => $label, 'count' => $empty, 'target' => $p['model']['entities'][$target]['name']])
+                    ->fields('text');
                 return;
             }
             if (!empty($f1['foreign_key']['one_to_one']) && $empty > 1) {
-                $p['blockers'][] = ['key' => "backfill:$key", 'count' => $empty, 'rows' => [], 'text' => "$label: 1:1-Beziehung - ein "
-                    . "gemeinsamer Wert für $empty Zeilen wäre doppelt vergeben. Bitte zunächst optional anlegen und einzeln zuordnen."];
+                $p['blockers'][] = ['key' => "backfill:$key", 'count' => $empty, 'rows' => []] + Msg::of('msg_migration.backfill_one_to_one',
+                    '{what}: 1:1 relationship - a common value for {count} rows would be assigned twice. Please first create it as optional '
+                    . 'and assign the rows one by one.', ['what' => $label, 'count' => $empty])->fields('text');
                 return;
             }
             $b['target'] = $p['model']['entities'][$target]['name'];
@@ -1219,14 +1376,21 @@ final class SchemaMigration
                 return ['value' => $v, 'label' => $v];
             }, $f1['enum_values']);
         } elseif ($f1['type'] === 'bool') {
-            $b['choices'] = [['value' => true, 'label' => 'Ja'], ['value' => false, 'label' => 'Nein']];
+            $b['choices'] = [
+                ['value' => true] + Msg::of('msg_migration.choice_yes', 'Yes')->fields('label'),
+                ['value' => false] + Msg::of('msg_migration.choice_no', 'No')->fields('label'),
+            ];
         } elseif ($f1['type'] === 'visibility') {
-            $b['choices'] = [['value' => true, 'label' => 'Veröffentlicht'], ['value' => false, 'label' => 'Entwurf']];
+            $b['choices'] = [
+                ['value' => true] + Msg::of('msg_migration.choice_published', 'Published')->fields('label'),
+                ['value' => false] + Msg::of('msg_migration.choice_draft', 'Draft')->fields('label'),
+            ];
         }
-        $b['text'] = "$label ist Pflicht: $empty vorhandene Zeile(n) brauchen einen Wert.";
+        $text = Msg::of('msg_migration.backfill', '{what} is required: {count} existing row(s) need a value.', ['what' => $label, 'count' => $empty]);
+        $b += $text->fields('text');
         $b['field_def'] = $f1;
         $p['backfills'][] = $b;
-        $p['changes'][] = self::change('backfill', 'backfill', $b['text']);
+        $p['changes'][] = self::change('backfill', 'backfill', $text);
         $c['backfill'] = $key;
     }
 
@@ -1236,13 +1400,20 @@ final class SchemaMigration
         $f = $b['field_def'];
         $v = Cms::coerce($f['foreign_key'] ? ['type' => 'int'] + $f : $f, $value);
         if ($v === null) {
-            throw new \InvalidArgumentException('Wert erforderlich');
+            throw new ValueException(self::valueRequired());
+        }
+        // field rules (Validation): the value is written into every empty row - it has to satisfy them
+        $violations = (new Validation($this->pdo))->check($f, $v);
+        if ($violations) {
+            throw new ValueException(Msg::spaceList(array_map(function ($v) {
+                return isset($v['code']) ? Msg::fromArray($v) : Msg::of('msg_api.plain', '{text}', ['text' => $v['message']]);
+            }, $violations)));
         }
         if ($f['foreign_key']) {
             $stmt = $this->pdo->prepare('SELECT 1 FROM ' . SqlGenerator::q($b['source_table']) . ' WHERE "id" = ?');
             $stmt->execute([$v]);
             if (!$stmt->fetchColumn()) {
-                throw new \InvalidArgumentException("{$b['target']} #$v gibt es nicht");
+                throw new ValueException(Msg::of('msg_migration.target_missing', '{target} #{id} does not exist', ['target' => $b['target'], 'id' => $v]));
             }
         }
         return $v;
@@ -1277,8 +1448,8 @@ final class SchemaMigration
         $lock = Config::lockFile();
         $handle = @fopen($lock, 'x');
         if ($handle === false) {
-            throw new ApiException(409, ['error' => 'locked', 'message' => 'Gerade läuft ein Bootstrap oder eine andere Schema-'
-                . 'Änderung (data/bootstrap.lock). Bitte kurz warten und erneut versuchen.']);
+            throw ApiException::of(409, 'locked', Msg::of('msg_migration.locked', 'A bootstrap or another schema change is running right '
+                . 'now (data/bootstrap.lock). Please wait a moment and try again.'));
         }
         fclose($handle);
         $created = [];
@@ -1343,8 +1514,8 @@ final class SchemaMigration
                 $list = array_map(function ($v) {
                     return "{$v[0]} #{$v[1]} -> {$v[2]}";
                 }, array_slice($violations, 0, self::LIST_LIMIT));
-                throw new ApiException(409, ['error' => 'conflict', 'message' => count($violations) . ' Verweis(e) zeigen nach der '
-                    . 'Änderung ins Leere: ' . implode(', ', $list) . '. Es wurde nichts geändert.']);
+                throw ApiException::of(409, 'conflict', Msg::of('msg_migration.dangling', '{count} reference(s) point to nothing after the '
+                    . 'change: {list}. Nothing was changed.', ['count' => count($violations), 'list' => implode(', ', $list)]));
             }
             // rebuilt tables have lost their indexes, renamed columns/tables carry outdated names
             SchemaIndexes::sync($pdo, $plan['model']);
@@ -1366,8 +1537,8 @@ final class SchemaMigration
                 SchemaBackup::remove($backup['stamp']);
             }
             if ($e instanceof PDOException) {
-                throw new ApiException(409, ['error' => 'conflict', 'message' => 'Die Änderung ließ sich nicht anwenden: '
-                    . $e->getMessage() . '. Es wurde nichts geändert (vollständig zurückgerollt).']);
+                throw ApiException::of(409, 'conflict', Msg::of('msg_migration.apply_failed', 'The change could not be applied: {error}. '
+                    . 'Nothing was changed (completely rolled back).', ['error' => $e->getMessage()]));
             }
             throw $e;
         } finally {
@@ -1376,9 +1547,7 @@ final class SchemaMigration
             $pdo->exec('PRAGMA foreign_keys = ON');
             @unlink($lock);
         }
-        return [
-            'status'   => 'applied',
-            'message'  => 'Schema-Änderung angewendet.',
+        return ['status' => 'applied'] + Msg::of('msg_migration.applied', 'Schema change applied.')->fields() + [
             'created'  => $created,
             'rebuilt'  => $rebuilt,
             'dropped'  => array_values(array_diff($plan['drops'], $rebuilt)),
@@ -1427,9 +1596,12 @@ final class SchemaMigration
                 }
             } catch (PDOException $e) {
                 $id = $row['id'] ?? null;
-                throw new ApiException(409, ['error' => 'conflict', 'message' => "Beim Übernehmen von '{$op['table']}'"
-                    . ($id !== null ? " (Zeile #$id)" : '') . ': ' . self::constraintText($e->getMessage())
-                    . '. Es wurde nichts geändert (vollständig zurückgerollt).', 'table' => $op['table'], 'row' => $id]);
+                $params = ['table' => $op['table'], 'id' => $id, 'reason' => self::constraintText($e->getMessage())];
+                throw ApiException::of(409, 'conflict', $id !== null
+                    ? Msg::of('msg_migration.copy_failed_row', "While taking over '{table}' (row #{id}): {reason}. Nothing was changed "
+                        . '(completely rolled back).', $params)
+                    : Msg::of('msg_migration.copy_failed', "While taking over '{table}': {reason}. Nothing was changed (completely rolled "
+                        . 'back).', $params), ['table' => $op['table'], 'row' => $id]);
             }
             $n++;
         }
@@ -1504,14 +1676,29 @@ final class SchemaMigration
         ];
     }
 
-    private static function change(string $kind, string $severity, string $text): array
+    /** Analysis item: text (English) + code/params for the UI */
+    private static function change(string $kind, string $severity, Msg $text): array
     {
-        return ['kind' => $kind, 'severity' => $severity, 'text' => $text];
+        return ['kind' => $kind, 'severity' => $severity] + $text->fields('text');
     }
 
-    private static function schemaError(string $message): ApiException
+    private static function schemaError(Msg $message): ApiException
     {
-        return new ApiException(422, ['error' => 'schema_error', 'message' => $message]);
+        return ApiException::of(422, 'schema_error', $message);
+    }
+
+    private static function valueRequired(): Msg
+    {
+        return Msg::of('msg_migration.value_required', 'Value required');
+    }
+
+    /** "n:n relationship A – B (label)" */
+    private static function nnWhat(string $class, string $target, string $label): Msg
+    {
+        $params = ['class' => $class, 'target' => $target, 'label' => $label];
+        return $label !== ''
+            ? Msg::of('msg_migration.nn_what_label', 'n:n relationship {class} – {target} ({label})', $params)
+            : Msg::of('msg_migration.nn_what', 'n:n relationship {class} – {target}', $params);
     }
 
     /** All tables of a model (entities, n:n and media link tables) */
@@ -1553,21 +1740,21 @@ final class SchemaMigration
         $removed = array_values(array_diff($s0, $s1));
         $parts = [];
         if (count($added) === 1 && count($removed) === 1 && array_search($added[0], $s1, true) === array_search($removed[0], $s0, true)) {
-            $parts[] = "Abschnitt '{$removed[0]}' umbenannt in '{$added[0]}'";
+            $parts[] = Msg::of('msg_migration.section_renamed', "section '{old}' renamed to '{new}'", ['old' => $removed[0], 'new' => $added[0]]);
             $renamedSection = [$removed[0] => $added[0]];
         } else {
             if ($added) {
-                $parts[] = 'neuer Abschnitt ' . implode(', ', array_map(function ($t) {
+                $parts[] = Msg::of('msg_migration.section_added', 'new section {titles}', ['titles' => implode(', ', array_map(function ($t) {
                     return "'$t'";
-                }, $added));
+                }, $added))]);
             }
             if ($removed) {
-                $parts[] = 'Abschnitt ' . implode(', ', array_map(function ($t) {
+                $parts[] = Msg::of('msg_migration.section_removed', 'section {titles} removed', ['titles' => implode(', ', array_map(function ($t) {
                     return "'$t'";
-                }, $removed)) . ' entfernt';
+                }, $removed))]);
             }
             if (!$added && !$removed && $s0 !== $s1) {
-                $parts[] = 'Reihenfolge der Abschnitte geändert';
+                $parts[] = Msg::of('msg_migration.section_order', 'order of the sections changed');
             }
             $renamedSection = [];
         }
@@ -1587,12 +1774,12 @@ final class SchemaMigration
                 }
             }
             if ($moved) {
-                $parts[] = 'Reihenfolge bzw. Abschnittszuordnung der Felder geändert';
+                $parts[] = Msg::of('msg_migration.field_order', 'order or section assignment of the fields changed');
             }
         }
         if ($parts) {
-            $p['changes'][] = self::change('field_order', 'info', "Klasse {$e1['name']}: " . implode('; ', $parts)
-                . ' (nur Formular und Liste, die Tabelle bleibt unverändert).');
+            $p['changes'][] = self::change('field_order', 'info', Msg::of('msg_migration.order_changed', 'Class {class}: {changes} (only '
+                . 'form and list, the table stays unchanged).', ['class' => $e1['name'], 'changes' => Msg::semicolonList($parts)]));
         }
     }
 
@@ -1660,20 +1847,45 @@ final class SchemaMigration
         return $f['type'] === 'enum' ? 'enum:' . implode(',', $f['enum_values']) : $f['type'];
     }
 
+    /** "Workflow X (a, b)", "Enum X (a, b)" or "'string'" - plain words, the same in every language */
     private static function typeLabel(array $f): string
     {
         return $f['type'] === 'enum' ? (isset($f['workflow']) ? 'Workflow ' : 'Enum ') . ($f['enum'] ?? '') . ' ('
             . implode(', ', $f['enum_values']) . ')' : "'{$f['type']}'";
     }
 
-    /** Text for a changed {filter_by} value (only the model changes, no table, no stored selection) */
-    private static function filterChange(?array $filter): string
+    /** "Field X.y" or "Relationship X.y" */
+    private static function fieldLabel(string $class, array $f): Msg
     {
-        return $filter === null
-            ? 'Auswahl im Formular nicht mehr gefiltert ({filter_by} entfällt).'
-            : "Auswahl im Formular gefiltert nach {$filter['field']}"
-                . ($filter['field'] !== $filter['target_field'] ? " = {$filter['target_field']}" : '')
-                . ' ({filter_by}); bereits gespeicherte Zuordnungen bleiben unverändert.';
+        $params = ['field' => "$class.{$f['name']}"];
+        return $f['foreign_key']
+            ? Msg::of('msg_migration.relation_label', 'Relationship {field}', $params)
+            : Msg::of('msg_migration.field_label', 'Field {field}', $params);
+    }
+
+    private static function workflowFieldChange(Msg $label, bool $becomes): Msg
+    {
+        return $becomes
+            ? Msg::of('msg_migration.becomes_workflow', '{what}: becomes a workflow field (changes only via transitions from now on).', [
+                'what' => $label,
+            ])
+            : Msg::of('msg_migration.no_longer_workflow', '{what}: is no longer a workflow field (freely editable).', ['what' => $label]);
+    }
+
+    /** Text for a changed {filter_by} value (only the model changes, no table, no stored selection) */
+    private static function filterChange(?array $filter): Msg
+    {
+        if ($filter === null) {
+            return Msg::of('msg_migration.filter_removed', 'Selection in the form no longer filtered ({filter_by} dropped).', [
+                'filter_by' => '{filter_by}',
+            ]);
+        }
+        $params = ['field' => $filter['field'], 'target' => $filter['target_field'], 'filter_by' => '{filter_by}'];
+        return $filter['field'] !== $filter['target_field']
+            ? Msg::of('msg_migration.filter_pair', 'Selection in the form filtered by {field} = {target} ({filter_by}); assignments '
+                . 'already stored stay unchanged.', $params)
+            : Msg::of('msg_migration.filter_field', 'Selection in the form filtered by {field} ({filter_by}); assignments already stored '
+                . 'stay unchanged.', $params);
     }
 
     private static function fkSignature(array $f): string
@@ -1695,16 +1907,17 @@ final class SchemaMigration
         return $v;
     }
 
-    private static function constraintText(string $sqlMessage): string
+    /** @return Msg|string readable cause of an SQLite constraint error (other errors as they are) */
+    private static function constraintText(string $sqlMessage)
     {
         if (preg_match('/UNIQUE constraint failed: (.+)$/', $sqlMessage, $m)) {
-            return "Eindeutigkeit verletzt ($m[1] wäre doppelt)";
+            return Msg::of('msg_migration.constraint_unique', 'uniqueness violated ({columns} would be duplicated)', ['columns' => $m[1]]);
         }
         if (preg_match('/NOT NULL constraint failed: (.+)$/', $sqlMessage, $m)) {
-            return "Pflichtwert fehlt ($m[1])";
+            return Msg::of('msg_migration.constraint_not_null', 'required value missing ({column})', ['column' => $m[1]]);
         }
         if (preg_match('/CHECK constraint failed/', $sqlMessage)) {
-            return 'Wert verletzt eine Prüfregel (CHECK)';
+            return Msg::of('msg_migration.constraint_check', 'value violates a check rule (CHECK)');
         }
         return $sqlMessage;
     }

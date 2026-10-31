@@ -30,14 +30,17 @@ namespace LessHeadCMS;
  */
 final class SchemaException extends \RuntimeException
 {
+    /** @var Msg the message (getMessage() is its English text) */
+    public $msg;
     /** @var int|null (not "line": that is already the name of the line in the PHP code where the exception was created) */
     public $sourceLine;
     /** @var array|null */
     public $where;
 
-    public function __construct(string $message, ?int $line = null, ?array $where = null)
+    public function __construct(Msg $message, ?int $line = null, ?array $where = null)
     {
-        parent::__construct($message);
+        $this->msg = $message;
+        parent::__construct($message->text());
         $this->sourceLine = $line;
         $this->where = $where;
     }

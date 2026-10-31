@@ -29,6 +29,7 @@ a REST API and an editorial UI, ready to use.
 
 - [Deployment & schema editing](docs/deployment.md)
 - [PlantUML syntax reference](docs/plantuml-syntax.md)
+- [Field rules: lengths, ranges, patterns (validation)](docs/validation.md)
 - [REST API reference](docs/rest-api.md)
 - [Editorial UI](docs/editorial-ui.md)
 - [Roles and permissions](docs/roles-and-permissions.md)

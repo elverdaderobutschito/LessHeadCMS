@@ -48,6 +48,12 @@ use PDO;
  *
  * Media fields (type media) deliberately stay empty - there are no sensibly invented image/video files. This also
  * applies to required media fields (Cms::create() with $allowEmptyMedia); the result lists them under media_empty.
+ *
+ * Field rules (Validation): the values keep to them - texts are cut or extended to minLength/maxLength (for richtext the
+ * plain text counts, so such fields get plain text), numbers and dates lie within min/max. A field with {pattern: x}
+ * gets the example value of the pattern (it never invents a value that might not match). Without an example (or with
+ * one that violates another rule of the field) an optional field stays empty (result: pattern_empty), a required one
+ * means the table is skipped with a reason - no invalid data.
  */
 final class TestData
 {
@@ -82,6 +88,10 @@ final class TestData
     private $ids = [];
     /** @var array<string,int[]> only while a table is being filled: FK column with a minimum count => parent rows without a row */
     private $lacking = [];
+    /** @var Validation */
+    private $validation;
+    /** @var array<string,array> pattern library (Patterns::all()) */
+    private $patterns;
 
     /** Generated records call no webhooks (otherwise every global webhook once per record), see Cms::withoutWebhooks() */
     public function __construct(Cms $cms, PDO $pdo, array $model)
@@ -89,13 +99,17 @@ final class TestData
         $this->cms = $cms->withoutWebhooks();
         $this->pdo = $pdo;
         $this->model = $model;
+        $this->validation = new Validation($pdo);
+        $this->patterns = Patterns::all($pdo);
     }
 
     /**
      * @param array $input {"count": 10} (for all) and/or {"counts": {"<table>": n}} (individually, takes precedence)
      * @return array{created: array<string,int>, links: array<string,int>, skipped: array<string,string>,
-     *                failed: array<string,string>, order: string[], media_empty: array<string,bool>,
-     *                min_extra?: array<string,int>} (min_extra only if additional rows were created for a minimum count)
+     *                skipped_codes: object, failed: array<string,string>, failed_codes: object, order: string[],
+     *                media_empty: array<string,bool>,
+     *                min_extra?: array<string,int>, pattern_empty?: string[]} (min_extra only if additional rows were created
+     *                for a minimum count; pattern_empty only if optional {pattern} fields stayed empty, see class comment)
      */
     public function generate(array $input): array
     {
@@ -135,8 +149,8 @@ final class TestData
             }
             if (!$ready) {
                 foreach ($remaining as $t) {
-                    $skipped[$t] = 'Tabellen verweisen gegenseitig per Pflicht-Fremdschlüssel aufeinander ('
-                        . implode(', ', $remaining) . ') – die erste Zeile lässt sich so nicht anlegen.';
+                    $skipped[$t] = Msg::of('msg_testdata.mutual', 'Tables reference each other via required foreign keys ({tables}) '
+                        . '– so the first row cannot be created.', ['tables' => implode(', ', $remaining)]);
                 }
                 break;
             }
@@ -155,7 +169,7 @@ final class TestData
                     for ($i = 0; $i < $counts[$t] || $this->lackingNew($t, $newIds); $i++) {
                         $full = $this->exhaustedOneToOne($t);
                         if ($full !== null) {
-                            $failed[$t] = 'Abbruch nach ' . count($newIds[$t]) . " Zeile(n): $full";
+                            $failed[$t] = self::aborted(count($newIds[$t]), $full);
                             break;
                         }
                         $extra = $i >= $counts[$t];
@@ -168,9 +182,10 @@ final class TestData
                         }
                         $row = $this->createUnique($t, $i, max($counts[$t], $i + 1));
                         if ($row === null) {
-                            $failed[$t] = 'Abbruch nach ' . count($newIds[$t]) . ' Zeile(n): keine weitere freie '
-                                . 'Kombination für die {unique}-Felder (' . implode(', ', $this->model['entities'][$t]['unique_fields'])
-                                . ') gefunden.';
+                            $failed[$t] = self::aborted(count($newIds[$t]), Msg::of('msg_testdata.no_unique', 'no further free '
+                                . 'combination found for the {unique} fields ({fields}).', [
+                                    'unique' => '{unique}', 'fields' => implode(', ', $this->model['entities'][$t]['unique_fields']),
+                                ]));
                             break;
                         }
                         $newIds[$t][] = $row['id'];
@@ -188,8 +203,11 @@ final class TestData
                     }
                 } catch (ApiException $e) {
                     // should not happen; if it does: report it instead of aborting the whole run with half-created data
-                    $failed[$t] = 'Abbruch nach ' . count($newIds[$t]) . ' Zeile(n): ' . $e->getMessage()
-                        . (isset($e->payload['errors']) ? ' ' . json_encode($e->payload['errors'], JSON_UNESCAPED_UNICODE) : '');
+                    $failed[$t] = self::aborted(count($newIds[$t]), isset($e->payload['code']) && !isset($e->payload['errors'])
+                        ? Msg::fromArray($e->payload)
+                        : Msg::of('msg_api.plain', '{text}', [
+                            'text' => $e->getMessage() . (isset($e->payload['errors']) ? ' ' . json_encode($e->payload['errors'], JSON_UNESCAPED_UNICODE) : ''),
+                        ]));
                 }
                 $this->lacking = [];
                 $created[$t] = count($newIds[$t]);
@@ -234,10 +252,22 @@ final class TestData
             }
         }
 
+        // optional fields with {pattern} but without a usable example value: stay empty, "<table>.<field>"
+        $patternEmpty = [];
+        foreach ($newIds as $t => $rows) {
+            foreach ($rows ? $this->model['entities'][$t]['fields'] : [] as $f) {
+                if (isset($f['rules']['pattern']) && $this->patternExample($f) === null) {
+                    $patternEmpty[] = "$t.{$f['name']}";
+                }
+            }
+        }
+
         return [
-            'created' => $created, 'links' => $links, 'skipped' => $skipped, 'failed' => $failed, 'order' => $order,
-            'media_empty' => $mediaEmpty,
-        ] + ($minExtra ? ['min_extra' => $minExtra] : []);
+            'created' => $created, 'links' => $links,
+            'skipped' => self::texts($skipped), 'skipped_codes' => self::codes($skipped),
+            'failed'  => self::texts($failed), 'failed_codes' => self::codes($failed),
+            'order'   => $order, 'media_empty' => $mediaEmpty,
+        ] + ($minExtra ? ['min_extra' => $minExtra] : []) + ($patternEmpty ? ['pattern_empty' => $patternEmpty] : []);
     }
 
     /**
@@ -311,11 +341,13 @@ final class TestData
         $default = $input['count'] ?? self::DEFAULT_COUNT;
         $per = $input['counts'] ?? [];
         if (!is_array($per)) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'counts muss ein Objekt sein', 'errors' => ['counts' => 'Objekt erwartet']]);
+            throw ApiException::of(422, 'validation', Msg::of('msg_testdata.counts_object', 'counts must be an object'), ApiException::fields([
+                'counts' => Msg::of('msg_testdata.object_expected', 'Object expected'),
+            ]));
         }
         foreach (array_keys($per) as $t) {
             if (!isset($this->model['entities'][$t])) {
-                $errors[$t] = 'Unbekannte Entität';
+                $errors[$t] = Msg::of('msg_testdata.unknown_entity', 'Unknown entity');
             }
         }
         $counts = [];
@@ -323,18 +355,18 @@ final class TestData
         foreach (array_keys($this->model['entities']) as $t) {
             $v = array_key_exists($t, $per) ? $per[$t] : $default;
             if (!is_int($v) && !(is_string($v) && preg_match('/^\d+$/', $v))) {
-                $errors[$t] = 'Ganzzahl erwartet';
+                $errors[$t] = Msg::of('msg_records.int_expected', 'Integer expected');
                 continue;
             }
             $v = (int) $v;
             if ($v < 0 || $v > $max) {
-                $errors[$t] = 'Erlaubt: 0 bis ' . $max;
+                $errors[$t] = Msg::of('msg_testdata.count_range', 'Allowed: 0 to {max}', ['max' => $max]);
                 continue;
             }
             $counts[$t] = $v;
         }
         if ($errors) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Ungültige Anzahl', 'errors' => $errors]);
+            throw ApiException::of(422, 'validation', Msg::of('msg_testdata.invalid_count', 'Invalid count'), ApiException::fields($errors));
         }
         return $counts;
     }
@@ -352,16 +384,30 @@ final class TestData
     }
 
     /** Reason why no row can be created for this table via POST, otherwise null */
-    private function blocker(string $table): ?string
+    private function blocker(string $table): ?Msg
     {
+        foreach ($this->model['entities'][$table]['fields'] as $f) {
+            if ($f['required'] && isset($f['rules']['pattern']) && $this->patternExample($f) === null) {
+                $p = $this->patterns[$f['rules']['pattern']] ?? null;
+                $params = ['field' => $f['name'], 'marker' => "{pattern: {$f['rules']['pattern']}}"];
+                return $p === null || $p['example'] === null
+                    ? Msg::of('msg_testdata.pattern_no_example', "Required field '{field}' with {marker}: The pattern has no example "
+                        . 'value - please enter one under System → Settings → Patterns.', $params)
+                    : Msg::of('msg_testdata.pattern_example_bad', "Required field '{field}' with {marker}: The example value '{example}' "
+                        . 'violates another rule of the field.', $params + ['example' => $p['example']]);
+            }
+        }
         foreach ($this->model['entities'][$table]['fields'] as $f) {
             $fk = $f['foreign_key'];
             if (!$fk || !$f['required'] || $this->ids[$fk['table']]) {
                 continue;
             }
             return $fk['table'] === $table
-                ? "Pflicht-Selbstreferenz '{$f['name']}': Die erste Zeile bräuchte einen Elternteil, die Tabelle ist aber leer."
-                : "Pflicht-Fremdschlüssel '{$f['name']}' verweist auf '{$fk['table']}', dort gibt es keine Zeilen.";
+                ? Msg::of('msg_testdata.self_ref', "Required self-reference '{field}': The first row would need a parent, but the "
+                    . 'table is empty.', ['field' => $f['name']])
+                : Msg::of('msg_testdata.fk_empty', "Required foreign key '{field}' references '{table}', which has no rows.", [
+                    'field' => $f['name'], 'table' => $fk['table'],
+                ]);
         }
         return null;
     }
@@ -392,14 +438,37 @@ final class TestData
         )->fetchAll(PDO::FETCH_COLUMN));
     }
 
+    private static function aborted(int $rows, Msg $reason): Msg
+    {
+        return Msg::of('msg_testdata.aborted', 'Aborted after {rows} row(s): {reason}', ['rows' => $rows, 'reason' => $reason]);
+    }
+
+    /** @param array<string,Msg> $messages @return array<string,string> */
+    private static function texts(array $messages): array
+    {
+        return array_map(function (Msg $m) {
+            return $m->text();
+        }, $messages);
+    }
+
+    /** {table: {code, params}} next to the English texts, so that the UI shows them in the display language */
+    private static function codes(array $messages): object
+    {
+        return (object) array_map(function (Msg $m) {
+            return $m->codeOnly();
+        }, $messages);
+    }
+
     /** Reason why no further row is possible: required 1:1 column whose target table is already completely taken */
-    private function exhaustedOneToOne(string $table): ?string
+    private function exhaustedOneToOne(string $table): ?Msg
     {
         foreach ($this->model['entities'][$table]['fields'] as $f) {
             $fk = $f['foreign_key'];
             if ($fk && !empty($fk['one_to_one']) && $f['required']
                 && !array_diff($this->ids[$fk['table']], $this->usedTargets($table, $f['name']))) {
-                return "Pflicht-1:1 '{$f['name']}': alle Zeilen in '{$fk['table']}' sind bereits zugeordnet.";
+                return Msg::of('msg_testdata.one_to_one_full', "Required 1:1 '{field}': all rows in '{table}' are already assigned.", [
+                    'field' => $f['name'], 'table' => $fk['table'],
+                ]);
             }
         }
         return null;
@@ -437,22 +506,77 @@ final class TestData
         return $pool[array_rand($pool)];
     }
 
+    /**
+     * Example value of the pattern of a field, if it satisfies all rules of the field (the pattern itself included);
+     * otherwise null
+     */
+    private function patternExample(array $f): ?string
+    {
+        $example = $this->patterns[$f['rules']['pattern']]['example'] ?? null;
+        return $example !== null && !$this->validation->check($f, $example) ? $example : null;
+    }
+
     /** @return mixed */
     private function fieldValue(array $f, int $i, int $count)
     {
+        $rules = $f['rules'] ?? [];
+        if (isset($rules['pattern'])) {
+            return $this->patternExample($f); // null: optional field stays empty (a required one is caught by blocker())
+        }
+        $value = $this->rawValue($f, $i, $count);
+        if (isset($rules['minLength']) || isset($rules['maxLength'])) {
+            // richtext: the plain text counts - plain text without Markdown keeps the count exact
+            $text = $f['type'] === 'richtext' ? (string) Database::plainText((string) $value) : (string) $value;
+            $value = self::fitLength($text, $rules['minLength'] ?? 0, $rules['maxLength'] ?? null);
+        }
+        return $value;
+    }
+
+    /** Text cut to at most $max characters (at a word boundary if possible) and extended to at least $min */
+    private static function fitLength(string $text, int $min, ?int $max): string
+    {
+        if ($max !== null && mb_strlen($text) > $max) {
+            $cut = mb_substr($text, 0, $max);
+            $space = mb_strrpos($cut, ' ');
+            $text = $space !== false && $space >= max(1, $min) ? rtrim(mb_substr($cut, 0, $space)) : $cut;
+        }
+        while (mb_strlen($text) < $min) {
+            $text .= ($text === '' ? '' : ' ') . self::WORDS[array_rand(self::WORDS)];
+        }
+        if ($max !== null && mb_strlen($text) > $max) {
+            $text = mb_substr($text, 0, $max);
+        }
+        return $text;
+    }
+
+    /** @return mixed value by type, within min/max of the rules */
+    private function rawValue(array $f, int $i, int $count)
+    {
         $name = strtolower($f['name']);
+        $min = $f['rules']['min'] ?? null;
+        $max = $f['rules']['max'] ?? null;
         switch ($f['type']) {
             case 'int':
-                return mt_rand(1, 1000);
+                $lo = $min ?? ($max !== null ? min(1, $max) : 1);
+                return mt_rand($lo, $max ?? max($lo + 999, 1000));
             case 'decimal':
-                return mt_rand(500, 50000) / 100;
+                $lo = $min ?? ($max !== null ? min(5.0, $max) : 5.0);
+                $hi = $max ?? max($lo + 495, 500.0);
+                $cents = [(int) ceil($lo * 100), (int) floor($hi * 100)];
+                return $cents[0] <= $cents[1] ? mt_rand($cents[0], $cents[1]) / 100 : $lo;
             case 'bool':
                 return (bool) mt_rand(0, 1);
             case 'visibility':
                 // mostly published (~80 %), from two rows on always at least one draft
                 return !self::spread($i, $count, 0.2, 1);
             case 'date':
-                return date('Y-m-d', time() - mt_rand(0, 730) * 86400);
+                if ($min === null && $max === null) {
+                    return date('Y-m-d', time() - mt_rand(0, 730) * 86400);
+                }
+                $day = 86400;
+                $lo = $min !== null ? (int) strtotime($min . ' 12:00:00 UTC') : (int) strtotime($max . ' 12:00:00 UTC') - 730 * $day;
+                $hi = $max !== null ? (int) strtotime($max . ' 12:00:00 UTC') : max($lo, time()) + ($lo > time() ? 730 * $day : 0);
+                return gmdate('Y-m-d', $lo + mt_rand(0, (int) (($hi - $lo) / $day)) * $day);
             case 'enum':
                 return self::pick($f['enum_values']);
             case 'text':

@@ -118,7 +118,7 @@ final class ApiKeys
         if (self::$resolved !== null && hash_equals(self::$resolved[0], $token)) {
             return self::$resolved[1];
         }
-        $invalid = new ApiException(401, ['error' => 'invalid_api_key', 'message' => 'API-Schlüssel ungültig oder widerrufen']);
+        $invalid = ApiException::of(401, 'invalid_api_key', Msg::of('msg_auth.api_key_invalid', 'API key invalid or revoked'));
         if (!preg_match('/^' . self::PREFIX . '[0-9a-f]{32,128}$/', $token)
             || !Database::tableExists($pdo, 'users') || !Database::tableExists($pdo, 'api_keys')) {
             throw $invalid;
@@ -215,10 +215,10 @@ final class ApiKeys
         $stmt->execute([$userId]);
         $user = $stmt->fetch();
         if ($user === false) {
-            throw new ApiException(404, ['error' => 'not_found', 'message' => 'Nutzer nicht gefunden']);
+            throw ApiException::of(404, 'not_found', Msg::of('msg_users.not_found', 'User not found'));
         }
         if ($user['role'] !== self::ROLE) {
-            throw new ApiException(422, ['error' => 'not_api_user', 'message' => 'API-Schlüssel gibt es nur für API-Nutzer']);
+            throw ApiException::of(422, 'not_api_user', Msg::of('msg_users.api_key_only_api', 'API keys exist only for API users'));
         }
         return $user;
     }

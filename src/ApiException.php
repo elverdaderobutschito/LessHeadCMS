@@ -21,7 +21,13 @@ declare(strict_types=1);
 
 namespace LessHeadCMS;
 
-/** Error with HTTP status and JSON payload for the REST API. */
+/**
+ * Error with HTTP status and JSON payload for the REST API.
+ *
+ * Payload of every error: 'error' (machine-readable kind, e.g. validation, conflict, forbidden), 'code' + 'params' +
+ * 'message' (the English text, see Msg). Field errors additionally 'errors' {field: English text} and 'error_codes'
+ * {field: {code, params}} (fields()). Build it with of()/invalid(); the constructor takes a ready payload.
+ */
 final class ApiException extends \RuntimeException
 {
     /** @var int */
@@ -33,9 +39,33 @@ final class ApiException extends \RuntimeException
 
     public function __construct(int $status, array $payload, array $headers = [])
     {
-        parent::__construct((string) ($payload['message'] ?? $payload['error'] ?? 'API-Fehler'));
+        parent::__construct((string) ($payload['message'] ?? $payload['error'] ?? 'API error'));
         $this->status = $status;
         $this->payload = $payload;
         $this->headers = $headers;
+    }
+
+    /** Error of kind $error with the message $message; $extra: further fields (e.g. used_by, fields()) */
+    public static function of(int $status, string $error, Msg $message, array $extra = [], array $headers = []): self
+    {
+        return new self($status, ['error' => $error] + $message->fields() + $extra, $headers);
+    }
+
+    /** 422 "Invalid input" with one message per field (field => Msg); $extra: further fields */
+    public static function invalid(array $fieldErrors, array $extra = []): self
+    {
+        return self::of(422, 'validation', Msg::of('msg_api.invalid_input', 'Invalid input'), self::fields($fieldErrors) + $extra);
+    }
+
+    /** 'errors' {field: English text} and 'error_codes' {field: {code, params}} of field => Msg */
+    public static function fields(array $fieldErrors): array
+    {
+        $errors = [];
+        $codes = [];
+        foreach ($fieldErrors as $field => $message) {
+            $errors[$field] = $message->text();
+            $codes[$field] = $message->codeOnly();
+        }
+        return ['errors' => $errors, 'error_codes' => (object) $codes];
     }
 }

@@ -36,8 +36,6 @@ final class Maintenance
     /** From this age (seconds) on, a flag counts as orphaned. Default - can be changed under System → Einstellungen, see maxAge(). */
     public const MAX_AGE = 120;
 
-    public const MESSAGE = 'Wartung: Eine Schema-Migration läuft gerade. Bitte in Kürze erneut versuchen.';
-
     public static function file(): string
     {
         return Config::dataDir() . '/migration.flag';
@@ -84,7 +82,8 @@ final class Maintenance
     public static function guard(): void
     {
         if (self::active()) {
-            throw new ApiException(503, ['error' => 'maintenance', 'message' => self::MESSAGE], ['Retry-After' => '10']);
+            throw ApiException::of(503, 'maintenance', Msg::of('msg_api.maintenance',
+                'Maintenance: a schema migration is running. Please try again shortly.'), [], ['Retry-After' => '10']);
         }
     }
 

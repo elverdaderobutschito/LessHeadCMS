@@ -40,6 +40,10 @@ use PDO;
  *    no longer has a foreign key to schema_ids (schema elements are cleared explicitly by SchemaIds::delete() via
  *    deleteRefs() anyway). Tables from phase 1 are rebuilt once by ensureTables() (migrateTranslations()).
  *  - user_language_prefs: chosen display language per user (any role). Without an entry the default language applies.
+ *  - messages of the pattern library (Patterns, field rules, see Validation): kind = 'pattern', ref_id = name of the
+ *    pattern. Translatable like the schema elements (own group in elements(), CSV with kind "pattern" and the name as
+ *    ref); the default language may override the message as well. Older tables (CHECK without 'pattern') are rebuilt
+ *    once by migrateTranslations().
  *
  * The tables are created on the first write (creating a language, choosing a language); read access treats missing
  * tables as empty. An existing installation therefore does not need another bootstrap, and without multilingual
@@ -50,9 +54,13 @@ use PDO;
  *
  * Display override of the default language: names in the diagram must be ASCII-safe (veroeffentlicht), the derived
  * label is then „Veroeffentlicht“. Schema elements can therefore also be "translated" for the default language
- * (same table, language_id of the default language) - fixed UI texts cannot, they are freely editable in
- * i18n-strings.js. Displayed is (labels()): text of the display language, otherwise the override of the default
- * language, otherwise the derived label.
+ * (same table, language_id of the default language). Displayed is (labels()): text of the display language, otherwise
+ * the override of the default language, otherwise the derived label.
+ *
+ * Fixed UI texts (and codes of server messages) can be translated for every language, the default language included:
+ * there an own text overrides the built-in one. Built-in are the German source texts for a German language and the
+ * language files (BuiltinTexts: shipped translations/<code>.csv, custom files from CUSTOM_TRANSLATIONS_DIR) - read at
+ * runtime, nothing is copied into the database. Own translations always beat built-in texts; chain see publicUiTexts().
  */
 final class Languages
 {
@@ -60,7 +68,22 @@ final class Languages
     public const TRANSLATIONS = 'translations';
     public const PREFS = 'user_language_prefs';
 
-    public const KINDS = ['entity', 'field', 'relation', 'enum', 'enum_value', 'ui_text'];
+    public const KINDS = ['entity', 'field', 'relation', 'enum', 'enum_value', 'ui_text', 'pattern'];
+
+    /**
+     * Messages of the built-in patterns as the translations/en.csv of 2026-10-30 (commit 97bb66e) shipped them as kind
+     * 'pattern'. Since then they are system texts with a code (Patterns::builtinMessage()); an imported line would hide
+     * that. dropShippedPatternTexts() removes exactly these texts once - word for word, so an adapted text stays.
+     */
+    private const SHIPPED_PATTERN_TEXTS = [
+        'email' => 'Please enter a valid email address (e.g. name@example.org).',
+        'url'   => 'Please enter a complete address starting with http:// or https://.',
+        'slug'  => 'Please use only lower-case letters, digits and single hyphens (e.g. my-article).',
+        'plz'   => 'Please enter a five-digit postcode.',
+    ];
+    private const SHIPPED_PATTERN_META = 'shipped_pattern_texts_removed';
+    /** connection dropShippedPatternTexts() last looked at (one per request; held, so the comparison stays exact) */
+    private static $shippedChecked = null;
 
     /** Key of a fixed UI text: area.name, e.g. "login.submit" or "list.filter_aria" */
     public const UI_KEY_PATTERN = '/^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)+$/';
@@ -70,11 +93,11 @@ final class Languages
     private const NAME_MAX = 60;
     public const TEXT_MAX = 500;
 
-    // ref_id: schema_ids.id or, for ui_text, the key of the UI text - hence without a foreign key (see above)
+    // ref_id: schema_ids.id or, for ui_text, the key of the UI text (for pattern the name) - hence without a foreign key (see above)
     private const TRANSLATIONS_DDL = 'CREATE TABLE IF NOT EXISTS translations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   language_id INTEGER NOT NULL REFERENCES languages(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK (kind IN (\'entity\', \'field\', \'relation\', \'enum\', \'enum_value\', \'ui_text\')),
+  kind TEXT NOT NULL CHECK (kind IN (\'entity\', \'field\', \'relation\', \'enum\', \'enum_value\', \'ui_text\', \'pattern\')),
   ref_id TEXT NOT NULL,
   value TEXT NOT NULL DEFAULT \'\',
   text TEXT NOT NULL,
@@ -134,8 +157,9 @@ final class Languages
     }
 
     /**
-     * Rebuild translations from phase 1 (CHECK without 'ui_text', ref_id with a foreign key to schema_ids) once to the new
-     * definition - SQLite cannot change CHECK and foreign keys via ALTER TABLE. Create a new table,
+     * Rebuild translations from phase 1 (CHECK without 'ui_text', ref_id with a foreign key to schema_ids) and from before the
+     * pattern library (CHECK without 'pattern') once to the new definition - SQLite cannot change CHECK and foreign keys via
+     * ALTER TABLE. Create a new table,
      * copy the rows, drop the old one, rename; all in one transaction. Nothing references translations, so
      * dropping also works with foreign keys switched on.
      */
@@ -145,7 +169,7 @@ final class Languages
         $stmt->execute([self::TRANSLATIONS]);
         $sql = (string) $stmt->fetchColumn();
         $stmt->closeCursor(); // an open query would lock DROP TABLE ("database table is locked")
-        if ($sql === '' || strpos($sql, "'ui_text'") !== false) {
+        if ($sql === '' || strpos($sql, "'pattern'") !== false) {
             return;
         }
         $pdo->beginTransaction();
@@ -232,8 +256,9 @@ final class Languages
     {
         $language = self::find($pdo, $id);
         if ($language['is_default']) {
-            throw new ApiException(409, ['error' => 'default_language', 'message' => "Die Standardsprache „{$language['name']}“ kann nicht "
-                . 'gelöscht werden (sie beschreibt die Texte des Diagramms). Umbenennen ist möglich.']);
+            throw ApiException::of(409, 'default_language', Msg::of('msg_i18n.default_no_delete', 'The default language '
+                . '“{name}” cannot be deleted (it describes the texts of the diagram). Renaming is possible.',
+                ['name' => $language['name']]));
         }
         $pdo->beginTransaction();
         try {
@@ -255,7 +280,8 @@ final class Languages
     {
         $id = $body['language_id'] ?? null;
         if (!is_int($id)) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Sprache fehlt', 'errors' => ['language_id' => 'ID erwartet']]);
+            throw ApiException::of(422, 'validation', Msg::of('msg_api.language_missing', 'Language missing'),
+                ApiException::fields(['language_id' => Msg::of('msg_api.id_expected', 'ID expected')]));
         }
         self::find($pdo, $id); // 404
         self::ensureTables($pdo);
@@ -295,31 +321,45 @@ final class Languages
             unset($item);
         }
         unset($g);
-        // default language: only the overrides of the schema elements, no fixed UI texts (see class comment)
-        return ['language' => $language, 'groups' => $groups,
-            'ui_texts' => (object) ($language['is_default'] ? [] : self::uiTexts($pdo, $languageId))];
+        // fixed UI texts: an entry overrides the built-in text of the language (see class comment); ui_builtin /
+        // ui_builtin_sources: the built-in texts from the language files and where they come from (shipped | custom),
+        // german: the German source texts are built in as well
+        $builtin = BuiltinTexts::forLanguage($language);
+        return ['language' => $language, 'groups' => $groups, 'ui_texts' => (object) self::uiTexts($pdo, $languageId),
+            'ui_builtin' => (object) $builtin['texts'], 'ui_builtin_sources' => (object) $builtin['sources'],
+            'german' => self::isGerman($language)];
     }
 
     /**
-     * GET /api/_ui_texts?lang=<code>: translations of the fixed UI texts (phase 2) for the UI, also without login
-     * (login page). Language: with a session (also during the mandatory password change) that of the user, otherwise the
-     * one requested by code (the browser remembers the last one used), otherwise the default language. texts is empty for
-     * the default language and without languages - then the UI shows the German source texts from i18n-strings.js.
-     * The texts are labels of the UI, nothing confidential.
+     * GET /api/_ui_texts?lang=<code>: texts of the UI (phase 2) for the UI, also without login (login page). Language:
+     * with a session (also during the mandatory password change) that of the user, otherwise the one requested by code
+     * (the browser remembers the last one used), otherwise the default language. The texts are labels of the UI, nothing
+     * confidential.
+     *
+     * Fallback chain, the same for every fixed UI text and every code of a server message (Msg) - the UI resolves it in
+     * one place (frontend/src/components/i18n.js). Every step has three layers, the own translation on top:
+     * texts (database: import, System -> Übersetzungen) over builtin (language files, BuiltinTexts: custom file over the
+     * shipped one) over the German source texts of i18n-strings.js (german, only for a German language).
+     *  1. display language
+     *  2. default language (fallback[0], only if it is not the display language)
+     *  3. English: built-in texts of en (last entry of fallback, only if no step before is German or English - those
+     *     already cover every key)
+     *  4. server messages: the English text of the response; fixed UI texts: the German source text
+     * Without languages the UI is German (german true, no fallback), exactly as before.
      *
      * @param array|null $user logged-in user (Auth::currentUser()) or null
      */
     public static function publicUiTexts(?PDO $pdo, ?array $user, ?string $code): array
     {
-        $out = ['language' => null, 'texts' => (object) []];
+        $out = ['language' => null, 'texts' => (object) [], 'german' => true, 'builtin' => (object) [], 'fallback' => []];
         if ($pdo === null) {
             return $out;
         }
+        $languages = self::all($pdo);
         $language = null;
         if ($user !== null) {
             $language = self::current($pdo, $user['id']);
         } else {
-            $languages = self::all($pdo);
             foreach ($languages as $l) {
                 if ($code !== null && strcasecmp($l['code'], $code) === 0) {
                     $language = $l;
@@ -329,12 +369,38 @@ final class Languages
                 $language = $languages[0];
             }
         }
-        $out['language'] = $language !== null ? ['code' => $language['code'], 'name' => $language['name'],
-            'is_default' => $language['is_default']] : null;
-        if ($language !== null && !$language['is_default']) {
-            $out['texts'] = (object) self::uiTexts($pdo, $language['id']);
+        if ($language === null) {
+            return $out;
+        }
+        $step = function (array $l) use ($pdo): array {
+            return ['texts' => (object) self::uiTexts($pdo, $l['id']), 'german' => self::isGerman($l),
+                'builtin' => (object) BuiltinTexts::forLanguage($l)['texts']];
+        };
+        $out = ['language' => ['code' => $language['code'], 'name' => $language['name'], 'is_default' => $language['is_default']]]
+            + $step($language) + ['fallback' => []];
+        // English already covered: a German step (source texts for every key) or an English one (its built-in texts are en.csv)
+        $covered = $out['german'] || BuiltinTexts::match($language, 'en') > 0;
+        if (!$language['is_default']) {
+            foreach ($languages as $l) {
+                if ($l['is_default']) {
+                    $out['fallback'][] = $step($l);
+                    $covered = $covered || self::isGerman($l) || BuiltinTexts::match($l, 'en') > 0;
+                }
+            }
+        }
+        if (!$covered) {
+            $out['fallback'][] = ['texts' => (object) [], 'german' => false, 'builtin' => (object) BuiltinTexts::english()];
         }
         return $out;
+    }
+
+    /**
+     * Does a language bring the German source texts of the UI (frontend/src/i18n-strings.js)? By its code (de, de-AT,
+     * de_CH, deu, ger) or its name (Deutsch, German) - the same recognition as for the language files (BuiltinTexts::match()).
+     */
+    public static function isGerman(array $language): bool
+    {
+        return BuiltinTexts::match($language, 'de') > 0;
     }
 
     /** existing translations of fixed UI texts of a language: key => text */
@@ -358,12 +424,14 @@ final class Languages
     {
         $languageId = $body['language_id'] ?? null;
         if (!is_int($languageId)) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Sprache fehlt', 'errors' => ['language_id' => 'ID erwartet']]);
+            throw ApiException::of(422, 'validation', Msg::of('msg_api.language_missing', 'Language missing'),
+                ApiException::fields(['language_id' => Msg::of('msg_api.id_expected', 'ID expected')]));
         }
         $language = self::find($pdo, $languageId);
         $items = $body['items'] ?? null;
         if (!is_array($items) || !$items) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Keine Einträge', 'errors' => ['items' => 'Liste erwartet']]);
+            throw ApiException::of(422, 'validation', Msg::of('msg_i18n.no_items', 'No items'),
+                ApiException::fields(['items' => Msg::of('msg_i18n.list_expected', 'List expected')]));
         }
         $known = null; // schema elements, only on demand (saving UI texts only does not need a schema)
         $errors = [];
@@ -374,17 +442,12 @@ final class Languages
             $value = is_array($item) ? ($item['value'] ?? null) : null;
             $text = is_array($item) ? ($item['text'] ?? null) : null;
             if (!is_string($kind) || !is_string($ref) || ($value !== null && !is_string($value)) || ($text !== null && !is_string($text))) {
-                $errors["items.$i"] = '{kind, ref_id, value?, text} erwartet';
+                $errors["items.$i"] = Msg::of('msg_i18n.item_expected', '{kind, ref_id, value?, text} expected');
                 continue;
             }
             if ($kind === 'ui_text') {
-                if ($language['is_default']) {
-                    // default language: only display overrides of the schema elements, the UI texts live in i18n-strings.js
-                    throw new ApiException(422, ['error' => 'default_language', 'message' => 'Feste UI-Texte der Standardsprache '
-                        . 'werden nicht übersetzt - sie stehen in i18n-strings.js.']);
-                }
                 if (strlen($ref) > self::UI_KEY_MAX || !preg_match(self::UI_KEY_PATTERN, $ref) || ($value !== null && $value !== '')) {
-                    $errors["items.$i"] = 'Schlüssel eines UI-Texts erwartet (z. B. „login.submit“)';
+                    $errors["items.$i"] = Msg::of('msg_i18n.ui_key_expected', 'Key of a UI text expected (e.g. “login.submit”)');
                     continue;
                 }
             } else {
@@ -398,19 +461,20 @@ final class Languages
                     }
                 }
                 if (!isset($known[self::itemKey($kind, $ref, $value)])) {
-                    $errors["items.$i"] = 'Element gibt es im aktiven Schema nicht';
+                    $errors["items.$i"] = Msg::of('msg_i18n.element_unknown', 'The element does not exist in the active schema');
                     continue;
                 }
             }
             $text = self::normalizeText((string) $text);
             if (self::length($text) > self::TEXT_MAX) {
-                $errors["items.$i"] = 'höchstens ' . self::TEXT_MAX . ' Zeichen';
+                $errors["items.$i"] = Msg::of('msg_i18n.at_most_chars', 'at most {max} characters', ['max' => self::TEXT_MAX]);
                 continue;
             }
             $rows[] = [$kind, $ref, $kind === 'enum_value' ? (string) $value : '', $text];
         }
         if ($errors) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => count($errors) . ' Eintrag/Einträge ungültig', 'errors' => $errors]);
+            throw ApiException::of(422, 'validation', Msg::of('msg_i18n.items_invalid', '{count} item(s) invalid',
+                ['count' => count($errors)]), ApiException::fields($errors));
         }
         $saved = 0;
         $removed = 0;
@@ -597,7 +661,103 @@ final class Languages
         }
         foreach (array_chunk($ids, 500) as $chunk) {
             $in = implode(', ', array_fill(0, count($chunk), '?'));
-            $pdo->prepare("DELETE FROM translations WHERE kind <> 'ui_text' AND ref_id IN ($in)")->execute($chunk);
+            $pdo->prepare("DELETE FROM translations WHERE kind NOT IN ('ui_text', 'pattern') AND ref_id IN ($in)")->execute($chunk);
+        }
+    }
+
+    /**
+     * Messages of the pattern library in a language (Validation): name => text - own translation, otherwise the override
+     * of the default language. $language null (no languages, no user) = only the override of the default language.
+     *
+     * @return array<string,string>
+     */
+    public static function patternMessages(PDO $pdo, ?array $language): array
+    {
+        if (!Database::tableExists($pdo, self::TRANSLATIONS)) {
+            return [];
+        }
+        $ids = [self::defaultId($pdo)];
+        if ($language !== null && !$language['is_default']) {
+            $ids[] = $language['id'];
+        }
+        self::dropShippedPatternTexts($pdo);
+        $out = [];
+        $stmt = $pdo->prepare("SELECT ref_id, text FROM translations WHERE language_id = ? AND kind = 'pattern'");
+        foreach ($ids as $id) { // the own language last: it wins
+            $stmt->execute([$id]);
+            foreach ($stmt->fetchAll() as $r) {
+                $out[(string) $r['ref_id']] = (string) $r['text'];
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Once per installation, on the first read of pattern messages (patternMessages(), texts()): removes the messages of
+     * the built-in patterns that an earlier import of the bundled en.csv stored (SHIPPED_PATTERN_TEXTS) - only rows whose
+     * text is word for word the shipped one, in any language (the file could be imported into any of them). Every other
+     * text was written by the admin and stays a translation that beats the system text. Idempotent (_meta
+     * shipped_pattern_texts_removed); with a read-only database nothing happens and the next request tries again.
+     * Removed rows are written to the PHP error log.
+     */
+    private static function dropShippedPatternTexts(PDO $pdo): void
+    {
+        // inside a transaction of the caller (e.g. save()) not: the next read outside does it
+        if (self::$shippedChecked === $pdo || $pdo->inTransaction()) {
+            return;
+        }
+        self::$shippedChecked = $pdo;
+        $rows = [];
+        try {
+            if (!Database::tableExists($pdo, '_meta') || Database::getMeta($pdo, self::SHIPPED_PATTERN_META) !== null) {
+                return;
+            }
+            $where = implode(' OR ', array_fill(0, count(self::SHIPPED_PATTERN_TEXTS), '(t.ref_id = ? AND t.text = ?)'));
+            $params = [];
+            foreach (self::SHIPPED_PATTERN_TEXTS as $name => $text) {
+                array_push($params, $name, $text);
+            }
+            $stmt = $pdo->prepare("SELECT t.id, t.ref_id, l.code FROM translations t LEFT JOIN languages l ON l.id = t.language_id "
+                . "WHERE t.kind = 'pattern' AND ($where) ORDER BY t.id");
+            $stmt->execute($params);
+            $rows = $stmt->fetchAll();
+            $pdo->beginTransaction();
+            $delete = $pdo->prepare('DELETE FROM translations WHERE id = ?');
+            foreach ($rows as $r) {
+                $delete->execute([$r['id']]);
+            }
+            Database::setMeta($pdo, self::SHIPPED_PATTERN_META, (string) count($rows));
+            $pdo->commit();
+            if ($rows) {
+                error_log('[LessHeadCMS] Removed the messages of the built-in patterns imported from the former en.csv (they '
+                    . 'hid the system texts): ' . implode(', ', array_map(function (array $r): string {
+                        return "{$r['ref_id']} ({$r['code']})";
+                    }, $rows)) . '.');
+            }
+        } catch (\PDOException $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            self::$shippedChecked = null;
+            if ($rows) { // nothing to remove: no need to fill the log on every request of a read-only installation
+                error_log('[LessHeadCMS] Messages of the built-in patterns from the former en.csv not removed: ' . $e->getMessage());
+            }
+        }
+    }
+
+    /** A renamed pattern (Patterns::update(), only while unused) keeps its translations */
+    public static function renamePattern(PDO $pdo, string $old, string $new): void
+    {
+        if (Database::tableExists($pdo, self::TRANSLATIONS)) {
+            $pdo->prepare("UPDATE translations SET ref_id = ? WHERE kind = 'pattern' AND ref_id = ?")->execute([$new, $old]);
+        }
+    }
+
+    /** Translations of a deleted pattern */
+    public static function deletePattern(PDO $pdo, string $name): void
+    {
+        if (Database::tableExists($pdo, self::TRANSLATIONS)) {
+            $pdo->prepare("DELETE FROM translations WHERE kind = 'pattern' AND ref_id = ?")->execute([$name]);
         }
     }
 
@@ -615,33 +775,35 @@ final class Languages
     {
         $source = SchemaIds::activeSource($pdo);
         if ($source === null) {
-            return [];
+            return self::patternGroup($pdo);
         }
         $model = PumlParser::modelJson($source, Workflows::active($pdo));
         $ids = SchemaIds::lookup($pdo);
         $groups = [];
         $seen = [];
-        $item = function (string $kind, string $key, string $ref, string $original, string $type, ?string $value = null) use ($ids, &$seen): ?array {
+        $item = function (string $kind, string $key, string $ref, string $original, Msg $type, ?string $value = null) use ($ids, &$seen): ?array {
             if (!isset($ids[$key])) {
                 return null;
             }
             // same identifier twice (two relationships with the same label between the same classes): number them
             $n = $seen[$kind . '|' . $ref] = ($seen[$kind . '|' . $ref] ?? 0) + 1;
-            return ['kind' => $kind, 'ref_id' => $ids[$key], 'value' => $value, 'original' => $original, 'type' => $type,
-                'ref' => $n > 1 ? "$ref#$n" : $ref];
+            return ['kind' => $kind, 'ref_id' => $ids[$key], 'value' => $value, 'original' => $original, 'type' => $type->text(),
+                'type_code' => $type->codeOnly(), 'ref' => $n > 1 ? "$ref#$n" : $ref];
         };
         foreach ($model['entities'] as $e) {
             $items = [];
             if (!$e['abstract']) {
-                $items[] = $item('entity', $e['id'], $e['name'], $e['name'], 'Entität');
+                $items[] = $item('entity', $e['id'], $e['name'], $e['name'], Msg::of('msg_i18n.type_entity', 'Entity'));
             }
             foreach ($e['fields'] as $f) {
                 if (!$f['primary']) {
-                    $items[] = $item('field', $f['id'], "{$e['name']}.{$f['name']}", $f['name'], $f['type'] === 'enum' ? "Feld (Enum {$f['enum_name']})" : "Feld ({$f['type']})");
+                    $items[] = $item('field', $f['id'], "{$e['name']}.{$f['name']}", $f['name'], $f['type'] === 'enum'
+                        ? Msg::of('msg_i18n.type_enum_field', 'Field (Enum {enum})', ['enum' => $f['enum_name']])
+                        : Msg::of('msg_i18n.type_field', 'Field ({type})', ['type' => $f['type']]));
                 }
             }
             foreach ($e['media'] as $m) {
-                $items[] = $item('field', $m['id'], "{$e['name']}.{$m['name']}", $m['name'], 'Medien-Feld');
+                $items[] = $item('field', $m['id'], "{$e['name']}.{$m['name']}", $m['name'], Msg::of('msg_i18n.type_media', 'Media field'));
             }
             foreach ($model['relations'] as $r) {
                 if ($r['from_entity'] !== $e['name']) {
@@ -651,9 +813,12 @@ final class Languages
                 if ($r['kind'] !== 'nn') {
                     $original = $r['label'] !== '' ? $r['label'] : (string) preg_replace('/_id$/', '', $r['own_column']);
                     $items[] = $item('relation', $r['id'], $ref . $original, $original,
-                        ($r['kind'] === 'one_to_one' ? '1:1' : 'n:1') . "-Beziehung → {$r['to_entity']}");
+                        Msg::of('msg_i18n.type_relation', '{kind} relationship → {target}', [
+                            'kind' => $r['kind'] === 'one_to_one' ? '1:1' : 'n:1', 'target' => $r['to_entity'],
+                        ]));
                 } elseif ($r['show_label'] && $r['label'] !== '') {
-                    $items[] = $item('relation', $r['id'], $ref . $r['label'], $r['label'], "n:n-Beziehung – {$r['to_entity']}");
+                    $items[] = $item('relation', $r['id'], $ref . $r['label'], $r['label'], Msg::of('msg_i18n.type_nn',
+                        'n:n relationship – {target}', ['target' => $r['to_entity']]));
                 }
             }
             $items = array_values(array_filter($items));
@@ -662,16 +827,32 @@ final class Languages
             }
         }
         foreach ($model['enums'] as $en) {
-            $items = [$item('enum', $en['id'], $en['name'], $en['name'], 'Enum')];
+            $items = [$item('enum', $en['id'], $en['name'], $en['name'], Msg::of('msg_i18n.type_enum', 'Enum'))];
             foreach ($en['values'] as $v) {
-                $items[] = $item('enum_value', $en['id'], "{$en['name']}.$v", (string) $v, 'Enum-Wert', (string) $v);
+                $items[] = $item('enum_value', $en['id'], "{$en['name']}.$v", (string) $v, Msg::of('msg_i18n.type_enum_value', 'Enum value'), (string) $v);
             }
             $items = array_values(array_filter($items));
             if ($items) {
                 $groups[] = ['title' => $en['name'], 'kind' => 'enum', 'abstract' => false, 'items' => $items];
             }
         }
-        return $groups;
+        return array_merge($groups, self::patternGroup($pdo));
+    }
+
+    /**
+     * Group of the pattern messages (built-in and own patterns) for elements(): ref_id and ref are the name of the pattern
+     * (the same on every installation, so the CSV file is portable for the built-in ones). The original of a built-in
+     * pattern is its system text: English plus 'original_code' - the UI shows it in the display language.
+     */
+    private static function patternGroup(PDO $pdo): array
+    {
+        $items = [];
+        foreach (Patterns::all($pdo) as $p) {
+            $items[] = ['kind' => 'pattern', 'ref_id' => $p['name'], 'value' => null, 'original' => $p['message'],
+                'type' => "Pattern {$p['name']}", 'ref' => $p['name']]
+                + ($p['builtin'] ? ['original_code' => Patterns::builtinMessage($p['name'])->codeOnly()] : []);
+        }
+        return [['title' => 'Patterns', 'kind' => 'pattern', 'abstract' => false, 'items' => $items]];
     }
 
     /** existing translations of a language: itemKey() => text */
@@ -680,6 +861,7 @@ final class Languages
         if (!Database::tableExists($pdo, self::TRANSLATIONS)) {
             return [];
         }
+        self::dropShippedPatternTexts($pdo);
         $out = [];
         $stmt = $pdo->prepare("SELECT kind, ref_id, value, text FROM translations WHERE language_id = ? AND kind <> 'ui_text'");
         $stmt->execute([$languageId]);
@@ -710,7 +892,7 @@ final class Languages
             $row = $stmt->fetch();
         }
         if ($row === false) {
-            throw new ApiException(404, ['error' => 'not_found', 'message' => 'Sprache nicht gefunden']);
+            throw ApiException::of(404, 'not_found', Msg::of('msg_i18n.language_not_found', 'Language not found'));
         }
         return self::publicLanguage($row);
     }
@@ -732,10 +914,11 @@ final class Languages
             // at least one convertible placeholder outside of \ escapes, otherwise every date would show the same fixed text
             $plain = preg_replace('/\\\\./su', '', $v);
             if (self::length($v) > self::FORMAT_MAX) {
-                $errors[$key] = 'Höchstens ' . self::FORMAT_MAX . ' Zeichen';
+                $errors[$key] = Msg::of('msg_api.max_chars', 'At most {max} characters', ['max' => self::FORMAT_MAX]);
             } elseif (strpbrk((string) $plain, self::FORMAT_PLACEHOLDERS) === false) {
-                $errors[$key] = 'Format ohne Platzhalter – erwartet z. B. „' . self::FORMAT_DEFAULTS[$key] . '“ (unterstützt: '
-                    . implode(' ', str_split(self::FORMAT_PLACEHOLDERS)) . ')';
+                $errors[$key] = Msg::of('msg_i18n.format_no_placeholder', 'Format without placeholders – expected e.g. '
+                    . '“{example}” (supported: {supported})', ['example' => self::FORMAT_DEFAULTS[$key],
+                        'supported' => implode(' ', str_split(self::FORMAT_PLACEHOLDERS))]);
             }
             $out[$key] = $v;
         }
@@ -744,13 +927,15 @@ final class Languages
             $dec = self::FORMAT_DEFAULTS['decimal_separator'];
         }
         if (self::length($dec) !== 1 || preg_match('/[0-9+\-]/', $dec)) {
-            $errors['decimal_separator'] = 'Genau ein Zeichen erwartet (keine Ziffer, kein Vorzeichen), z. B. „,“ oder „.“';
+            $errors['decimal_separator'] = Msg::of('msg_i18n.decimal_separator', 'Exactly one character expected (no digit, '
+                . 'no sign), e.g. “,” or “.”');
         }
         $tho = is_string($body['thousands_separator'] ?? null) ? $body['thousands_separator'] : '';
         if (self::length($tho) > 1 || preg_match('/[0-9+\-]/', $tho)) {
-            $errors['thousands_separator'] = 'Höchstens ein Zeichen erwartet (keine Ziffer, kein Vorzeichen); leer = keine Gruppierung';
+            $errors['thousands_separator'] = Msg::of('msg_i18n.thousands_separator', 'At most one character expected (no '
+                . 'digit, no sign); empty = no grouping');
         } elseif ($tho !== '' && $tho === $dec) {
-            $errors['thousands_separator'] = 'Muss sich vom Dezimaltrennzeichen unterscheiden';
+            $errors['thousands_separator'] = Msg::of('msg_i18n.separators_equal', 'Must differ from the decimal separator');
         }
         return $out + ['decimal_separator' => $dec, 'thousands_separator' => $tho];
     }
@@ -762,20 +947,23 @@ final class Languages
         $name = is_string($body['name'] ?? null) ? trim(preg_replace('/\s+/u', ' ', $body['name']) ?? '') : '';
         $errors = [];
         if (!preg_match(self::CODE_PATTERN, $code)) {
-            $errors['code'] = 'Kürzel mit 1–20 Zeichen (Buchstaben, Ziffern, - und _), z. B. „de“ oder „en-GB“';
+            $errors['code'] = Msg::of('msg_i18n.code_invalid', 'Code of 1–20 characters (letters, digits, - and _), e.g. '
+                . '“de” or “en-GB”');
         } else {
             $stmt = $pdo->prepare('SELECT id FROM languages WHERE code = ? COLLATE NOCASE AND id IS NOT ?');
             $stmt->execute([$code, $id]);
             if ($stmt->fetchColumn()) {
-                $errors['code'] = "Das Kürzel „{$code}“ ist schon vergeben";
+                $errors['code'] = Msg::of('msg_i18n.code_taken', 'The code “{code}” is already taken', ['code' => $code]);
             }
         }
         if ($name === '' || self::length($name) > self::NAME_MAX) {
-            $errors['name'] = 'Name mit 1–' . self::NAME_MAX . ' Zeichen erwartet, z. B. „Deutsch“';
+            $errors['name'] = Msg::of('msg_i18n.name_invalid', 'Name of 1–{max} characters expected, e.g. “Deutsch”',
+                ['max' => self::NAME_MAX]);
         }
         $formats = self::validFormats($body, $errors);
         if ($errors) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Sprache ungültig', 'errors' => $errors]);
+            throw ApiException::of(422, 'validation', Msg::of('msg_i18n.language_invalid', 'Invalid language'),
+                ApiException::fields($errors));
         }
         return [$code, $name, $formats];
     }

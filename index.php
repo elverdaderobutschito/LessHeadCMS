@@ -14,6 +14,8 @@ use LessHeadCMS\Http;
 use LessHeadCMS\Languages;
 use LessHeadCMS\Maintenance;
 use LessHeadCMS\Media;
+use LessHeadCMS\Msg;
+use LessHeadCMS\Patterns;
 use LessHeadCMS\Permissions;
 use LessHeadCMS\PumlExporter;
 use LessHeadCMS\PumlParser;
@@ -62,7 +64,7 @@ if (!is_file($autoload)) {
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode([
         'status'  => 'error',
-        'message' => 'vendor/ fehlt – "composer install" ausführen bzw. den kompletten deploy/-Ordner hochladen.',
+        'message' => 'vendor/ is missing – run "composer install" or upload the complete deploy/ folder.',
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -80,12 +82,12 @@ Flight::set('flight.allow_method_override', false);
 // ------------------------------------------------------------------ Fehlerbehandlung
 
 Flight::map('notFound', function () {
-    Http::json(['error' => 'not_found', 'message' => 'Route nicht gefunden'], 404);
+    Http::json(['error' => 'not_found'] + Msg::of('msg_api.route_not_found', 'Route not found')->fields(), 404);
 });
 
 Flight::map('error', function ($e) {
     error_log('[LessHeadCMS] ' . get_class($e) . ': ' . $e->getMessage());
-    Http::jsonNow(['status' => 'error', 'message' => 'Interner Fehler'], 500);
+    Http::jsonNow(['status' => 'error'] + Msg::of('msg_api.internal_error', 'Internal error')->fields(), 500);
 });
 
 // ------------------------------------------------------------------ Frontend
@@ -93,7 +95,7 @@ Flight::map('error', function ($e) {
 Flight::route('GET /', function () {
     $index = Config::assetsDir() . '/index.html';
     if (!is_file($index)) {
-        Http::json(['status' => 'error', 'message' => 'Frontend fehlt (assets/index.html).'], 500);
+        Http::json(['status' => 'error'] + Msg::of('msg_api.frontend_missing', 'Frontend missing (assets/index.html).')->fields(), 500);
         return;
     }
     header('Content-Type: text/html; charset=utf-8');
@@ -105,13 +107,16 @@ Flight::route('GET /', function () {
 Flight::route('GET /bootstrap', function () {
     $problem = Bootstrap::tokenProblem($_GET['token'] ?? null);
     if ($problem !== null) {
-        Http::json(['status' => 'forbidden', 'message' => $problem], 403);
+        Http::json(['status' => 'forbidden'] + $problem->fields(), 403);
         return;
     }
     try {
         Http::json(Bootstrap::run($_GET['schema'] ?? null));
     } catch (ApiException $e) {
         Http::json($e->payload, $e->status);
+    } catch (SchemaException $e) {
+        // error in the diagram: English message with code + params, as everywhere in the API (status 500 as before)
+        Http::json(['status' => 'error'] + $e->msg->fields(), 500);
     } catch (\Throwable $e) {
         error_log('[LessHeadCMS] Bootstrap: ' . $e->getMessage());
         Http::json(['status' => 'error', 'message' => $e->getMessage()], 500);
@@ -170,10 +175,8 @@ Flight::route('PUT /api/users/@id:[0-9]+', function ($id) {
 
 // Löschen ist für den MVP nicht vorgesehen (Soft-Delete per PUT .../active=false statt DELETE).
 Flight::route('DELETE /api/users/@id:[0-9]+', function () {
-    Http::json([
-        'error'   => 'method_not_allowed',
-        'message' => 'Nutzer können nicht gelöscht werden – stattdessen per PUT active=false setzen',
-    ], 405);
+    Http::json(['error' => 'method_not_allowed'] + Msg::of('msg_api.users_no_delete',
+        'Users cannot be deleted – set active=false via PUT instead')->fields(), 405);
 });
 
 // ------------------------------------------------------------------ Testdaten
@@ -185,10 +188,7 @@ Flight::route('POST /api/_testdata/generate', function () {
         Maintenance::guard(); // schreibt Content - nicht während einer Schema-Migration
         $model = Database::loadModel($pdo);
         if ($model === null) {
-            throw new ApiException(503, [
-                'error'   => 'not_bootstrapped',
-                'message' => 'Datenbank noch nicht initialisiert – bitte /bootstrap?token=... aufrufen',
-            ]);
+            throw ApiException::of(503, 'not_bootstrapped', Msg::of('msg_api.not_bootstrapped', 'Database not initialised yet – please call /bootstrap?token=...'));
         }
         RecordMeta::ensure($pdo, $model);
         $model = FieldOrderUpgrade::ensure($pdo, $model);
@@ -207,10 +207,8 @@ function activeSchema(PDO $pdo): array
     $model = Database::loadModel($pdo);
     $file = $model !== null ? Database::getMeta($pdo, 'active_schema') : null;
     if ($model === null || $file === null || !is_file(Config::schemaDir() . '/' . $file)) {
-        throw new ApiException(409, [
-            'error'   => 'no_active_schema',
-            'message' => 'Kein aktives Schema gefunden - bitte zuerst /bootstrap?token=... aufrufen (legt es fest).',
-        ]);
+        throw ApiException::of(409, 'no_active_schema', Msg::of('msg_api.no_active_schema',
+            'No active schema found - please call /bootstrap?token=... first (it sets one).'));
     }
     return [$model, $file, Config::schemaDir() . '/' . $file];
 }
@@ -220,7 +218,8 @@ function schemaSource(array $body): string
 {
     $source = $body['source'] ?? null;
     if (!is_string($source) || trim($source) === '') {
-        throw new ApiException(422, ['error' => 'validation', 'message' => 'Schema-Text fehlt', 'errors' => ['source' => 'Text erwartet']]);
+        throw ApiException::of(422, 'validation', Msg::of('msg_api.schema_text_missing', 'Schema text missing'),
+            ApiException::fields(['source' => Msg::of('msg_api.text_expected', 'Text expected')]));
     }
     return $source;
 }
@@ -263,9 +262,9 @@ Flight::route('POST /api/_schema/model', function () {
             return [200, (new SchemaMigration($pdo, $active))->previewModel($source)];
         }
         try {
-            return [200, SchemaIds::decorate(PumlParser::modelJson($source), [], [])];
+            return [200, SchemaIds::decorate(PumlParser::modelJson($source, null, Patterns::names($pdo)), [], [])];
         } catch (SchemaException $e) {
-            throw new ApiException(422, ['error' => 'schema_error', 'message' => $e->getMessage()]);
+            throw ApiException::of(422, 'schema_error', $e->msg);
         }
     });
 });
@@ -278,8 +277,12 @@ Flight::route('POST /api/_schema/export', function () {
         $model = Http::body()['model'] ?? null;
         $errors = PumlExporter::check($model);
         if ($errors) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => implode(' ', array_slice($errors, 0, 5)),
-                'errors' => $errors]);
+            throw ApiException::of(422, 'validation', Msg::spaceList(array_slice($errors, 0, 5)), [
+                'errors' => array_map(function (Msg $m) {
+                    return $m->text();
+                }, $errors),
+                'error_list' => $errors,
+            ]);
         }
         return [200, ['source' => PumlExporter::toPuml($model)]];
     });
@@ -333,13 +336,15 @@ Flight::route('POST /api/_schema/restore', function () {
     Http::adminApi(function (Users $users, PDO $pdo) {
         $body = Http::body();
         if (($body['confirm'] ?? null) !== SchemaBackup::RESTORE_CONFIRM) {
-            throw new ApiException(422, ['error' => 'confirmation_required', 'message' => 'Zum Wiederherstellen bitte genau „'
-                . SchemaBackup::RESTORE_CONFIRM . '“ eintippen. Es wurde nichts geändert.',
-                'errors' => ['confirm' => SchemaBackup::RESTORE_CONFIRM . ' erwartet']]);
+            $confirm = ['confirm' => SchemaBackup::RESTORE_CONFIRM];
+            throw ApiException::of(422, 'confirmation_required', Msg::of('msg_api.restore_confirm',
+                'To restore, please type exactly “{confirm}”. Nothing was changed.', $confirm),
+                ApiException::fields(['confirm' => Msg::of('msg_api.confirm_expected', '{confirm} expected', $confirm)]));
         }
         $stamp = $body['stamp'] ?? null;
         if (!is_string($stamp) || $stamp === '') {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Sicherung fehlt', 'errors' => ['stamp' => 'Zeitstempel erwartet']]);
+            throw ApiException::of(422, 'validation', Msg::of('msg_api.backup_missing', 'Backup missing'),
+                ApiException::fields(['stamp' => Msg::of('msg_api.timestamp_expected', 'Timestamp expected')]));
         }
         $file = Database::getMeta($pdo, 'active_schema');
         $path = $file !== null && is_file(Config::schemaDir() . '/' . $file) ? Config::schemaDir() . '/' . $file : null;
@@ -361,7 +366,8 @@ function workflowCandidate(array $body): array
         return ['file' => null, 'source' => null];
     }
     if (!is_string($body['source'] ?? null)) {
-        throw new ApiException(422, ['error' => 'validation', 'message' => 'Workflow-Text fehlt', 'errors' => ['source' => 'Text erwartet']]);
+        throw ApiException::of(422, 'validation', Msg::of('msg_api.workflow_text_missing', 'Workflow text missing'),
+            ApiException::fields(['source' => Msg::of('msg_api.text_expected', 'Text expected')]));
     }
     return ['file' => Workflows::fileName($file), 'source' => $body['source']];
 }
@@ -372,8 +378,8 @@ function workflowBase(PDO $pdo): array
     [$model, , $path] = activeSchema($pdo);
     $source = SchemaIds::activeSource($pdo);
     if ($source === null) {
-        throw new ApiException(409, ['error' => 'no_active_schema', 'message' => 'Der Text des aktiven Schemas ist nicht '
-            . 'lesbar - bitte zuerst unter System → Schema „Anwenden“ ausführen.']);
+        throw ApiException::of(409, 'no_active_schema', Msg::of('msg_api.active_schema_unreadable', 'The text of the active '
+            . 'schema cannot be read - please run “Apply” under System → Schema first.'));
     }
     return [$model, $source, $path];
 }
@@ -500,7 +506,8 @@ Flight::route('GET /api/_translations', function () {
     Http::adminApi(function (Users $users, PDO $pdo) {
         $id = filter_var($_GET['language_id'] ?? null, FILTER_VALIDATE_INT);
         if ($id === false) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Sprache fehlt', 'errors' => ['language_id' => 'ID erwartet']]);
+            throw ApiException::of(422, 'validation', Msg::of('msg_api.language_missing', 'Language missing'),
+                ApiException::fields(['language_id' => Msg::of('msg_api.id_expected', 'ID expected')]));
         }
         return [200, Languages::catalog($pdo, $id)];
     }, 'translations');
@@ -520,7 +527,8 @@ Flight::route('GET /api/_translations/export', function () {
     Http::adminApi(function (Users $users, PDO $pdo) {
         $id = filter_var($_GET['lang'] ?? null, FILTER_VALIDATE_INT);
         if ($id === false) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Sprache fehlt', 'errors' => ['lang' => 'ID erwartet']]);
+            throw ApiException::of(422, 'validation', Msg::of('msg_api.language_missing', 'Language missing'),
+                ApiException::fields(['lang' => Msg::of('msg_api.id_expected', 'ID expected')]));
         }
         return [200, TranslationCsv::export($pdo, $id)];
     }, 'translations');
@@ -815,6 +823,76 @@ Flight::route('DELETE /api/_webhooks/@id:[0-9]+', function ($id) {
     });
 });
 
+// ------------------------------------------------------------------ Pattern-Bibliothek (Feldregeln)
+// System → Einstellungen → Patterns, nur role = admin (Patterns): benannte reguläre Ausdrücke für {pattern: <name>} im
+// Diagramm. GET liefert vordefinierte und eigene samt der Felder des aktiven Schemas, die sie verwenden. Body von POST/PUT:
+// {name, regex, message, example}. Vordefinierte sind schreibgeschützt (sie haben keine id).
+function patternsApi(callable $handler): void
+{
+    Http::adminApi(function (Users $users, PDO $pdo, array $admin) use ($handler) {
+        return $handler($pdo, Database::loadModel($pdo), $admin);
+    });
+}
+
+Flight::route('GET /api/_patterns', function () {
+    patternsApi(function (PDO $pdo, ?array $model, array $admin) {
+        return [200, Patterns::overview($pdo, $model, $admin)];
+    });
+});
+
+Flight::route('POST /api/_patterns', function () {
+    patternsApi(function (PDO $pdo, ?array $model) {
+        Maintenance::guardWrite();
+        return [201, Patterns::create($pdo, $model, Http::body())];
+    });
+});
+
+// Testfeld: Body {regex, value} -> {valid, error?, match, client, complex}; speichert nichts
+Flight::route('POST /api/_patterns/test', function () {
+    patternsApi(function (PDO $pdo) {
+        return [200, Patterns::test(Http::body())];
+    });
+});
+
+// Hinweise am Regex-Feld beim Tippen: Body {regex} -> {valid, error?, client, complex} (Syntax, Belastungsprobe, im Browser
+// prüfbar?); speichert nichts
+Flight::route('POST /api/_patterns/check', function () {
+    patternsApi(function (PDO $pdo) {
+        return [200, Patterns::check(Http::body())];
+    });
+});
+
+// Vor dem Speichern einer geänderten Regex: Body {name, regex} -> betroffene Datensätze je Feld (now/after); ändert nichts
+Flight::route('POST /api/_patterns/impact', function () {
+    patternsApi(function (PDO $pdo, ?array $model) {
+        return [200, Patterns::impact($pdo, $model, Http::body())];
+    });
+});
+
+Flight::route('PUT /api/_patterns/@id:[0-9]+', function ($id) {
+    patternsApi(function (PDO $pdo, ?array $model) use ($id) {
+        Maintenance::guardWrite();
+        return [200, Patterns::update($pdo, $model, (int) $id, Http::body())];
+    });
+});
+
+// 409, solange ein Feld des aktiven Schemas das Pattern verwendet (used_by nennt die Felder)
+Flight::route('DELETE /api/_patterns/@id:[0-9]+', function ($id) {
+    patternsApi(function (PDO $pdo, ?array $model) use ($id) {
+        Maintenance::guardWrite();
+        return [200, Patterns::delete($pdo, $model, (int) $id)];
+    });
+});
+
+// Regelverstöße (Cms::ruleViolations()): alle Datensätze, die die aktuellen Feldregeln verletzen, jedes Mal neu berechnet.
+// Admins oder Systembereich "violations"; gesperrte Entitäten und Felder des Nutzers fehlen. ?limit=1..5000 (Standard 1000).
+Flight::route('GET /api/_violations', function () {
+    Http::userApi(function (Cms $cms) {
+        $limit = isset($_GET['limit']) && ctype_digit((string) $_GET['limit']) ? max(1, min(5000, (int) $_GET['limit'])) : 1000;
+        return [200, $cms->ruleViolations($limit)];
+    }, 'violations');
+});
+
 // Eigene effektive Berechtigungen (jede Rolle, mit Session): Abweichungen vom Standard - gesperrte Entitäten und Felder,
 // freigegebene Systembereiche. Die Oberfläche blendet danach die System-Einträge der Sidebar ein.
 Flight::route('GET /api/_permissions/me', function () {
@@ -913,15 +991,28 @@ Flight::route('GET /api/@entity/@id:[0-9]+', function ($entity, $id) {
     Http::api(function (Cms $cms, PDO $pdo) use ($entity, $id) {
         $row = $cms->find($entity, (int) $id);
         if ($cms->isDraft($entity, $row) && !Auth::canSeeDrafts($pdo)) {
-            throw new ApiException(404, ['error' => 'not_found', 'message' => 'Datensatz nicht gefunden']);
+            throw ApiException::of(404, 'not_found', Msg::of('msg_api.record_not_found', 'Record not found'));
         }
         return [200, $row];
     });
 });
 
-Flight::route('PUT /api/@entity/@id:[0-9]+', function ($entity, $id) {
-    Http::api(function (Cms $cms) use ($entity, $id) {
-        return [200, $cms->update($entity, (int) $id, Http::body())];
+// PUT und PATCH sind gleich: beide teilweise (nicht mitgeschickte Felder behalten ihren Wert), geprüft wird der zusammengeführte
+// Datensatz (Feldregeln, siehe Validation) - 422 mit errors und violations
+foreach (['PUT', 'PATCH'] as $method) {
+    Flight::route("$method /api/@entity/@id:[0-9]+", function ($entity, $id) {
+        Http::api(function (Cms $cms) use ($entity, $id) {
+            return [200, $cms->update($entity, (int) $id, Http::body())];
+        });
+    });
+}
+
+// Regelverstöße des gespeicherten Datensatzes (Feldregeln aus dem Diagramm): das Formular markiert betroffene Felder schon
+// beim Öffnen. Nur mit Session (redaktioneller Hinweis, Entwürfe), ohne gesperrte Felder.
+Flight::route('GET /api/@entity/@id:[0-9]+/_violations', function ($entity, $id) {
+    Http::api(function (Cms $cms, PDO $pdo) use ($entity, $id) {
+        Auth::requireSession($pdo);
+        return [200, $cms->recordViolations($entity, (int) $id)];
     });
 });
 

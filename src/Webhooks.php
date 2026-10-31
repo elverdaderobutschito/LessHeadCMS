@@ -150,7 +150,7 @@ final class Webhooks
     {
         self::ensure($pdo);
         $row = self::row($pdo, $id);
-        self::guardUse($model, (string) $row['name'], 'gelöscht');
+        self::guardUse($model, (string) $row['name'], false);
         $pdo->prepare('DELETE FROM lh_webhook_call WHERE webhook_id = ?')->execute([$id]);
         $pdo->prepare('DELETE FROM lh_webhook WHERE id = ?')->execute([$id]);
         return ['deleted' => $id];
@@ -162,7 +162,7 @@ final class Webhooks
         $stmt->execute([$id]);
         $row = $stmt->fetch();
         if ($row === false) {
-            throw new ApiException(404, ['error' => 'not_found', 'message' => 'Webhook nicht gefunden']);
+            throw ApiException::of(404, 'not_found', Msg::of('msg_webhooks.not_found', 'Webhook not found'));
         }
         return $row;
     }
@@ -181,7 +181,7 @@ final class Webhooks
                     'at' => (string) $c['at'], 'event' => (string) $c['event'],
                     'record_id' => $c['record_id'] !== null ? (int) $c['record_id'] : null, 'ok' => (int) $c['ok'] === 1,
                     'http_status' => $c['http_status'] !== null ? (int) $c['http_status'] : null,
-                    'error' => $c['error'] !== null ? (string) $c['error'] : null,
+                ] + self::callError($c['error']) + [
                     'duration_ms' => $c['duration_ms'] !== null ? (int) $c['duration_ms'] : null,
                 ];
             }, $calls->fetchAll()),
@@ -202,38 +202,40 @@ final class Webhooks
         $errors = [];
         $name = is_string($body['name'] ?? null) ? trim($body['name']) : '';
         if (!preg_match(WorkflowParser::WEBHOOK_NAME, $name)) {
-            $errors['name'] = 'Name aus Buchstaben, Ziffern, _ und - erwartet, mit einem Buchstaben beginnend (höchstens 50 Zeichen)';
+            $errors['name'] = Msg::of('msg_webhooks.name_invalid', 'Name of letters, digits, _ and - expected, starting with a letter (at most 50 characters)');
         }
         $url = is_string($body['url'] ?? null) ? trim($body['url']) : '';
         $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
         if ($url === '' || strlen($url) > self::URL_MAX || preg_match('/\s/', $url) || filter_var($url, FILTER_VALIDATE_URL) === false
             || !in_array($scheme, ['http', 'https'], true)) {
-            $errors['url'] = 'Vollständige Adresse mit http:// oder https:// erwartet';
+            $errors['url'] = Msg::of('msg_webhooks.url_invalid', 'Full address with http:// or https:// expected');
         }
         $token = $body['token'] ?? '';
         $token = is_string($token) ? trim($token) : null;
         if ($token === null || strlen($token) > self::TOKEN_MAX || !preg_match('/^[\x21-\x7E]*$/', $token)) {
-            $errors['token'] = 'Höchstens ' . self::TOKEN_MAX . ' Zeichen ohne Leerzeichen und Umlaute (der Token wird als Header gesendet)';
+            $errors['token'] = Msg::of('msg_webhooks.token_invalid', 'At most {max} characters without spaces and umlauts (the token is sent as a header)', [
+                'max' => self::TOKEN_MAX,
+            ]);
             $token = '';
         }
         $events = $body['events'] ?? [];
         if (!is_array($events) || array_diff($events, self::EVENTS) !== [] || count($events) !== count(array_unique($events, SORT_REGULAR))) {
-            $errors['events'] = 'Liste aus ' . implode(', ', self::EVENTS) . ' erwartet';
+            $errors['events'] = Msg::of('msg_webhooks.events_expected', 'List of {events} expected', ['events' => implode(', ', self::EVENTS)]);
             $events = [];
         }
         $events = array_values(array_intersect(self::EVENTS, $events)); // fixed order
         $entities = $body['entities'] ?? null;
         if ($entities !== null) {
             if (!is_array($entities) || array_filter($entities, 'is_string') !== $entities) {
-                $errors['entities'] = 'null (alle Entitäten) oder eine Liste von Entitäten erwartet';
+                $errors['entities'] = Msg::of('msg_webhooks.entities_expected', 'null (all entities) or a list of entities expected');
                 $entities = null;
             } else {
                 $entities = array_values(array_unique(array_map('strtolower', $entities)));
                 $unknown = array_diff($entities, array_keys($model['entities'] ?? []));
                 if ($unknown) {
-                    $errors['entities'] = "Unbekannte Entität '" . implode("', '", $unknown) . "'";
+                    $errors['entities'] = Msg::of('msg_webhooks.entities_unknown', "Unknown entity '{entities}'", ['entities' => implode("', '", $unknown)]);
                 } elseif ($events && !$entities) {
-                    $errors['entities'] = 'Mindestens eine Entität auswählen (oder alle)';
+                    $errors['entities'] = Msg::of('msg_webhooks.entities_none', 'Select at least one entity (or all)');
                 }
                 sort($entities);
             }
@@ -242,31 +244,34 @@ final class Webhooks
             $entities = null; // only triggered by workflows: a selection would have no effect
         }
         if ($errors) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Ungültige Eingabe', 'errors' => $errors]);
+            throw ApiException::invalid($errors);
         }
         $stmt = $pdo->prepare('SELECT id FROM lh_webhook WHERE name = ? COLLATE NOCASE AND id != ?');
         $stmt->execute([$name, $current !== null ? $current['id'] : 0]);
         if ($stmt->fetchColumn() !== false) {
-            throw new ApiException(409, ['error' => 'conflict', 'message' => "Einen Webhook '$name' gibt es schon.",
-                'errors' => ['name' => 'bereits vergeben']]);
+            throw ApiException::of(409, 'conflict', Msg::of('msg_webhooks.exists', "A webhook '{name}' already exists.", ['name' => $name]),
+                ApiException::fields(['name' => Msg::of('msg_api.taken', 'already taken')]));
         }
         if ($current !== null && WorkflowParser::fold($current['name']) !== WorkflowParser::fold($name)) {
-            self::guardUse($model, $current['name'], 'umbenannt');
+            self::guardUse($model, $current['name'], true);
         }
         return ['name' => $name, 'url' => $url, 'token' => $token, 'events' => $events, 'entities' => $entities];
     }
 
     /** 409 if the active workflow file calls the webhook (it would then call a webhook that no longer exists) */
-    private static function guardUse(array $model, string $name, string $what): void
+    private static function guardUse(array $model, string $name, bool $rename): void
     {
         $refs = self::refs($model, $name);
         if ($refs) {
-            $where = implode(', ', array_map(function ($r) {
-                return "{$r['workflow']}, Transition '{$r['transition']}' ({$r['from']} -> {$r['to']})";
+            $where = Msg::commaList(array_map(function ($r) {
+                return Msg::of('msg_webhooks.ref', "{workflow}, transition '{transition}' ({from} -> {to})", $r);
             }, $refs));
-            throw new ApiException(409, ['error' => 'in_use', 'workflow_refs' => $refs, 'message' => "Der Webhook '$name' kann nicht "
-                . "$what werden: Die aktive Workflow-Datei ruft ihn auf ($where). Bitte zuerst dort action=webhook:$name entfernen "
-                . 'bzw. anpassen und die Workflow-Datei anwenden.']);
+            $message = $rename
+                ? Msg::of('msg_webhooks.in_use_rename', "The webhook '{name}' cannot be renamed: the active workflow file calls it "
+                    . '({where}). Please first remove or adjust action=webhook:{name} there and apply the workflow file.', ['name' => $name, 'where' => $where])
+                : Msg::of('msg_webhooks.in_use_delete', "The webhook '{name}' cannot be deleted: the active workflow file calls it "
+                    . '({where}). Please first remove or adjust action=webhook:{name} there and apply the workflow file.', ['name' => $name, 'where' => $where]);
+            throw ApiException::of(409, 'in_use', $message, ['workflow_refs' => $refs]);
         }
     }
 
@@ -341,8 +346,10 @@ final class Webhooks
             foreach ($wf['transitions'] as $ti => $t) {
                 foreach (self::workflowNames($t) as $name) {
                     if (!isset($known[WorkflowParser::fold($name)])) {
-                        $missing[] = "Workflow '{$wf['name']}', Transition '{$t['label']}' ({$t['from']} -> {$t['to']}): Webhook '$name' "
-                            . 'aus action= gibt es nicht';
+                        $missing[] = Msg::of('msg_webhooks.missing', "Workflow '{workflow}', transition '{transition}' ({from} -> {to}): "
+                            . "webhook '{name}' from action= does not exist", [
+                                'workflow' => $wf['name'], 'transition' => $t['label'], 'from' => $t['from'], 'to' => $t['to'], 'name' => $name,
+                            ]);
                         $pos = $positions[$wfKey][$ti] ?? [];
                         $lines[] = $pos['action:' . WorkflowParser::WEBHOOK . ':' . WorkflowParser::fold($name)] ?? $pos['line'] ?? null;
                     }
@@ -351,9 +358,13 @@ final class Webhooks
         }
         if ($missing) {
             $more = count($missing) - 10;
-            throw new ApiException(422, ['error' => 'schema_error', 'message' => implode('; ', array_slice($missing, 0, 10))
-                . ($more > 0 ? " und $more weitere" : '') . '. Bitte unter System → Einstellungen → Webhooks anlegen oder die '
-                . 'Workflow-Datei anpassen.'] + Workflows::linePayload($lines));
+            $items = Msg::semicolonList(array_slice($missing, 0, 10));
+            $message = $more > 0
+                ? Msg::of('msg_webhooks.missing_list_more', '{items} and {more} more. Please create them under System → Settings → '
+                    . 'Webhooks or adjust the workflow file.', ['items' => $items, 'more' => $more])
+                : Msg::of('msg_webhooks.missing_list', '{items}. Please create them under System → Settings → Webhooks or adjust '
+                    . 'the workflow file.', ['items' => $items]);
+            throw ApiException::of(422, 'schema_error', $message, Workflows::linePayload($lines));
         }
     }
 
@@ -577,27 +588,56 @@ final class Webhooks
         return is_object($handle) ? spl_object_id($handle) : (int) $handle;
     }
 
-    /** Readable cause of a failed call (German, like the rest of the UI messages), the curl text appended */
-    private static function curlError(int $code, string $text, int $timeout): string
+    /** Readable cause of a failed call, the curl text appended as detail */
+    private static function curlError(int $code, string $text, int $timeout): Msg
     {
-        $what = [
-            CURLE_OPERATION_TIMEDOUT => "Zeitüberschreitung (keine Antwort innerhalb von $timeout s)",
-            CURLE_COULDNT_CONNECT => 'Verbindung abgelehnt bzw. nicht möglich',
-            CURLE_COULDNT_RESOLVE_HOST => 'Host nicht gefunden',
-            CURLE_SSL_CONNECT_ERROR => 'TLS-Verbindung fehlgeschlagen',
-        ][$code] ?? 'Aufruf fehlgeschlagen';
-        return $what . ' – ' . $text;
+        $detail = self::shorten($text);
+        switch ($code) {
+            case CURLE_OPERATION_TIMEDOUT:
+                return Msg::of('msg_webhooks.call_timeout', 'Timeout (no response within {seconds} s) – {detail}', [
+                    'seconds' => $timeout, 'detail' => $detail,
+                ]);
+            case CURLE_COULDNT_CONNECT:
+                return Msg::of('msg_webhooks.call_refused', 'Connection refused or not possible – {detail}', ['detail' => $detail]);
+            case CURLE_COULDNT_RESOLVE_HOST:
+                return Msg::of('msg_webhooks.call_host', 'Host not found – {detail}', ['detail' => $detail]);
+            case CURLE_SSL_CONNECT_ERROR:
+                return Msg::of('msg_webhooks.call_tls', 'TLS connection failed – {detail}', ['detail' => $detail]);
+        }
+        return Msg::of('msg_webhooks.call_failed', 'Call failed – {detail}', ['detail' => $detail]);
     }
 
-    /** @return array{ok:bool,status:?int,error:?string,ms:int} */
-    private static function result(?string $error, ?int $status, int $ms): array
+    /**
+     * Error of a call for the history: stored as JSON {code, params, message} (Msg), so that the UI shows it in the display
+     * language. Rows from before that hold plain text, which is passed on as it is.
+     *
+     * @return array{ok:bool,status:?int,error:?string,ms:int}
+     */
+    private static function result(?Msg $error, ?int $status, int $ms): array
     {
         $ok = $error === null && $status !== null && $status < 400;
         if ($error === null && $status === null) {
-            $error = 'Keine gültige HTTP-Antwort';
+            $error = Msg::of('msg_webhooks.call_no_response', 'No valid HTTP response');
         }
         return ['ok' => $ok, 'status' => $error === null ? $status : null,
-            'error' => $error !== null ? self::shorten($error) : null, 'ms' => $ms];
+            'error' => $error !== null ? json_encode($error, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : null, 'ms' => $ms];
+    }
+
+    /**
+     * 'error' (English text) and 'error_code' ({code, params}, null for old plain-text rows) of a stored call error
+     *
+     * @return array{error:?string,error_code:?array}
+     */
+    private static function callError($stored): array
+    {
+        if ($stored === null) {
+            return ['error' => null, 'error_code' => null];
+        }
+        $data = json_decode((string) $stored, true);
+        if (is_array($data) && is_string($data['code'] ?? null) && is_string($data['message'] ?? null)) {
+            return ['error' => $data['message'], 'error_code' => ['code' => $data['code'], 'params' => (object) ($data['params'] ?? [])]];
+        }
+        return ['error' => (string) $stored, 'error_code' => null];
     }
 
     /** At most ERROR_MAX characters, valid UTF-8 (curl texts may contain anything) */
@@ -636,6 +676,8 @@ final class Webhooks
             }
         }
         $ms = (int) round((microtime(true) - $start) * 1000);
-        return self::result($status === null ? ('Aufruf fehlgeschlagen – ' . ($error ?? 'unbekannter Fehler')) : null, $status, $ms);
+        return self::result($status === null ? Msg::of('msg_webhooks.call_failed', 'Call failed – {detail}', [
+            'detail' => $error !== null ? self::shorten($error) : Msg::of('msg_webhooks.unknown_error', 'unknown error'),
+        ]) : null, $status, $ms);
     }
 }

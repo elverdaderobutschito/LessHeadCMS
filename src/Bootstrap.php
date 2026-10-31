@@ -27,17 +27,17 @@ final class Bootstrap
      * Checks ?token=... against BOOTSTRAP_TOKEN from config.php.
      *
      * @param mixed $given
-     * @return string|null null = access allowed, otherwise the error message for the 403 response
+     * @return Msg|null null = access allowed, otherwise the error message for the 403 response
      */
-    public static function tokenProblem($given): ?string
+    public static function tokenProblem($given): ?Msg
     {
         $expected = Config::bootstrapToken();
         if ($expected === null) {
-            return 'BOOTSTRAP_TOKEN ist nicht konfiguriert - config.php anlegen (Vorlage: config.example.php), '
-                . 'mindestens 16 Zeichen.';
+            return Msg::of('msg_bootstrap.token_missing', 'BOOTSTRAP_TOKEN is not configured - create config.php (template: '
+                . 'config.example.php), at least 16 characters.');
         }
         if (!is_string($given) || !hash_equals($expected, $given)) {
-            return 'Ungültiges oder fehlendes Token.';
+            return Msg::of('msg_bootstrap.token_invalid', 'Invalid or missing token.');
         }
         return null;
     }
@@ -59,10 +59,8 @@ final class Bootstrap
             || strpos($given, '..') !== false
             || basename($given) !== $given
         ) {
-            throw new ApiException(400, [
-                'error'   => 'schema_invalid',
-                'message' => 'Der Parameter schema darf nur einen reinen Dateinamen enthalten (kein Pfad).',
-            ]);
+            throw ApiException::of(400, 'schema_invalid', Msg::of('msg_bootstrap.schema_param_path',
+                'The parameter schema may only contain a plain file name (no path).'));
         }
         return $given;
     }
@@ -85,10 +83,8 @@ final class Bootstrap
         sort($available);
 
         if ($requested !== null && !in_array($requested, $available, true)) {
-            throw new ApiException(404, [
-                'error'   => 'schema_not_found',
-                'message' => "Datei '" . $requested . "' nicht in schema/ gefunden.",
-            ]);
+            throw ApiException::of(404, 'schema_not_found', Msg::of('msg_bootstrap.schema_not_found',
+                "File '{file}' not found in schema/.", ['file' => $requested]));
         }
         if (!$available) {
             return ['status' => 'no_schema_found'];
@@ -105,7 +101,7 @@ final class Bootstrap
             if (file_exists($lock)) {
                 return ['status' => 'locked'];
             }
-            throw new \RuntimeException('Lock-Datei kann nicht angelegt werden.');
+            throw new \RuntimeException('The lock file cannot be created.');
         }
         fclose($handle);
 
@@ -117,12 +113,12 @@ final class Bootstrap
             $file = self::chooseFile($requested, $available, Database::getMeta($pdo, 'active_schema'));
             $source = file_get_contents(Config::schemaDir() . '/' . $file);
             if ($source === false) {
-                throw new \RuntimeException('Schema-Datei kann nicht gelesen werden.');
+                throw new \RuntimeException('The schema file cannot be read.');
             }
             $hash = hash('sha256', $source);
 
             if ($stored === null) {
-                $model = PumlParser::parse($source);
+                $model = PumlParser::parse($source, null, Patterns::names($pdo)); // {pattern: x}: built-in ones at first
                 $statements = SqlGenerator::createStatements($model);
 
                 $pdo->beginTransaction();
@@ -163,11 +159,8 @@ final class Bootstrap
                     FieldOrderUpgrade::ensure($pdo, $model);
                 }
             } else {
-                return [
-                    'status'  => 'migration_needed',
-                    'schema'  => $file,
-                    'message' => 'Schema hat sich geändert, manuelle Migration erforderlich',
-                ];
+                return ['status' => 'migration_needed', 'schema' => $file] + Msg::of('msg_bootstrap.migration_needed',
+                    'The schema has changed, a manual migration is required')->fields();
             }
 
             // the users table + admin are not part of the PlantUML schema and are always ensured
@@ -194,10 +187,7 @@ final class Bootstrap
         if ($active !== null && in_array($active, $available, true)) {
             return $active;
         }
-        throw new ApiException(400, [
-            'error'     => 'schema_ambiguous',
-            'message'   => 'Mehrere Schema-Dateien gefunden, bitte mit ?schema=<dateiname> angeben.',
-            'available' => $available,
-        ]);
+        throw ApiException::of(400, 'schema_ambiguous', Msg::of('msg_bootstrap.schema_ambiguous',
+            'Several schema files found, please choose one with ?schema=<file name>.'), ['available' => $available]);
     }
 }

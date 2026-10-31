@@ -22,3 +22,9 @@ define('BOOTSTRAP_TOKEN', 'CHANGE_ME_TO_A_LONG_RANDOM_STRING');
 // with 413 instead of exhausting PHP memory. Default: one tenth of the free memory_limit, at most 16 MB.
 // A size saved in the admin area (System -> Einstellungen, in MB; 0 there = automatic) takes precedence over this one.
 // define('LIST_MAX_BYTES', 8 * 1024 * 1024);
+
+// Optional: own language files of this installation (e.g. of an agency). Every <code>.csv in this directory (same format
+// as translations/en.csv) counts as the built-in texts of its language - without an import - and beats the shipped
+// file of the same language per key. The directory is not part of the delivery; an update never touches it. Keep it
+// out of public reach: outside the webroot, or protected like data/ (see docs/deployment.md, nginx).
+// define('CUSTOM_TRANSLATIONS_DIR', __DIR__ . '/custom_translations');

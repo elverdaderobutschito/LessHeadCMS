@@ -93,13 +93,16 @@ final class Workflows
     public static function fileName($name): string
     {
         if (is_string($name) && self::hasOldExt($name)) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Workflow-Dateien enden auf ' . self::EXT
-                . ' (nicht mehr auf ' . self::OLD_EXT . ').', 'errors' => ['file' => 'Endung ' . self::EXT . ' erwartet',
-                'name' => 'Endung ' . self::EXT . ' erwartet']]);
+            $expected = Msg::of('msg_workflows.ext_expected', 'Extension {ext} expected', ['ext' => self::EXT]);
+            throw ApiException::of(422, 'validation', Msg::of('msg_workflows.old_ext', 'Workflow files end in {ext} (no longer in {old}).', [
+                'ext' => self::EXT, 'old' => self::OLD_EXT,
+            ]), ApiException::fields(['file' => $expected, 'name' => $expected]));
         }
         if (!is_string($name) || !preg_match(self::FILE_NAME, $name) || strlen($name) > self::NAME_MAX) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Ungültiger Dateiname (erlaubt: Buchstaben, '
-                . 'Ziffern, _ und -, Endung ' . self::EXT . ').', 'errors' => ['file' => 'Dateiname wie artikel.lhwf erwartet']]);
+            throw ApiException::of(422, 'validation', Msg::of('msg_workflows.file_name_invalid', 'Invalid file name (allowed: letters, '
+                . 'digits, _ and -, extension {ext}).', ['ext' => self::EXT]), ApiException::fields([
+                'file' => Msg::of('msg_workflows.file_name_expected', 'File name like artikel.lhwf expected'),
+            ]));
         }
         return $name;
     }
@@ -175,7 +178,9 @@ final class Workflows
         $active = self::activeFile($pdo) === $name;
         if (!is_file($path)) {
             if (!$active) {
-                throw new ApiException(404, ['error' => 'not_found', 'message' => "Die Workflow-Datei '$name' gibt es nicht."]);
+                throw ApiException::of(404, 'not_found', Msg::of('msg_workflows.file_not_found', "The workflow file '{name}' does not exist.", [
+                    'name' => $name,
+                ]));
             }
             $source = (string) Database::getMeta($pdo, 'workflow_source'); // active file is missing in the folder
             return ['file' => $name, 'source' => $source, 'active' => true, 'file_matches_active' => false, 'missing' => true];
@@ -200,13 +205,14 @@ final class Workflows
         }
         $name = self::fileName(preg_replace('/\.lhwf$/i', self::EXT, $name));
         if (!self::ensureDir() || !is_writable(self::dir())) {
-            throw new ApiException(500, ['error' => 'workflow_not_writable', 'message' => 'Der Ordner schema/workflows/ kann '
-                . 'nicht angelegt bzw. beschrieben werden - bitte Schreibrechte prüfen.']);
+            throw ApiException::of(500, 'workflow_not_writable', Msg::of('msg_workflows.not_writable', 'The folder schema/workflows/ cannot '
+                . 'be created or written - please check the write permissions.'));
         }
         $handle = @fopen(self::dir() . '/' . $name, 'x'); // atomic: fails if the file already exists
         if ($handle === false) {
-            throw new ApiException(409, ['error' => 'conflict', 'message' => "Die Workflow-Datei '$name' gibt es schon.",
-                'errors' => ['name' => 'bereits vorhanden']]);
+            throw ApiException::of(409, 'conflict', Msg::of('msg_workflows.file_exists', "The workflow file '{name}' already exists.", [
+                'name' => $name,
+            ]), ApiException::fields(['name' => Msg::of('msg_workflows.exists_short', 'already exists')]));
         }
         fclose($handle);
         return ['file' => $name, 'source' => '', 'active' => false, 'file_matches_active' => true];
@@ -309,7 +315,6 @@ final class Workflows
             }
         }
         $known['role'][WorkflowParser::fold(Permissions::ADMIN_ROLE)] = true; // built-in, also before the first call of the rights management
-        $what = ['group' => 'Gruppe', 'role' => 'Rolle', 'user' => 'Nutzer'];
         $missing = [];
         $lines = [];
         foreach ($workflows as $wfKey => $wf) {
@@ -322,8 +327,18 @@ final class Workflows
                 }
                 foreach ($refs as [$key, $ref]) {
                     if (!isset($known[$ref['type']][WorkflowParser::fold($ref['name'])])) {
-                        $missing[] = "Workflow '{$wf['name']}', Transition '{$t['label']}' ({$t['from']} -> {$t['to']}): "
-                            . "{$what[$ref['type']]} '{$ref['name']}' aus $key= gibt es nicht";
+                        $params = ['workflow' => $wf['name'], 'transition' => $t['label'], 'from' => $t['from'], 'to' => $t['to'],
+                            'name' => $ref['name'], 'key' => $key];
+                        if ($ref['type'] === 'group') {
+                            $missing[] = Msg::of('msg_workflows.missing_group', "Workflow '{workflow}', transition '{transition}' "
+                                . "({from} -> {to}): group '{name}' from {key}= does not exist", $params);
+                        } elseif ($ref['type'] === 'role') {
+                            $missing[] = Msg::of('msg_workflows.missing_role', "Workflow '{workflow}', transition '{transition}' "
+                                . "({from} -> {to}): role '{name}' from {key}= does not exist", $params);
+                        } else {
+                            $missing[] = Msg::of('msg_workflows.missing_user', "Workflow '{workflow}', transition '{transition}' "
+                                . "({from} -> {to}): user '{name}' from {key}= does not exist", $params);
+                        }
                         $pos = $positions[$wfKey][$ti] ?? [];
                         $lines[] = $pos[$key] ?? $pos['line'] ?? null;
                     }
@@ -332,9 +347,13 @@ final class Workflows
         }
         if ($missing) {
             $more = count($missing) - 10;
-            throw new ApiException(422, ['error' => 'schema_error', 'message' => implode('; ', array_slice($missing, 0, 10))
-                . ($more > 0 ? " und $more weitere" : '') . '. Bitte unter System → Rechteverwaltung anlegen oder die Workflow-Datei '
-                . 'anpassen.'] + self::linePayload($lines));
+            $items = Msg::semicolonList(array_slice($missing, 0, 10));
+            $message = $more > 0
+                ? Msg::of('msg_workflows.missing_list_more', '{items} and {more} more. Please create them under System → Rights '
+                    . 'management or adjust the workflow file.', ['items' => $items, 'more' => $more])
+                : Msg::of('msg_workflows.missing_list', '{items}. Please create them under System → Rights management or adjust '
+                    . 'the workflow file.', ['items' => $items]);
+            throw ApiException::of(422, 'schema_error', $message, self::linePayload($lines));
         }
     }
 

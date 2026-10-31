@@ -54,7 +54,7 @@ final class Http
         }
         $data = json_decode($raw, true);
         if (!is_array($data)) {
-            throw new ApiException(400, ['error' => 'invalid_json', 'message' => 'Request-Body ist kein gültiges JSON-Objekt']);
+            throw ApiException::of(400, 'invalid_json', Msg::of('msg_api.invalid_json', 'The request body is not a valid JSON object'));
         }
         return $data;
     }
@@ -78,10 +78,7 @@ final class Http
         try {
             $model = Database::loadModel();
             if ($model === null) {
-                throw new ApiException(503, [
-                    'error'   => 'not_bootstrapped',
-                    'message' => 'Datenbank noch nicht initialisiert – bitte /bootstrap?token=... aufrufen',
-                ]);
+                throw ApiException::of(503, 'not_bootstrapped', Msg::of('msg_api.not_bootstrapped', 'Database not initialised yet – please call /bootstrap?token=...'));
             }
             $pdo = Database::connect();
             RecordMeta::ensure($pdo, $model); // installations from before the tracking metadata (once)
@@ -102,7 +99,7 @@ final class Http
             self::apiError($e);
         } catch (\Throwable $e) {
             error_log('[LessHeadCMS] ' . get_class($e) . ': ' . $e->getMessage());
-            self::json(['error' => 'internal_error', 'message' => 'Interner Fehler'], 500);
+            self::json(['error' => 'internal_error'] + Msg::of('msg_api.internal_error', 'Internal error')->fields(), 500);
         }
     }
 
@@ -121,10 +118,7 @@ final class Http
             \Flight::response()->header('Cache-Control', 'no-store');
             $pdo = Database::connectIfExists();
             if ($pdo === null || !Database::tableExists($pdo, 'users')) {
-                throw new ApiException(503, [
-                    'error'   => 'not_bootstrapped',
-                    'message' => 'Datenbank noch nicht initialisiert – bitte /bootstrap?token=... aufrufen',
-                ]);
+                throw ApiException::of(503, 'not_bootstrapped', Msg::of('msg_api.not_bootstrapped', 'Database not initialised yet – please call /bootstrap?token=...'));
             }
             if ($systable === null) {
                 $admin = Auth::requireAdmin($pdo);
@@ -142,7 +136,7 @@ final class Http
             self::apiError($e);
         } catch (\Throwable $e) {
             error_log('[LessHeadCMS] ' . get_class($e) . ': ' . $e->getMessage());
-            self::json(['error' => 'internal_error', 'message' => 'Interner Fehler'], 500);
+            self::json(['error' => 'internal_error'] + Msg::of('msg_api.internal_error', 'Internal error')->fields(), 500);
         }
     }
 
@@ -160,10 +154,7 @@ final class Http
             \Flight::response()->header('Cache-Control', 'no-store');
             $model = Database::loadModel();
             if ($model === null) {
-                throw new ApiException(503, [
-                    'error'   => 'not_bootstrapped',
-                    'message' => 'Datenbank noch nicht initialisiert – bitte /bootstrap?token=... aufrufen',
-                ]);
+                throw ApiException::of(503, 'not_bootstrapped', Msg::of('msg_api.not_bootstrapped', 'Database not initialised yet – please call /bootstrap?token=...'));
             }
             $pdo = Database::connect();
             RecordMeta::ensure($pdo, $model);
@@ -171,7 +162,7 @@ final class Http
             $user = Auth::requireSession($pdo);
             $access = Permissions::access($pdo, $user, $model);
             if ($systable !== null && $access !== null && !$access->systable($systable)) {
-                throw new ApiException(403, ['error' => 'forbidden', 'message' => 'Keine Berechtigung für diesen Bereich']);
+                throw ApiException::of(403, 'forbidden', Msg::of('msg_api.forbidden_area', 'No permission for this area'));
             }
             Maintenance::guardWrite(); // media library, column selection: writes get 503 while a schema migration is running
             [$status, $payload] = $handler(new Cms($pdo, $model, $access, $user), $pdo, $user);
@@ -180,7 +171,7 @@ final class Http
             self::apiError($e);
         } catch (\Throwable $e) {
             error_log('[LessHeadCMS] ' . get_class($e) . ': ' . $e->getMessage());
-            self::json(['error' => 'internal_error', 'message' => 'Interner Fehler'], 500);
+            self::json(['error' => 'internal_error'] + Msg::of('msg_api.internal_error', 'Internal error')->fields(), 500);
         }
     }
 
@@ -226,7 +217,7 @@ final class Http
             self::apiError($e);
         } catch (\Throwable $e) {
             error_log('[LessHeadCMS] ' . get_class($e) . ': ' . $e->getMessage());
-            self::json(['error' => 'internal_error', 'message' => 'Interner Fehler'], 500);
+            self::json(['error' => 'internal_error'] + Msg::of('msg_api.internal_error', 'Internal error')->fields(), 500);
         }
     }
 }

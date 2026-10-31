@@ -38,7 +38,7 @@ use PDO;
  *   enum_value,Status.OFFEN,Open
  *
  * ui_text: ref is the key from i18n-strings.js - the same on every installation, so the file is portable (this is how
- * translations/en.csv ships with the product). Schema elements are bound in the database to the stable ID from
+ * translations/en.csv ships with the product; the shipped and custom files act without an import, see BuiltinTexts). Schema elements are bound in the database to the stable ID from
  * schema_ids, which differs per installation; the CSV therefore names them via the readable identifier from
  * Languages::elements() ('ref', from the names of the diagram). On import it is resolved via exactly this list of the
  * active schema - no second matching logic. If a line matches no element (different project, field renamed), it is
@@ -67,11 +67,9 @@ final class TranslationCsv
         $language = Languages::find($pdo, $languageId);
         SchemaIds::ensure($pdo);
         $rows = [];
-        // default language: only display overrides of the schema elements (it has no fixed UI texts)
-        if (!$language['is_default']) {
-            foreach (Languages::uiTexts($pdo, $languageId) as $key => $text) {
-                $rows[] = ['ui_text', (string) $key, $text];
-            }
+        // the default language too: there they override the built-in texts
+        foreach (Languages::uiTexts($pdo, $languageId) as $key => $text) {
+            $rows[] = ['ui_text', (string) $key, $text];
         }
         $texts = Languages::texts($pdo, $languageId);
         foreach (Languages::elements($pdo) as $g) {
@@ -168,7 +166,8 @@ final class TranslationCsv
     {
         $languageId = $body['language_id'] ?? null;
         if (!is_int($languageId)) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Ziel-Sprache fehlt', 'errors' => ['language_id' => 'ID erwartet']]);
+            throw ApiException::of(422, 'validation', Msg::of('msg_i18n.target_language_missing', 'Target language missing'),
+                ApiException::fields(['language_id' => Msg::of('msg_api.id_expected', 'ID expected')]));
         }
         $language = Languages::find($pdo, $languageId);
         [$content, $file] = self::source($pdo, $body);
@@ -186,24 +185,21 @@ final class TranslationCsv
         foreach ($records as [$line, $rec]) {
             $kind = trim((string) ($rec[0] ?? ''));
             $ref = trim((string) ($rec[1] ?? ''));
-            $skip = function (string $reason) use (&$plan, $line, $kind, $ref): void {
-                $plan['skipped'][] = ['line' => $line, 'kind' => $kind, 'ref' => $ref, 'reason' => $reason];
+            $skip = function (Msg $reason) use (&$plan, $line, $kind, $ref): void {
+                $plan['skipped'][] = ['line' => $line, 'kind' => $kind, 'ref' => $ref] + $reason->fields('reason');
             };
             if (count($rec) < 3) {
-                $skip('Drei Spalten erwartet (kind, ref, text)');
+                $skip(Msg::of('msg_i18n.csv_three_columns', 'Three columns expected (kind, ref, text)'));
                 continue;
             }
             if (!in_array($kind, Languages::KINDS, true)) {
-                $skip("Unbekannte Art „{$kind}“ (erlaubt: " . implode(', ', Languages::KINDS) . ')');
+                $skip(Msg::of('msg_i18n.csv_kind_unknown', 'Unknown kind “{kind}” (allowed: {allowed})',
+                    ['kind' => $kind, 'allowed' => implode(', ', Languages::KINDS)]));
                 continue;
             }
             if ($kind === 'ui_text') {
-                if ($language['is_default']) {
-                    $skip('Feste UI-Texte der Standardsprache werden nicht übersetzt (sie stehen in i18n-strings.js)');
-                    continue;
-                }
                 if (strlen($ref) > Languages::UI_KEY_MAX || !preg_match(Languages::UI_KEY_PATTERN, $ref)) {
-                    $skip("„{$ref}“ ist kein Schlüssel eines UI-Texts (z. B. „login.submit“)");
+                    $skip(Msg::of('msg_i18n.csv_not_ui_key', '“{ref}” is not the key of a UI text (e.g. “login.submit”)', ['ref' => $ref]));
                     continue;
                 }
                 $refId = $ref;
@@ -220,7 +216,7 @@ final class TranslationCsv
                 }
                 $item = $known[$kind . '|' . $ref] ?? null;
                 if ($item === null) {
-                    $skip("Element „{$ref}“ im aktuellen Schema nicht gefunden");
+                    $skip(Msg::of('msg_i18n.csv_element_unknown', 'Element “{ref}” not found in the current schema', ['ref' => $ref]));
                     continue;
                 }
                 $refId = $item['ref_id'];
@@ -228,16 +224,16 @@ final class TranslationCsv
             }
             $text = Languages::normalizeText((string) $rec[2]);
             if ($text === '') {
-                $skip('Leerer Text (eine vorhandene Übersetzung bleibt bestehen)');
+                $skip(Msg::of('msg_i18n.csv_empty', 'Empty text (an existing translation stays)'));
                 continue;
             }
             if (Languages::length($text) > Languages::TEXT_MAX) {
-                $skip('Text länger als ' . Languages::TEXT_MAX . ' Zeichen');
+                $skip(Msg::of('msg_i18n.csv_too_long', 'Text longer than {max} characters', ['max' => Languages::TEXT_MAX]));
                 continue;
             }
             $key = Languages::itemKey($kind, $refId, $value);
             if (isset($seen[$key])) {
-                $skip("Doppelt – steht schon in Zeile {$seen[$key]}");
+                $skip(Msg::of('msg_i18n.csv_duplicate', 'Duplicate – already in line {line}', ['line' => $seen[$key]]));
                 continue;
             }
             $seen[$key] = $line;
@@ -262,8 +258,9 @@ final class TranslationCsv
         $file = $body['file'] ?? null;
         $content = $body['content'] ?? null;
         if (($file === null) === ($content === null) || ($file !== null && !is_string($file)) || ($content !== null && !is_string($content))) {
-            throw new ApiException(422, ['error' => 'validation', 'message' => 'Entweder den Inhalt einer CSV-Datei (content) oder '
-                . 'eine Datei aus translations/ (file) angeben', 'errors' => ['content' => 'Text erwartet']]);
+            throw ApiException::of(422, 'validation', Msg::of('msg_i18n.csv_source', 'Give either the content of a CSV file '
+                . '(content) or a file from translations/ (file)'),
+                ApiException::fields(['content' => Msg::of('msg_api.text_expected', 'Text expected')]));
         }
         if ($file === null) {
             self::checkSize($pdo, strlen($content));
@@ -272,12 +269,13 @@ final class TranslationCsv
         // only a file name from the directory, no paths
         $path = Config::translationsDir() . '/' . $file;
         if (!preg_match(self::FILE_PATTERN, $file) || !is_file($path)) {
-            throw new ApiException(404, ['error' => 'not_found', 'message' => 'Datei in translations/ nicht gefunden']);
+            throw ApiException::of(404, 'not_found', Msg::of('msg_i18n.csv_file_not_found', 'File not found in translations/'));
         }
         self::checkSize($pdo, (int) filesize($path));
         $content = @file_get_contents($path);
         if ($content === false) {
-            throw new ApiException(409, ['error' => 'unreadable', 'message' => "translations/{$file} ist nicht lesbar (Dateirechte prüfen)"]);
+            throw ApiException::of(409, 'unreadable', Msg::of('msg_i18n.csv_unreadable',
+                'translations/{file} cannot be read (check the file permissions)', ['file' => $file]));
         }
         return [$content, $file];
     }
@@ -286,25 +284,25 @@ final class TranslationCsv
     {
         $mb = (int) Settings::get($pdo, Settings::TRANSLATIONS_CSV_MAX_MB);
         if ($bytes > $mb * 1048576) {
-            throw new ApiException(422, ['error' => 'too_large', 'message' => 'Die CSV-Datei ist zu groß (höchstens '
-                . $mb . ' MB)']);
+            throw ApiException::of(422, 'too_large', Msg::of('msg_i18n.csv_too_large',
+                'The CSV file is too large (at most {mb} MB)', ['mb' => $mb]));
         }
     }
 
     /**
      * CSV text -> data lines [[line number, columns], …] without header line and empty lines. Allowed are a BOM at the
      * beginning and ";" instead of "," as the separator (this is how Excel saves with German settings); 422 if the text is
-     * not UTF-8 or the header line is missing.
+     * not UTF-8 or the header line is missing. Also reads the language files of the built-in texts (BuiltinTexts).
      *
      * @return array<int,array{0:int,1:array}>
      */
-    private static function parse(string $content): array
+    public static function parse(string $content): array
     {
         if (strncmp($content, "\xEF\xBB\xBF", 3) === 0) {
             $content = substr($content, 3);
         }
         if (preg_match('//u', $content) !== 1) {
-            throw new ApiException(422, ['error' => 'invalid_csv', 'message' => 'Die Datei ist nicht UTF-8-kodiert.']);
+            throw ApiException::of(422, 'invalid_csv', Msg::of('msg_i18n.csv_not_utf8', 'The file is not UTF-8 encoded.'));
         }
         $first = (string) strtok(ltrim($content), "\r\n");
         $delimiter = substr_count($first, ';') > substr_count($first, ',') ? ';' : ',';
@@ -332,8 +330,8 @@ final class TranslationCsv
         }
         fclose($h);
         if ($header !== self::HEADER) {
-            throw new ApiException(422, ['error' => 'invalid_csv', 'message' => 'Keine Übersetzungs-CSV: Die erste Zeile muss '
-                . '„kind,ref,text“ lauten.']);
+            throw ApiException::of(422, 'invalid_csv', Msg::of('msg_i18n.csv_header',
+                'Not a translation CSV: the first line must be “kind,ref,text”.'));
         }
         return $records;
     }

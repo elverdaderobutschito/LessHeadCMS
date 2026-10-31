@@ -63,15 +63,15 @@ final class FieldOrderUpgrade
             }
             $upgraded = self::upgraded($model, $source);
             if (is_string($upgraded)) {
-                self::finish($pdo, 'skipped', "Feldreihenfolge nicht nachgerüstet ($upgraded) - sie wird mit dem nächsten "
-                    . '„Anwenden“ einer Schema-Änderung übernommen.');
+                self::finish($pdo, 'skipped', "Field order not upgraded ($upgraded) - it is taken over with the next "
+                    . '"Apply" of a schema change.');
                 return $model;
             }
             $file = Config::schemaDir() . '/' . (Database::getMeta($pdo, 'active_schema') ?? '');
             try {
-                $backup = SchemaBackup::create($pdo, $file, 'das Nachrüsten der Feldreihenfolge');
+                $backup = SchemaBackup::create($pdo, $file, Msg::of('msg_backup.action_field_order', 'the field order upgrade'));
             } catch (ApiException $e) {
-                self::finish($pdo, 'skipped', 'Feldreihenfolge nicht nachgerüstet: Schema-Sicherung fehlgeschlagen ('
+                self::finish($pdo, 'skipped', 'Field order not upgraded: schema backup failed ('
                     . ($e->payload['message'] ?? $e->getMessage()) . ').');
                 return $model;
             }
@@ -80,8 +80,8 @@ final class FieldOrderUpgrade
             Database::setMeta($pdo, self::META_KEY, 'done');
             $pdo->commit();
             SchemaBackup::rotate(Settings::get($pdo, Settings::SCHEMA_BACKUP_KEEP));
-            error_log('[LessHeadCMS] Feldreihenfolge (field_order, Formular-Abschnitte) für ' . count($upgraded['entities'])
-                . " Entität(en) nachgerüstet; Sicherung data/schema-backups/{$backup['stamp']}_*.");
+            error_log('[LessHeadCMS] Field order (field_order, form sections) upgraded for ' . count($upgraded['entities'])
+                . " entities; backup data/schema-backups/{$backup['stamp']}_*.");
             return $upgraded;
         } finally {
             flock($lock, LOCK_UN);
@@ -105,10 +105,10 @@ final class FieldOrderUpgrade
         try {
             $parsed = PumlParser::parse($source, $model['workflows'] ?? null);
         } catch (SchemaException $e) {
-            return 'gespeichertes Schema nicht lesbar: ' . $e->getMessage();
+            return 'stored schema not readable: ' . $e->getMessage();
         }
         if (SqlGenerator::createStatements($parsed) !== SqlGenerator::createStatements($model)) {
-            return 'die Tabellen des gespeicherten Modells weichen vom Schema ab';
+            return 'the tables of the stored model differ from the schema';
         }
         foreach ($model['entities'] as $table => &$e) {
             $p = $parsed['entities'][$table];
@@ -118,7 +118,7 @@ final class FieldOrderUpgrade
             sort($names);
             sort($order);
             if ($names !== $order) {
-                return "die Felder von {$e['name']} weichen vom Schema ab";
+                return "the fields of {$e['name']} differ from the schema";
             }
             $e['field_order'] = $p['field_order'];
             if (!empty($p['sections'])) {

@@ -18,9 +18,9 @@ Apache) see [nginx without Apache](#nginx-without-apache).
 ├── schema/                 class diagrams *.puml; simplecms.puml is the example schema
 │   └── workflows/          workflow files *.lhwf (at runtime: via FTP or via System → Workflows; .htaccess blocks everything)
 ├── assets/                 editorial UI (index.html with its JavaScript and CSS bundles)
-├── translations/           language files (CSV) for the import; bundled: en.csv (not public, .htaccess blocks everything)
+├── translations/           shipped language files (CSV): en.csv acts as built-in English texts, other files only for the import (not public, .htaccess blocks everything)
 ├── templates/              model templates: example diagrams *.puml with explanations, see templates/README.md (not used at runtime)
-├── data/                   SQLite file, lock, sessions/ (at runtime, blocked via .htaccess)
+├── data/                   SQLite file, lock, sessions/, cache/ (at runtime, blocked via .htaccess)
 ├── media/                  files of the media library (at runtime, public; .htaccess blocks any script execution)
 ├── LICENSE                 license of LessHeadCMS (AGPL-3.0-or-later)
 ├── third-party-licenses/   license texts of the bundled third-party libraries, README.md lists them
@@ -46,6 +46,32 @@ and on `media/` (uploaded files of the media library) – the same as for `data/
 on the first upload, including `.htaccess`. This folder never contains a real `config.php`; uploading it again therefore
 does not overwrite yours.
 
+### Custom language files
+
+Own language files of the installation (e.g. an agency's French texts or adapted English ones) live in a directory of
+their own, never in `translations/` (an update replaces that one). Every `<code>.csv` there acts as the built-in text of
+its language, without an import, and beats the shipped file of the same language per key – details in
+[Multilingual – built-in translations from files](multilingual.md#built-in-translations-from-files-three-sources).
+
+1. Enter the directory in `config.php` (optional; without it nothing happens):
+
+   ```php
+   define('CUSTOM_TRANSLATIONS_DIR', __DIR__ . '/custom_translations');
+   // better, if the hoster allows it: outside the webroot
+   // define('CUSTOM_TRANSLATIONS_DIR', dirname(__DIR__) . '/lhc-translations');
+   ```
+
+2. Create the directory via FTP and put the files there (`fr.csv`, `en.csv`, … in the format of `translations/en.csv`).
+   PHP only needs read permissions there.
+3. **Protect it like `data/`:** with Apache the main `.htaccess` already routes `custom_translations/` to `index.php`
+   (not retrievable). As defence in depth copy `translations/.htaccess` into the directory. With nginx add
+   `location ^~ /custom_translations/ { deny all; }` (see below) – or keep the directory outside the webroot, then there
+   is nothing to protect.
+
+Updates: the delivery (`deploy/`) never contains this directory, uploading a new version therefore leaves it untouched,
+and `./build.sh assemble` keeps an existing `deploy/custom_translations/`. Changed files take effect on the next request
+(cache in `data/cache/` by modification time and size); faulty lines are skipped and written to the PHP error log.
+
 ## nginx without Apache
 
 The directory protection of LessHeadCMS lives in `.htaccess` files. Only Apache reads them – **nginx ignores
@@ -67,6 +93,7 @@ The nginx block below reproduces exactly this, no more and no less:
 | `data/` (database, `sessions/`, `schema-backups/`, lock) | not retrievable: the main `.htaccess` routes it to `index.php`, in addition `data/.htaccess` denies everything |
 | `schema/`, `schema/workflows/` | not retrievable (main `.htaccess`; `schema/workflows/.htaccess` denies everything) |
 | `translations/` | not retrievable (main `.htaccess`; `translations/.htaccess` denies everything and switches off script handlers) |
+| `custom_translations/` (if used, see [Custom language files](#custom-language-files)) | not retrievable (main `.htaccess`; put a copy of `translations/.htaccess` there as well) |
 | `src/`, `vendor/`, `config.php` | not retrievable and not executable directly (main `.htaccess`) |
 | `templates/` | not retrievable (main `.htaccess`); model templates to read or copy via FTP, not used at runtime |
 | `media/` | **public** by design (see "Media library files are public" under [Important notes](#important-notes)): files are served directly, but no directory listing, no script execution, executable or server-side interpreted extensions (`.php`, `.phtml`, `.phar`, `.cgi`, `.pl`, `.py`, `.sh`, `.asp`, `.jsp`, `.htaccess`, `.ini`, …) → `403`, `X-Content-Type-Options: nosniff`, SVG with `Content-Security-Policy: … sandbox` |
@@ -88,6 +115,7 @@ For an installation in the docroot (in a subfolder, prefix every path, e.g. `/cm
 location ^~ /data/         { deny all; }
 location ^~ /schema/       { deny all; }
 location ^~ /translations/ { deny all; }
+location ^~ /custom_translations/ { deny all; }   # only if CUSTOM_TRANSLATIONS_DIR lies in the docroot
 location ^~ /templates/    { deny all; }
 location ^~ /src/          { deny all; }
 location ^~ /vendor/       { deny all; }
@@ -158,6 +186,7 @@ before relying on it. `data/cms.sqlite` only exists after `/bootstrap`, so check
 curl -I https://<host>/data/cms.sqlite
 curl -I https://<host>/schema/simplecms.puml      # or another .puml that is in schema/
 curl -I https://<host>/translations/en.csv
+curl -I https://<host>/custom_translations/fr.csv # only if you use custom language files in the docroot
 curl -I https://<host>/src/Config.php
 curl -I https://<host>/media/test.php             # need not exist: the extension alone is enough for 403
 
@@ -251,8 +280,8 @@ The active diagram of an **already populated** installation can be edited as tex
    **Maintenance flag:** from the beginning of the transaction until COMMIT or rollback, `data/migration.flag` exists (content:
    Unix timestamp, `src/Maintenance.php`). Meanwhile, content write access – `POST`/`PUT`/`DELETE` on
    `/api/{entity}`, the media library (upload, edit, delete), the column selection and the test data generator – is rejected with
-   `503 {"error": "maintenance", "message": "Wartung: Eine Schema-Migration läuft gerade. Bitte in Kürze erneut
-   versuchen."}` and `Retry-After: 10`. Reading (`GET`) stays unaffected (readers see the old state until the
+   `503 {"error": "maintenance", "message": "Maintenance: a schema migration is running. Please try again shortly.",
+   "code": "msg_api.maintenance", "params": {}}` and `Retry-After: 10`. Reading (`GET`) stays unaffected (readers see the old state until the
    COMMIT). The flag is removed again in any case; if it stays behind after a hard abort (e.g. `max_execution_time`),
    it counts as orphaned after **2 minutes** (`Maintenance::MAX_AGE`; changeable under System → Einstellungen, „Wartungssperre gilt höchstens“) and is ignored. The same flag applies during
    a restore.
