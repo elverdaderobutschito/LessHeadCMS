@@ -8,6 +8,7 @@ use LessHeadCMS\Bootstrap;
 use LessHeadCMS\Cms;
 use LessHeadCMS\ColumnPrefs;
 use LessHeadCMS\Config;
+use LessHeadCMS\DataDir;
 use LessHeadCMS\Database;
 use LessHeadCMS\FieldOrderUpgrade;
 use LessHeadCMS\Http;
@@ -783,6 +784,44 @@ Flight::route('PUT /api/_settings', function () {
     Http::adminApi(function (Users $users, PDO $pdo) {
         Maintenance::guardWrite();
         return [200, Settings::update($pdo, Http::body())];
+    });
+});
+
+// ------------------------------------------------------------------ Speicherort der Datenbank (DataDir)
+// System → Einstellungen → System & Wartung, nur role = admin: aktueller Ort (innerhalb/außerhalb des Webroots), Prüfen und
+// Umziehen in ein anderes Verzeichnis (DATA_DIR in config.php), Abbrechen eines Umzugs, der noch auf config.php wartet, und
+// Löschen der alten Kopie nach dem Umzug (nur mit {"confirm": true}).
+Flight::route('GET /api/_datadir', function () {
+    Http::adminApi(function () {
+        return [200, DataDir::status()];
+    });
+});
+
+// Body {"path": "../data"} -> 200 Prüfergebnis (ändert nichts), 422 mit Feldfehler "path", 409 bei wartendem Umzug
+Flight::route('POST /api/_datadir/check', function () {
+    Http::adminApi(function () {
+        return [200, DataDir::plan(Http::body()['path'] ?? null)];
+    });
+});
+
+// Body {"path": "../data"} -> 200 {status: moved|pending_config, …}; schlägt ein Schritt fehl, bleibt alles beim Alten.
+// Ist config.php nicht beschreibbar, zusätzlich {"confirm_readonly": true} (sonst 422, nichts passiert)
+Flight::route('POST /api/_datadir/move', function () {
+    Http::adminApi(function (Users $users, PDO $pdo) {
+        $body = Http::body();
+        return [200, DataDir::move($pdo, $body['path'] ?? null, $body['confirm_readonly'] ?? null)];
+    });
+});
+
+Flight::route('POST /api/_datadir/cancel', function () {
+    Http::adminApi(function () {
+        return [200, DataDir::cancel()];
+    });
+});
+
+Flight::route('POST /api/_datadir/cleanup', function () {
+    Http::adminApi(function () {
+        return [200, DataDir::cleanup(Http::body()['confirm'] ?? null)];
     });
 });
 

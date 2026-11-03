@@ -28,3 +28,10 @@ define('BOOTSTRAP_TOKEN', 'CHANGE_ME_TO_A_LONG_RANDOM_STRING');
 // file of the same language per key. The directory is not part of the delivery; an update never touches it. Keep it
 // out of public reach: outside the webroot, or protected like data/ (see docs/deployment.md, nginx).
 // define('CUSTOM_TRANSLATIONS_DIR', __DIR__ . '/custom_translations');
+
+// Optional: storage location of the database, its backups (schema-backups/) and the sessions. Default: data/ next to
+// index.php (protected by data/.htaccess with Apache). A relative path counts from the LessHeadCMS folder, e.g. '../data'
+// outside the webroot. Do not change this by hand on a running installation - use System -> Einstellungen -> System &
+// Wartung -> "Speicherort der Datenbank": it moves the database there first and then writes this line itself (see
+// docs/deployment.md, "Storing the database outside the webroot"). media/ always stays next to index.php.
+// define('DATA_DIR', '../data');

@@ -282,6 +282,6 @@ final class Users
 
     private static function isUniqueViolation(PDOException $ex): bool
     {
-        return (string) $ex->getCode() === '23000';
+        return Database::isConstraintViolation($ex);
     }
 }

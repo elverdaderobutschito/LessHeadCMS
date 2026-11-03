@@ -17,6 +17,8 @@ return array(
     'LessHeadCMS\\Cms' => $baseDir . '/src/Cms.php',
     'LessHeadCMS\\ColumnPrefs' => $baseDir . '/src/ColumnPrefs.php',
     'LessHeadCMS\\Config' => $baseDir . '/src/Config.php',
+    'LessHeadCMS\\DataDir' => $baseDir . '/src/DataDir.php',
+    'LessHeadCMS\\DataDirTestAbort' => $baseDir . '/src/DataDirTestAbort.php',
     'LessHeadCMS\\Database' => $baseDir . '/src/Database.php',
     'LessHeadCMS\\Download' => $baseDir . '/src/Download.php',
     'LessHeadCMS\\FieldOrderUpgrade' => $baseDir . '/src/FieldOrderUpgrade.php',

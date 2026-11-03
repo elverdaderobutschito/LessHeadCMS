@@ -462,7 +462,7 @@ ui_text,rights.api_key_new,New API key. It is shown only now – please copy it 
 ui_text,rights.api_key_read_only,Read only
 ui_text,rights.api_key_read_only_hint,"Writing requests (POST, PUT, DELETE) are refused – regardless of all assigned permissions. Takes effect immediately."
 ui_text,testdata.heading,Test data
-ui_text,testdata.intro,"Generates {additional} records with random content for the selected entities. Existing data stays unchanged – nothing is reset or deleted. For an empty database, delete {file} as before and call {bootstrap} again."
+ui_text,testdata.intro,"Generates {additional} records with random content for the selected entities. Existing data stays unchanged – nothing is reset or deleted. For an empty database, delete the database as before and call {bootstrap} again."
 ui_text,testdata.intro_additional,additional
 ui_text,testdata.col_entity,Entity
 ui_text,testdata.col_count,Count
@@ -794,6 +794,7 @@ ui_text,schema_check.name_missing,Name is missing.
 ui_text,schema_check.name_chars,"Only letters, digits and _ (no umlauts), not starting with a digit."
 ui_text,schema_check.name_underscore,Must not start with _.
 ui_text,schema_check.reserved,“{name}” is reserved.
+ui_text,schema_check.reserved_prefix,“{name}” starts with {prefix} – reserved for system tables.
 ui_text,schema_check.class_exists,A class “{name}” already exists.
 ui_text,schema_check.enum_exists,An enum “{name}” already exists.
 ui_text,schema_check.package_invalid,"Package name is missing or contains ""."
@@ -992,6 +993,34 @@ ui_text,settings.group_webhooks,Calling the webhooks
 ui_text,settings.webhook_timeout_seconds,Longest wait
 ui_text,settings.webhook_timeout_seconds_unit,seconds
 ui_text,settings.webhook_timeout_seconds_hint,"The webhooks of a save, a transition or a deletion are called at the same time; the CMS waits at most this long for their answers and then records a missing answer as a timeout in the history. The save itself is already done at that point and stays so – the editor only waits correspondingly longer. Default: 5, allowed: {min} to {max}."
+ui_text,datadir.heading,Database storage location
+ui_text,datadir.current,Current location: {dir}
+ui_text,datadir.webroot_inside,inside the webroot
+ui_text,datadir.webroot_outside,outside the webroot
+ui_text,datadir.webroot_unknown,webroot unknown
+ui_text,datadir.inside_hint,"Here the database is only protected as long as the web server blocks the directory (.htaccess with Apache, a location block with nginx). A location outside the webroot is safer, e.g. ../data."
+ui_text,datadir.path,New location
+ui_text,datadir.path_hint,"Directory relative to the LessHeadCMS folder (e.g. ../data) or absolute. Database, backups and sessions move; media/ stays where it is."
+ui_text,datadir.check,Check
+ui_text,datadir.plan_create,{dir} will be created.
+ui_text,datadir.plan_existing,{dir} exists and is writable.
+ui_text,datadir.plan_inside_warning,"Caution: the new location lies inside the webroot. There the database is only protected as long as the web server blocks the directory. Possible, but not recommended."
+ui_text,datadir.plan_config,config.php is writable: DATA_DIR is entered automatically (config.php.bak is created beforehand).
+ui_text,datadir.plan_manual,config.php is not writable. After the move the CMS is read-only until you enter this line via FTP.
+ui_text,datadir.banner,"The database is being moved: until config.php is updated, the CMS is read-only – changes cannot be saved."
+ui_text,datadir.banner_link,Go to the move (System & maintenance)
+ui_text,datadir.plan_manual_confirm,"Understood: until the line is in config.php, nobody can save changes."
+ui_text,datadir.move,Move now
+ui_text,datadir.pending,The move to {dir} is waiting for config.php. Please enter this line in config.php (e.g. via FTP):
+ui_text,datadir.pending_readonly,Until then no changes can be saved. The move only counts as finished once config.php points to the new location.
+ui_text,datadir.pending_recheck,Check again
+ui_text,datadir.pending_cancel,Cancel move
+ui_text,datadir.cleanup,The old copy is still in {dir}.
+ui_text,datadir.cleanup_why,Please delete it: a copy left behind in the webroot undoes the protection – whoever can retrieve it has the complete database including the password hashes. config.php.bak contains the BOOTSTRAP_TOKEN.
+ui_text,datadir.cleanup_why_outside,It is no longer used and can be deleted. config.php.bak contains the BOOTSTRAP_TOKEN.
+ui_text,datadir.cleanup_sessions,{dir} – {count} session files
+ui_text,datadir.cleanup_confirm,I have checked that LessHeadCMS works with the new location.
+ui_text,datadir.cleanup_button,Delete old copy permanently
 ui_text,webhooks.heading,Webhooks
 ui_text,webhooks.intro,"On certain events the CMS calls the stored address (POST with JSON: event, entity, ID, version, hash) – e.g. a build hook of Netlify or an own generator. No content is sent along, the target system fetches it itself via the API. A failed call blocks nothing, it only appears in the history."
 ui_text,webhooks.loading,Loading …
@@ -1128,6 +1157,8 @@ ui_text,msg_api.not_bootstrapped,Database not initialised yet – please call /b
 ui_text,msg_api.internal_error,Internal error
 ui_text,msg_api.forbidden_area,No permission for this area
 ui_text,msg_api.maintenance,Maintenance: a schema migration is running. Please try again shortly.
+ui_text,msg_api.relocated,"The database is being moved to another directory, this change could not be saved. Please try again in a moment."
+ui_text,msg_api.relocation_pending,The database is being moved: config.php still has to be changed. Until then no changes can be saved.
 ui_text,msg_api.route_not_found,Route not found
 ui_text,msg_api.frontend_missing,Frontend missing (assets/index.html).
 ui_text,msg_api.users_no_delete,Users cannot be deleted – set active=false via PUT instead
@@ -1234,8 +1265,10 @@ ui_text,msg_schema.relation_line,"Relation not understood (expected: A ""n"" -->
 ui_text,msg_schema.warn_unknown,"'{statement}' is not taken over (unknown statement, ignored)"
 ui_text,msg_schema.package_unclosed,"package ""{package}"" is not closed with ""}""."
 ui_text,msg_schema.set_visibility,"Workflow '{workflow}': The transition '{transition}' ({from} -> {to}) uses action=set_visibility, but the class '{class}' has no visibility field."
+ui_text,msg_schema.media_junction_prefix,"Link table '{table}' of the media field {field} starts with {prefix}, which is kept for system tables. Please rename the class or the field."
 ui_text,msg_schema.media_junction_class,Link table '{table}' of the media field {field} collides with a class of the same name.
 ui_text,msg_schema.media_junction_twice,Link table '{table}' of the media field {field} would be created twice (n:n link table of the same name). Please rename the field or the relationship.
+ui_text,msg_schema.junction_prefix,"Link table '{table}' starts with {prefix}, which is kept for system tables. Please rename the class or give the relationship another label."
 ui_text,msg_schema.junction_class,Link table '{table}' collides with a class of the same name.
 ui_text,msg_schema.warn_line,Line {line}: {text}
 ui_text,msg_schema.enum_empty,enum '{enum}' has no values (expected: enum {enum} { with one value per line }).
@@ -1263,6 +1296,7 @@ ui_text,msg_schema.package_no_name,package without a name: {source}
 ui_text,msg_schema.package_nested,"Nested packages are not supported (""{package}"" in ""{outer}""). The sidebar knows only one grouping level."
 ui_text,msg_schema.class_name,"Invalid class name '{class}' (allowed: letters, digits, _ without umlauts)."
 ui_text,msg_schema.class_reserved,Class name '{class}' is reserved ({reserved}).
+ui_text,msg_schema.class_prefix,Class name '{class}' is reserved: names starting with {prefix} are kept for the system tables of LessHeadCMS (lh_) and SQLite (sqlite_).
 ui_text,msg_schema.class_underscore,Class name '{class}' must not start with _.
 ui_text,msg_schema.section_twice,Section '{title}' in class '{class}' twice (every section title only once per class).
 ui_text,msg_schema.warn_method,Method '{method}' in class '{class}' is not taken over
@@ -1408,7 +1442,7 @@ ui_text,msg_migration.choice_published,Published
 ui_text,msg_migration.choice_draft,Draft
 ui_text,msg_migration.backfill,{what} is required: {count} existing row(s) need a value.
 ui_text,msg_migration.target_missing,{target} #{id} does not exist
-ui_text,msg_migration.locked,A bootstrap or another schema change is running right now (data/bootstrap.lock). Please wait a moment and try again.
+ui_text,msg_migration.locked,A bootstrap or another schema change is running right now ({lock}). Please wait a moment and try again.
 ui_text,msg_migration.dangling,{count} reference(s) point to nothing after the change: {list}. Nothing was changed.
 ui_text,msg_migration.apply_failed,The change could not be applied: {error}. Nothing was changed (completely rolled back).
 ui_text,msg_migration.applied,Schema change applied.
@@ -1464,17 +1498,17 @@ ui_text,msg_backup.action_apply,"""Apply"""
 ui_text,msg_backup.action_restore,"""Restore"""
 ui_text,msg_backup.action_field_order,the field order upgrade
 ui_text,msg_backup.failed,"{reason} {action} was aborted, nothing was changed in the database."
-ui_text,msg_backup.dir_create,The directory data/schema-backups/ cannot be created.
-ui_text,msg_backup.dir_writable,The directory data/schema-backups/ is not writable.
-ui_text,msg_backup.db_write,The database backup could not be written (check disk space or write permissions in data/schema-backups/).
+ui_text,msg_backup.dir_create,The directory {dir} cannot be created.
+ui_text,msg_backup.dir_writable,The directory {dir} is not writable.
+ui_text,msg_backup.db_write,The database backup could not be written (check disk space or write permissions in {dir}).
 ui_text,msg_backup.schema_write,The backup of the schema file could not be written.
 ui_text,msg_backup.not_found,A backup '{stamp}' does not exist (any more).
 ui_text,msg_backup.incomplete,This backup contains no database (older backup of the .puml only) and cannot be restored automatically.
-ui_text,msg_backup.locked,A bootstrap or a schema change is running right now (data/bootstrap.lock). Please wait a moment and try again.
+ui_text,msg_backup.locked,A bootstrap or a schema change is running right now ({lock}). Please wait a moment and try again.
 ui_text,msg_backup.restore_failed,{reason} Nothing was changed.
 ui_text,msg_backup.restore_schema_write,The schema file cannot be written ({file} in the folder schema/) - please check the write permissions.
-ui_text,msg_backup.restore_db_replace,The database file data/cms.sqlite could not be replaced (check the write permissions in data/).
-ui_text,msg_backup.restore_copy,The backed-up database could not be copied to data/ (check disk space or write permissions).
+ui_text,msg_backup.restore_db_replace,The database file {file} could not be replaced (check the write permissions in {dir}).
+ui_text,msg_backup.restore_copy,The backed-up database could not be copied to {dir} (check disk space or write permissions).
 ui_text,msg_backup.restore_file_warning,"The database was restored, but the file {file} could not be replaced. Please upload the text of the backup via FTP as schema/{file}, otherwise /bootstrap reports migration_needed."
 ui_text,msg_backup.restored,Backup of {created} restored.
 ui_text,msg_backup.invalid,The backup cannot be used: {reason} Nothing was changed.
@@ -1483,7 +1517,48 @@ ui_text,msg_backup.invalid_integrity,The database is damaged (integrity_check).
 ui_text,msg_backup.invalid_no_schema,The database contains no active schema.
 ui_text,msg_backup.invalid_name,The name of the schema file is unknown.
 ui_text,msg_backup.invalid_no_file,The schema file is missing in the backup.
-ui_text,msg_backup.size_warning,"The database is already {size} MB. Before every apply it is backed up completely; with {keep} kept backups these together take about {total} MB of disk space in data/schema-backups/."
+ui_text,msg_backup.size_warning,"The database is already {size} MB. Before every apply it is backed up completely; with {keep} kept backups these together take about {total} MB of disk space in {dir}."
+ui_text,msg_datadir.path_missing,Please enter a directory.
+ui_text,msg_datadir.path_invalid,The path contains invalid characters.
+ui_text,msg_datadir.pending,A move is waiting for the change in config.php. Finish or cancel it first.
+ui_text,msg_datadir.cleanup_first,"The old copy in {dir} still exists. Please delete it first, then move again."
+ui_text,msg_datadir.same,This is already the current storage location.
+ui_text,msg_datadir.nested,The new location must not lie inside the current one (or the other way round).
+ui_text,msg_datadir.open_basedir,The directory {dir} lies outside open_basedir ({open_basedir}) - PHP may not access it there.
+ui_text,msg_datadir.not_dir,{dir} exists but is not a directory.
+ui_text,msg_datadir.cannot_create,The directory {dir} does not exist and cannot be created ({parent} is not writable).
+ui_text,msg_datadir.not_writable,The directory {dir} is not writable for PHP.
+ui_text,msg_datadir.occupied,There is already a database in {dir} ({file}). Choose another directory or delete it there first.
+ui_text,msg_datadir.sqlite_old,"Moving needs SQLite 3.27 or newer (VACUUM INTO); this server has {version}."
+ui_text,msg_datadir.locked,"A bootstrap, a schema change or a restore is running right now ({lock}). Please wait a moment and try again."
+ui_text,msg_datadir.failed,{reason} Nothing was changed: the database stays active in {dir}.
+ui_text,msg_datadir.cannot_create_now,The directory {dir} could not be created.
+ui_text,msg_datadir.busy,The database is busy with another write access. Please try again in a moment.
+ui_text,msg_datadir.copy_failed,The database could not be copied to {dir} ({error}).
+ui_text,msg_datadir.place_failed,The copy could not be put in place as {file}.
+ui_text,msg_datadir.fence,The previous database could not be locked against write access ({error}).
+ui_text,msg_datadir.internal,Unexpected error (see the PHP error log).
+ui_text,msg_datadir.inside_webroot,"The new location lies inside the webroot ({docroot}). It is only protected there as long as the web server blocks it (.htaccess with Apache, a location block with nginx)."
+ui_text,msg_datadir.pending_config,"config.php is not writable. The copy in {dir} is ready; enter this line in config.php: {line} Until then no changes can be saved."
+ui_text,msg_datadir.moved,The database now lives in {dir}. Please delete the old copy in {old} next.
+ui_text,msg_datadir.no_pending,There is no move waiting for config.php.
+ui_text,msg_datadir.cancelled,"Move cancelled: the database stays in {dir}, the copy in {target} was removed."
+ui_text,msg_datadir.no_cleanup,There is no old copy to delete.
+ui_text,msg_datadir.cleanup_confirm,Please confirm the deletion explicitly. Nothing was deleted.
+ui_text,msg_datadir.elsewhere,"There is no database at the configured location {dir}, but there is one in {found}. To avoid an accidentally empty installation, LessHeadCMS does not create a new one. Was DATA_DIR in config.php changed by hand? Then set DATA_DIR back to the previous location and move the database under System → Settings → System & maintenance - or copy the database (cms.sqlite with schema-backups/) to {dir} yourself."
+ui_text,msg_datadir.readonly_confirm,config.php is not writable: after the move the CMS is read-only until the line is entered in config.php. Please confirm this explicitly. Nothing was changed.
+ui_text,msg_datadir.cleanup_unsafe,The old location {dir} is the active one - nothing was deleted.
+ui_text,msg_datadir.cleanup_partial,Some files could not be deleted: {files}. Please delete them via FTP.
+ui_text,msg_datadir.cleaned,Old copy in {dir} deleted ({count} files).
+ui_text,msg_datadir.integrity,The copy in {dir} is damaged (integrity_check: {result}).
+ui_text,msg_datadir.incomplete,The copy is incomplete (table {table}: {copied} instead of {rows} rows).
+ui_text,msg_datadir.file_exists,A file {file} already exists in {dir}.
+ui_text,msg_datadir.file_copy,The file {file} could not be copied to {dir}.
+ui_text,msg_datadir.config_write,config.php could not be written - it stays unchanged.
+ui_text,msg_datadir.config_backup,config.php.bak could not be created - config.php stays unchanged.
+ui_text,msg_datadir.config_verify,"config.php was written, but DATA_DIR could not be read back from it - the previous config.php was put back."
+ui_text,msg_datadir.test_abort,Aborted for the test after step {step}.
+ui_text,msg_datadir.marker,The file {file} could not be written.
 ui_text,msg_records.no_workflow,There is no workflow for '{entity}'
 ui_text,msg_records.transition_missing,Transition missing
 ui_text,msg_records.transition_expected,Label of the transition expected

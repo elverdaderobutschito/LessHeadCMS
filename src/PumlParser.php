@@ -231,14 +231,34 @@ final class PumlParser
      * permissions (roles, groups, permissions, group_roles, user_roles, user_groups, see Permissions) and the tasks of the
      * workflows (lh_task, see Workflows; deliberately with a prefix - "tasks" stays available as a class name), the
      * API keys (api_keys, see ApiKeys), the versions of the records (lh_revision, see Revisions), the webhooks
-     * (lh_webhook, lh_webhook_call, see Webhooks) and the pattern library (lh_pattern, see Patterns).
+     * (lh_webhook, lh_webhook_call, see Webhooks) and the pattern library (lh_pattern, see Patterns). Also the short-lived
+     * tables of one-off upgrades (translations_new, see Languages; permissions_before_action, see Permissions) and the
+     * fixed index languages_single_default (indexes and tables share one namespace in SQLite). The shadow tables of a
+     * rebuild ("__new_<table>", SchemaMigration) start with "_" and are excluded by that rule already.
      */
     public const RESERVED = [
         'users', 'login', 'logout', 'me', 'testdata', 'login_attempts', 'user_column_prefs', 'media', 'media_tags',
         'media_tag_links', 'schema_ids', 'schema_layout', 'languages', 'translations', 'user_language_prefs',
         'roles', 'groups', 'permissions', 'group_roles', 'user_roles', 'user_groups', 'lh_task', 'api_keys', 'lh_revision',
-        'lh_webhook', 'lh_webhook_call', 'lh_pattern',
+        'lh_webhook', 'lh_webhook_call', 'lh_pattern', 'translations_new', 'permissions_before_action', 'languages_single_default',
     ];
+
+    /**
+     * Name prefixes no class and no link table may have: lh_ for the system tables of LessHeadCMS (present and future),
+     * sqlite_ for the internal tables of SQLite (which refuses to create such a table)
+     */
+    public const RESERVED_PREFIXES = ['lh_', 'sqlite_'];
+
+    /** The reserved prefix $table (lower case) starts with, null if none */
+    public static function reservedPrefix(string $table): ?string
+    {
+        foreach (self::RESERVED_PREFIXES as $prefix) {
+            if (strpos(strtolower($table), $prefix) === 0) {
+                return $prefix;
+            }
+        }
+        return null;
+    }
 
     private const IDENT = '/^[A-Za-z_][A-Za-z0-9_]*$/';
 
@@ -730,6 +750,11 @@ final class PumlParser
         // Name collision entity <-> link table, and two link tables of the same name (possible if a link table
         // renamed after its label later on, see applyRelation, hits the name of another one)
         foreach ($mediaJunctions as $table => $where) {
+            if (($prefix = self::reservedPrefix((string) $table)) !== null) {
+                throw new SchemaException(Msg::of('msg_schema.media_junction_prefix', "Link table '{table}' of the media field {field} "
+                    . 'starts with {prefix}, which is kept for system tables. Please rename the class or the field.',
+                    ['table' => $table, 'field' => $where, 'prefix' => $prefix]));
+            }
             if (in_array($table, self::RESERVED, true) || isset($entities[$table])) {
                 throw new SchemaException(Msg::of('msg_schema.media_junction_class', "Link table '{table}' of the media field {field} "
                     . 'collides with a class of the same name.', ['table' => $table, 'field' => $where]));
@@ -746,6 +771,10 @@ final class PumlParser
             throw new SchemaException(self::junctionTwice($dup));
         }
         foreach ($junctions as $j) {
+            if (($prefix = self::reservedPrefix($j['table'])) !== null) {
+                throw new SchemaException(Msg::of('msg_schema.junction_prefix', "Link table '{table}' starts with {prefix}, which is kept "
+                    . 'for system tables. Please rename the class or give the relationship another label.', ['table' => $j['table'], 'prefix' => $prefix]));
+            }
             if (in_array($j['table'], self::RESERVED, true) || isset($entities[$j['table']])) {
                 throw new SchemaException(Msg::of('msg_schema.junction_class', "Link table '{table}' collides with a class of the same name.", [
                     'table' => $j['table'],
@@ -1202,6 +1231,10 @@ final class PumlParser
             throw new SchemaException(Msg::of('msg_schema.class_reserved', "Class name '{class}' is reserved ({reserved}).", [
                 'class' => $name, 'reserved' => implode(', ', self::RESERVED),
             ]));
+        }
+        if (($prefix = self::reservedPrefix($table)) !== null) {
+            throw new SchemaException(Msg::of('msg_schema.class_prefix', "Class name '{class}' is reserved: names starting with "
+                . '{prefix} are kept for the system tables of LessHeadCMS (lh_) and SQLite (sqlite_).', ['class' => $name, 'prefix' => $prefix]));
         }
         if ($table[0] === '_') {
             throw new SchemaException(Msg::of('msg_schema.class_underscore', "Class name '{class}' must not start with _.", ['class' => $name]));

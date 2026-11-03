@@ -1449,7 +1449,7 @@ final class SchemaMigration
         $handle = @fopen($lock, 'x');
         if ($handle === false) {
             throw ApiException::of(409, 'locked', Msg::of('msg_migration.locked', 'A bootstrap or another schema change is running right '
-                . 'now (data/bootstrap.lock). Please wait a moment and try again.'));
+                . 'now ({lock}). Please wait a moment and try again.', ['lock' => Config::displayPath($lock)]));
         }
         fclose($handle);
         $created = [];
@@ -1556,7 +1556,7 @@ final class SchemaMigration
             })),
             'rows_copied' => $copied,
             'schema_ids' => $ids,
-            'backup'   => ['stamp' => $backup['stamp'], 'files' => $backup['files'], 'dir' => 'data/schema-backups/'],
+            'backup'   => ['stamp' => $backup['stamp'], 'files' => $backup['files'], 'dir' => Config::displayPath(SchemaBackup::dir(), true)],
             'backups_removed' => SchemaBackup::rotate(Settings::get($this->pdo, Settings::SCHEMA_BACKUP_KEEP)),
         ];
     }

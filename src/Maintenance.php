@@ -78,9 +78,16 @@ final class Maintenance
         }
     }
 
-    /** @throws ApiException 503 maintenance while active() */
+    /**
+     * @throws ApiException 503 maintenance while active(), 503 relocation_pending while a move of the data directory waits
+     * for the change in config.php (DataDir)
+     */
     public static function guard(): void
     {
+        if (is_file(Config::dataDir() . '/' . DataDir::PENDING_FILE)) {
+            throw ApiException::of(503, 'relocation_pending', Msg::of('msg_api.relocation_pending', 'The database is being moved: '
+                . 'config.php still has to be changed. Until then no changes can be saved.'), [], ['Retry-After' => '60']);
+        }
         if (self::active()) {
             throw ApiException::of(503, 'maintenance', Msg::of('msg_api.maintenance',
                 'Maintenance: a schema migration is running. Please try again shortly.'), [], ['Retry-After' => '10']);

@@ -1782,7 +1782,7 @@ final class Cms
 
     private function isConstraintError(PDOException $ex): bool
     {
-        return (string) $ex->getCode() === '23000';
+        return Database::isConstraintViolation($ex);
     }
 
     /**

@@ -1271,7 +1271,7 @@ final class Permissions
         try {
             $write();
         } catch (PDOException $ex) {
-            if ((string) $ex->getCode() === '23000') {
+            if (Database::isConstraintViolation($ex)) {
                 throw ApiException::of(409, 'duplicate', $message);
             }
             throw $ex;

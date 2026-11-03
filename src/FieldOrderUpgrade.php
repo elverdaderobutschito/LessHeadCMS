@@ -81,7 +81,7 @@ final class FieldOrderUpgrade
             $pdo->commit();
             SchemaBackup::rotate(Settings::get($pdo, Settings::SCHEMA_BACKUP_KEEP));
             error_log('[LessHeadCMS] Field order (field_order, form sections) upgraded for ' . count($upgraded['entities'])
-                . " entities; backup data/schema-backups/{$backup['stamp']}_*.");
+                . " entities; backup " . Config::displayPath(SchemaBackup::dir(), true) . "{$backup['stamp']}_*.");
             return $upgraded;
         } finally {
             flock($lock, LOCK_UN);

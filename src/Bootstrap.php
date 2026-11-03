@@ -68,7 +68,7 @@ final class Bootstrap
     /**
      * @param mixed $schema value of ?schema=... (optional)
      * @return array response for GET /bootstrap
-     * @throws ApiException 400 (schema_invalid / schema_ambiguous), 404 (schema_not_found)
+     * @throws ApiException 400 (schema_invalid / schema_ambiguous), 404 (schema_not_found), 503 (database_elsewhere)
      */
     public static function run($schema = null): array
     {
@@ -90,6 +90,9 @@ final class Bootstrap
             return ['status' => 'no_schema_found'];
         }
 
+        if (!is_file(Config::dbFile())) {
+            DataDir::assertNotElsewhere(); // before anything is created at the configured location
+        }
         Config::ensureDataDir();
         $lock = Config::lockFile();
         if (file_exists($lock)) {

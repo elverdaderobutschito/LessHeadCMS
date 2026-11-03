@@ -545,7 +545,7 @@ final class Media
             $this->pdo->prepare('DELETE FROM media WHERE id = ?')->execute([$id]);
         } catch (\PDOException $e) {
             // newly linked in parallel (the FK of the link table kicks in)
-            if ((string) $e->getCode() === '23000') {
+            if (Database::isConstraintViolation($e)) {
                 throw ApiException::of(409, 'in_use', Msg::of('msg_media.in_use', 'The medium is still in use.'));
             }
             throw $e;

@@ -65,10 +65,12 @@ final class SchemaBackup
         };
         $dir = self::dir();
         if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
-            throw $failed(Msg::of('msg_backup.dir_create', 'The directory data/schema-backups/ cannot be created.'));
+            throw $failed(Msg::of('msg_backup.dir_create', 'The directory {dir} cannot be created.',
+                ['dir' => Config::displayPath(self::dir(), true)]));
         }
         if (!is_writable($dir)) {
-            throw $failed(Msg::of('msg_backup.dir_writable', 'The directory data/schema-backups/ is not writable.'));
+            throw $failed(Msg::of('msg_backup.dir_writable', 'The directory {dir} is not writable.',
+                ['dir' => Config::displayPath(self::dir(), true)]));
         }
         $stamp = date('Y-m-d_H-i-s');
         for ($n = 2; glob($dir . '/' . $stamp . '_*'); $n++) {
@@ -91,7 +93,7 @@ final class SchemaBackup
         if (!$ok) {
             @unlink($db);
             throw $failed(Msg::of('msg_backup.db_write', 'The database backup could not be written (check disk space or write '
-                . 'permissions in data/schema-backups/).'));
+                . 'permissions in {dir}).', ['dir' => Config::displayPath(self::dir(), true)]));
         }
         if (is_file($schemaFile) && !@copy($schemaFile, $puml)) {
             @unlink($db);
@@ -176,7 +178,7 @@ final class SchemaBackup
      * current state itself is backed up as a new pair so that an accidental restore can be undone.
      * schema_ids/schema_layout are part of the database and therefore come back automatically.
      *
-     * Procedure under data/bootstrap.lock and the maintenance flag (Maintenance): back up the current state, check a copy
+     * Procedure under bootstrap.lock (in the data directory) and the maintenance flag (Maintenance): back up the current state, check a copy
      * of the backed-up database (integrity_check, active schema present), write the .puml on a trial basis, then
      * replace the database file atomically (rename) - meanwhile this connection holds the write lock of the previous file
      * so that no other request sits on it in the middle of a transaction. If something fails before that, everything stays
@@ -211,7 +213,7 @@ final class SchemaBackup
         $handle = @fopen($lock, 'x');
         if ($handle === false) {
             throw ApiException::of(409, 'locked', Msg::of('msg_backup.locked', 'A bootstrap or a schema change is running right now '
-                . '(data/bootstrap.lock). Please wait a moment and try again.'));
+                . '({lock}). Please wait a moment and try again.', ['lock' => Config::displayPath($lock)]));
         }
         fclose($handle);
         $dbFile = Config::dbFile();
@@ -238,8 +240,9 @@ final class SchemaBackup
                 $pdo->exec('ROLLBACK');
             }
             if (!$replaced) {
-                throw self::restoreFailed(Msg::of('msg_backup.restore_db_replace', 'The database file data/cms.sqlite could not be '
-                    . 'replaced (check the write permissions in data/).'));
+                throw self::restoreFailed(Msg::of('msg_backup.restore_db_replace', 'The database file {file} could not be '
+                    . 'replaced (check the write permissions in {dir}).', ['file' => Config::displayPath($dbFile),
+                    'dir' => Config::displayPath(Config::dataDir(), true)]));
             }
             // Bring the workflow file to the state of the restored database (its text is stored there in _meta); if that
             // does not work, the state of the database still applies - System -> Workflows then shows the difference
@@ -274,7 +277,7 @@ final class SchemaBackup
             'created' => $entry['created'],
         ])->fields() + [
             'restored' => ['stamp' => $entry['stamp'], 'created' => $entry['created'], 'schema' => $schemaName],
-            'backup'   => ['stamp' => $safety['stamp'], 'files' => $safety['files'], 'dir' => 'data/schema-backups/'],
+            'backup'   => ['stamp' => $safety['stamp'], 'files' => $safety['files'], 'dir' => Config::displayPath(self::dir(), true)],
         ] + ($warning !== null ? ['warning' => $warning->text(), 'warning_code' => $warning->codeOnly()] : []);
     }
 
@@ -289,8 +292,8 @@ final class SchemaBackup
                 . 'was changed.', ['reason' => $why]));
         };
         if (!@copy($db, $tmpDb) || !filesize($tmpDb)) {
-            throw self::restoreFailed(Msg::of('msg_backup.restore_copy', 'The backed-up database could not be copied to data/ (check '
-                . 'disk space or write permissions).'));
+            throw self::restoreFailed(Msg::of('msg_backup.restore_copy', 'The backed-up database could not be copied to {dir} (check '
+                . 'disk space or write permissions).', ['dir' => Config::displayPath(Config::dataDir(), true)]));
         }
         try {
             $check = new PDO('sqlite:' . $tmpDb, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
@@ -341,10 +344,11 @@ final class SchemaBackup
         };
         $warning = $size > $warn ? Msg::of('msg_backup.size_warning', 'The database is already {size} MB. Before every apply it is '
             . 'backed up completely; with {keep} kept backups these together take about {total} MB of disk space in '
-            . 'data/schema-backups/.', ['size' => $mb($size), 'keep' => $keep, 'total' => $mb($size * $keep)]) : null;
+            . '{dir}.', ['size' => $mb($size), 'keep' => $keep, 'total' => $mb($size * $keep), 'dir' => Config::displayPath(self::dir(), true)]) : null;
         return [
             'backups'      => self::all(),
             'keep'         => $keep,
+            'dir'          => Config::displayPath(self::dir(), true),
             'db_bytes'     => $size,
             'warning'      => $warning !== null ? $warning->text() : null,
             'warning_code' => $warning !== null ? $warning->codeOnly() : null,

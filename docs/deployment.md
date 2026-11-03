@@ -20,7 +20,7 @@ Apache) see [nginx without Apache](#nginx-without-apache).
 ├── assets/                 editorial UI (index.html with its JavaScript and CSS bundles)
 ├── translations/           shipped language files (CSV): en.csv acts as built-in English texts, other files only for the import (not public, .htaccess blocks everything)
 ├── templates/              model templates: example diagrams *.puml with explanations, see templates/README.md (not used at runtime)
-├── data/                   SQLite file, lock, sessions/, cache/ (at runtime, blocked via .htaccess)
+├── data/                   SQLite file, lock, sessions/, cache/ (at runtime, blocked via .htaccess; can be moved outside the webroot, see below)
 ├── media/                  files of the media library (at runtime, public; .htaccess blocks any script execution)
 ├── LICENSE                 license of LessHeadCMS (AGPL-3.0-or-later)
 ├── third-party-licenses/   license texts of the bundled third-party libraries, README.md lists them
@@ -72,6 +72,72 @@ Updates: the delivery (`deploy/`) never contains this directory, uploading a new
 and `./build.sh assemble` keeps an existing `deploy/custom_translations/`. Changed files take effect on the next request
 (cache in `data/cache/` by modification time and size); faulty lines are skipped and written to the PHP error log.
 
+### Storing the database outside the webroot
+
+By default the database lives in `data/` next to `index.php`, i.e. inside the webroot. It is protected there only as
+long as the web server blocks the directory (`.htaccess` with Apache, a `location` block with nginx). A directory
+outside the webroot cannot be retrieved over the web at all, whatever the web server does.
+
+**When it makes sense:**
+
+* **The hoster lets the domain point to a subdirectory** (common on shared hosting, e.g. the domain points to
+  `/www/htdocs/w0123/cms/` while the FTP account starts at `/www/htdocs/w0123/`). Then `../data` lies in your account
+  but outside the webroot – the recommended setting.
+* **nginx without Apache, where you cannot add nginx directives:** a location outside the webroot needs no protection
+  rule. This covers the database, its backups and the sessions; `schema/`, `translations/` and `config.php` still
+  need the rules from [nginx without Apache](#nginx-without-apache).
+* Not possible if the domain points to the top directory of the account, so that nothing above the webroot is reachable for
+  PHP. Then `data/` stays where it is.
+
+**How:** System → Einstellungen → System & Wartung → „Speicherort der Datenbank“ (admins only). The page shows the
+current location and whether it lies inside or outside the webroot (compared with `DOCUMENT_ROOT` via `realpath`). Enter
+the new directory – relative to the LessHeadCMS folder (`../data`) or absolute – and click „Prüfen“, then „Jetzt
+umziehen“. The move:
+
+1. checks the target: it exists or can be created, it is writable, it lies within `open_basedir` (if set), and there is no
+   database there yet. A target inside the webroot only causes a clear warning; it is not forbidden.
+2. copies the database with `VACUUM INTO` (no file copy: the copy is consistent even while others are writing). During the
+   copy, the active database is locked against writing; content changes get `503` for that moment.
+3. runs `PRAGMA integrity_check` on the copy and compares the row count of every table.
+4. copies the backups (`schema-backups/`) and the sessions along (nobody is logged out).
+5. writes `define('DATA_DIR', '../data');` into `config.php`: `config.php.bak` first, then only this one line is replaced or
+   added (comments and everything else stay as they are), written to a temporary file and renamed over `config.php`,
+   then `opcache_invalidate()`.
+
+If a step fails, everything created at the new location is removed again and the previous database stays active and
+unchanged, with a message saying what went wrong. The same applies if PHP aborts in the middle (timeout).
+
+**If `config.php` is not writable** (e.g. write-protected on purpose), „Prüfen“ already says so, together with the line
+to enter yourself via FTP, and „Jetzt umziehen“ needs an additional confirmation. The copy is then ready, but until
+`config.php` points to the new location, **no changes can be saved** (the copy would miss them): content changes get
+`503`, the old database is read-only, and every logged-in user sees a banner saying so (admins with a link to the
+waiting move). „Erneut prüfen“ shows when the line has been recognised, which completes the move; „Umzug abbrechen“
+discards the copy and unlocks the old database.
+
+**Deleting the old copy:** after the move the page lists what is left at the old location (`cms.sqlite`, `-wal`/`-shm` if
+present, the backups, the sessions, `config.php.bak`) and deletes it only after an explicit confirmation. Do this as
+soon as you have checked that everything works: **a copy left in the webroot undoes the protection** – whoever
+can retrieve it has the complete database including the password hashes. `config.php.bak` contains the
+`BOOTSTRAP_TOKEN`; with Apache it cannot be retrieved (routed to `index.php`), with nginx only with the
+`location ^~ /config.php` rule below. The old copy is locked against writing, it is never used again.
+
+**Moving back:** the same way, with `data` as the new location. Moving again is only possible once the old copy has been
+deleted.
+
+**Notes:**
+
+* Set `DATA_DIR` by hand only on a new installation (before `/bootstrap`). On a running installation the page has to do
+  it. If `DATA_DIR` points to a directory without `cms.sqlite` while there is one in `data/` next to `index.php` or at
+  the location of the last move (remembered in `data/location.json`), LessHeadCMS does **not** create a new, empty
+  installation: every request (including `/bootstrap`) gets `503 database_elsewhere` with an explanation. Either set
+  `DATA_DIR` back and move via the page, or copy the database (`cms.sqlite` with `schema-backups/`) to the new location
+  yourself. A genuine new installation (no database anywhere) is not affected.
+* **`open_basedir`:** many shared hosters restrict PHP to the account directory (`open_basedir`). The target has to lie
+  within it; the check says so if it does not. The page shows the current value.
+* `media/` always stays next to `index.php` – it is public by design.
+* Paths outside the LessHeadCMS folder appear in messages with their absolute path (e.g.
+  `/www/htdocs/w0123/data/schema-backups/`), paths inside it relative (`data/schema-backups/`).
+
 ## nginx without Apache
 
 The directory protection of LessHeadCMS lives in `.htaccess` files. Only Apache reads them – **nginx ignores
@@ -94,7 +160,7 @@ The nginx block below reproduces exactly this, no more and no less:
 | `schema/`, `schema/workflows/` | not retrievable (main `.htaccess`; `schema/workflows/.htaccess` denies everything) |
 | `translations/` | not retrievable (main `.htaccess`; `translations/.htaccess` denies everything and switches off script handlers) |
 | `custom_translations/` (if used, see [Custom language files](#custom-language-files)) | not retrievable (main `.htaccess`; put a copy of `translations/.htaccess` there as well) |
-| `src/`, `vendor/`, `config.php` | not retrievable and not executable directly (main `.htaccess`) |
+| `src/`, `vendor/`, `config.php` (also `config.php.bak` from moving the database) | not retrievable and not executable directly (main `.htaccess`) |
 | `templates/` | not retrievable (main `.htaccess`); model templates to read or copy via FTP, not used at runtime |
 | `media/` | **public** by design (see "Media library files are public" under [Important notes](#important-notes)): files are served directly, but no directory listing, no script execution, executable or server-side interpreted extensions (`.php`, `.phtml`, `.phar`, `.cgi`, `.pl`, `.py`, `.sh`, `.asp`, `.jsp`, `.htaccess`, `.ini`, …) → `403`, `X-Content-Type-Options: nosniff`, SVG with `Content-Security-Policy: … sandbox` |
 | `assets/` | public, served directly |
@@ -106,7 +172,9 @@ would break.
 ### nginx configuration
 
 For an installation in the docroot (in a subfolder, prefix every path, e.g. `/cms/data/` instead of `/data/` and
-`/cms/index.php` in `try_files`):
+`/cms/index.php` in `try_files`). If the database has been moved outside the webroot (see
+[Storing the database outside the webroot](#storing-the-database-outside-the-webroot)), the `/data/` line protects
+nothing any more, but it does no harm either – keep it:
 
 ```nginx
 # LessHeadCMS - same protection as the .htaccess files (installation in the docroot)
@@ -119,7 +187,7 @@ location ^~ /custom_translations/ { deny all; }   # only if CUSTOM_TRANSLATIONS_
 location ^~ /templates/    { deny all; }
 location ^~ /src/          { deny all; }
 location ^~ /vendor/       { deny all; }
-location = /config.php     { deny all; }
+location ^~ /config.php    { deny all; }   # also config.php.bak and the temporary file when moving the database
 location ~ /\.ht           { deny all; }
 
 # Frontend: served directly
@@ -170,10 +238,16 @@ site:
 
 ### If the hoster offers no way to add nginx directives
 
-* **Moving `data/` out of the webroot** would be the usual fallback, but is **not possible at the moment**: LessHeadCMS
-  always uses `data/`, `schema/` and `translations/` next to `index.php`, there is no setting for another path. A symlink
-  does not help either – nginx follows symlinks by default, `/data/cms.sqlite` stays retrievable.
-* Hence: **do not run LessHeadCMS on such hosting.** Choose hosting with Apache (or nginx in front of Apache) or one
+* **Move the database out of the webroot** (System → Einstellungen → System & Wartung, see
+  [Storing the database outside the webroot](#storing-the-database-outside-the-webroot)): that protects the database,
+  its backups and the sessions without any nginx rule – if the hoster gives PHP access to a directory above the
+  webroot. A symlink does not help – nginx follows symlinks by default, `/data/cms.sqlite` stays retrievable.
+* That leaves `schema/`, `translations/`, `templates/`, `src/`, `vendor/` and `config.php` in the webroot: without nginx
+  rules the diagrams, language files and PHP sources can be read, and `config.php.bak` (only left after moving the
+  database, until the old copy is deleted) reveals the `BOOTSTRAP_TOKEN`. `config.php` itself is executed by PHP, its
+  content stays hidden. Only accept this if the diagrams and texts are not confidential, and delete the old copy right
+  after the move.
+* Otherwise: **do not run LessHeadCMS on such hosting.** Choose hosting with Apache (or nginx in front of Apache) or one
   where nginx directives can be added.
 
 ### Checking the protection
@@ -188,14 +262,15 @@ curl -I https://<host>/schema/simplecms.puml      # or another .puml that is in 
 curl -I https://<host>/translations/en.csv
 curl -I https://<host>/custom_translations/fr.csv # only if you use custom language files in the docroot
 curl -I https://<host>/src/Config.php
+curl -I https://<host>/config.php.bak             # need not exist - only after moving the database, until the old copy is deleted
 curl -I https://<host>/media/test.php             # need not exist: the extension alone is enough for 403
 
 # must answer 200 with "X-Content-Type-Options: nosniff" - the media library is public
 curl -I https://<host>/media/<file name of an uploaded file>
 ```
 
-With the nginx block above all five answer `403`; Apache answers `403` or `404` depending on the path (some are blocked
-by their folder's `.htaccess`, the rest is routed to `index.php`) – both are fine. A `200` on one of the first five means the protection
+With the nginx block above all of them answer `403`; Apache answers `403` or `404` depending on the path (some are blocked
+by their folder's `.htaccess`, the rest is routed to `index.php`) – both are fine. A `200` on one of them means the protection
 is missing: take the installation offline until it is fixed.
 
 ## /bootstrap

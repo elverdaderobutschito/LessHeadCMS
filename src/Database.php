@@ -28,6 +28,9 @@ final class Database
     /** Opens the SQLite file (creates it if it is missing). */
     public static function connect(): PDO
     {
+        if (!is_file(Config::dbFile())) {
+            DataDir::assertNotElsewhere(); // never an empty installation next to an existing database (DATA_DIR changed by hand)
+        }
         $pdo = new PDO('sqlite:' . Config::dbFile(), null, null, [
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
@@ -119,10 +122,23 @@ final class Database
         }, $key);
     }
 
+    /**
+     * UNIQUE, FOREIGN KEY, NOT NULL or CHECK violated (SQLSTATE 23000) - but not a write into a database locked after a
+     * move of the data directory, which SQLite reports the same way (DataDir::isFenced())
+     */
+    public static function isConstraintViolation(\PDOException $e): bool
+    {
+        return (string) $e->getCode() === '23000' && !DataDir::isFenced($e);
+    }
+
     /** Like connect(), but does not create the DB file: null if it is missing. */
     public static function connectIfExists(): ?PDO
     {
-        return is_file(Config::dbFile()) ? self::connect() : null;
+        if (!is_file(Config::dbFile())) {
+            DataDir::assertNotElsewhere();
+            return null;
+        }
+        return self::connect();
     }
 
     public static function tableExists(PDO $pdo, string $table): bool
@@ -159,6 +175,7 @@ final class Database
     {
         if ($pdo === null) {
             if (!is_file(Config::dbFile())) {
+                DataDir::assertNotElsewhere();
                 return null;
             }
             $pdo = self::connect();

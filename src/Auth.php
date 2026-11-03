@@ -198,7 +198,7 @@ final class Auth
         }
         return [
             'extension_loaded' => extension_loaded('session'),
-            'save_path'        => 'data/sessions',
+            'save_path'        => Config::displayPath(Config::sessionDir()),
             'writable'         => $writable,
             'save_handler_ini' => (string) ini_get('session.save_handler'),
             'auto_start_ini'   => (string) ini_get('session.auto_start'),
@@ -258,7 +258,7 @@ final class Auth
         }
 
         if (!self::ensureSessionDir()) {
-            error_log('[LessHeadCMS] data/sessions is not writable - login impossible.');
+            error_log('[LessHeadCMS] ' . Config::displayPath(Config::sessionDir()) . ' is not writable - login impossible.');
             throw ApiException::of(500, 'session_unavailable', Msg::of('msg_auth.session_dir', 'Session directory not writable'));
         }
         self::gcSessions(self::sessionLifetime($pdo));
@@ -305,6 +305,8 @@ final class Auth
             'must_change_password' => $user['must_change_password'],
             // what the UI needs of System → Einstellungen for every user (password rule, page sizes, ...)
             'settings'             => Settings::client($pdo),
+            // a database move waits for config.php (DataDir): read-only until then - banner for everyone
+            'relocation_pending'   => is_file(Config::dataDir() . '/' . DataDir::PENDING_FILE),
         ]];
     }
 

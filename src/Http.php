@@ -98,8 +98,7 @@ final class Http
         } catch (ApiException $e) {
             self::apiError($e);
         } catch (\Throwable $e) {
-            error_log('[LessHeadCMS] ' . get_class($e) . ': ' . $e->getMessage());
-            self::json(['error' => 'internal_error'] + Msg::of('msg_api.internal_error', 'Internal error')->fields(), 500);
+            self::internalError($e);
         }
     }
 
@@ -135,8 +134,7 @@ final class Http
         } catch (ApiException $e) {
             self::apiError($e);
         } catch (\Throwable $e) {
-            error_log('[LessHeadCMS] ' . get_class($e) . ': ' . $e->getMessage());
-            self::json(['error' => 'internal_error'] + Msg::of('msg_api.internal_error', 'Internal error')->fields(), 500);
+            self::internalError($e);
         }
     }
 
@@ -170,8 +168,7 @@ final class Http
         } catch (ApiException $e) {
             self::apiError($e);
         } catch (\Throwable $e) {
-            error_log('[LessHeadCMS] ' . get_class($e) . ': ' . $e->getMessage());
-            self::json(['error' => 'internal_error'] + Msg::of('msg_api.internal_error', 'Internal error')->fields(), 500);
+            self::internalError($e);
         }
     }
 
@@ -192,6 +189,22 @@ final class Http
     {
         $value = $_GET[$name] ?? null;
         return is_string($value) && filter_var($value, FILTER_VALIDATE_BOOLEAN) === true;
+    }
+
+    /**
+     * 500 internal_error (logged) - or 503 relocated if the write went into the previous database after a move of the data
+     * directory (DataDir): repeated, it reaches the new location.
+     */
+    private static function internalError(\Throwable $e): void
+    {
+        if (DataDir::isFenced($e)) {
+            \Flight::response()->header('Retry-After', '5');
+            self::json(['error' => 'relocated'] + Msg::of('msg_api.relocated', 'The database is being moved to another directory, '
+                . 'this change could not be saved. Please try again in a moment.')->fields(), 503);
+            return;
+        }
+        error_log('[LessHeadCMS] ' . get_class($e) . ': ' . $e->getMessage());
+        self::json(['error' => 'internal_error'] + Msg::of('msg_api.internal_error', 'Internal error')->fields(), 500);
     }
 
     private static function apiError(ApiException $e): void
@@ -216,8 +229,7 @@ final class Http
         } catch (ApiException $e) {
             self::apiError($e);
         } catch (\Throwable $e) {
-            error_log('[LessHeadCMS] ' . get_class($e) . ': ' . $e->getMessage());
-            self::json(['error' => 'internal_error'] + Msg::of('msg_api.internal_error', 'Internal error')->fields(), 500);
+            self::internalError($e);
         }
     }
 }

@@ -22,8 +22,9 @@ declare(strict_types=1);
 namespace LessHeadCMS;
 
 /**
- * Central paths. Everything writable lives in data/ (lock file + SQLite file), plus the uploaded files of the media
- * library in media/ (deliberately public, see mediaDir()).
+ * Central paths. Everything writable lives in data/ (lock file + SQLite file, backups, sessions) - or wherever DATA_DIR in
+ * config.php points (see dataDir()) -, plus the uploaded files of the media library in media/ (deliberately public, see
+ * mediaDir()).
  */
 final class Config
 {
@@ -69,8 +70,48 @@ final class Config
         if (!is_string($dir) || trim($dir) === '') {
             return null;
         }
-        $dir = rtrim(trim($dir), '/\\');
-        return preg_match('#^([/\\\\]|[A-Za-z]:)#', $dir) === 1 ? $dir : self::root() . '/' . $dir;
+        return self::absolute($dir);
+    }
+
+    /**
+     * A path from config.php as an absolute path: a relative one counts from the LessHeadCMS folder; "." and ".." are
+     * resolved ('../data' -> '/var/www/data'), without following symbolic links.
+     */
+    public static function absolute(string $dir): string
+    {
+        $dir = str_replace('\\', '/', trim($dir));
+        $drive = '';
+        if (preg_match('#^([A-Za-z]:)(/.*)?$#', $dir, $m)) {
+            [$drive, $dir] = [$m[1], $m[2] ?? '/'];
+        } elseif ($dir === '' || $dir[0] !== '/') {
+            $dir = self::root() . '/' . $dir;
+            if (preg_match('#^([A-Za-z]:)(/.*)$#', $dir, $m)) {
+                [$drive, $dir] = [$m[1], $m[2]];
+            }
+        }
+        $parts = [];
+        foreach (explode('/', $dir) as $part) {
+            if ($part === '' || $part === '.') {
+                continue;
+            }
+            if ($part === '..') {
+                array_pop($parts);
+            } else {
+                $parts[] = $part;
+            }
+        }
+        return $drive . '/' . implode('/', $parts);
+    }
+
+    /**
+     * A path for messages and the admin UI: relative to the LessHeadCMS folder if it lies inside it ("data/schema-backups/"),
+     * otherwise absolute. $dir true: with a trailing slash.
+     */
+    public static function displayPath(string $path, bool $dir = false): string
+    {
+        $root = str_replace('\\', '/', self::root()) . '/';
+        $shown = strpos($path, $root) === 0 ? substr($path, strlen($root)) : $path;
+        return $dir ? rtrim($shown, '/') . '/' : $shown;
     }
 
     public static function assetsDir(): string
@@ -78,9 +119,29 @@ final class Config
         return self::root() . '/assets';
     }
 
+    /** Value of DATA_DIR from config.php (trimmed), null if not set or empty: then data/ next to index.php applies. */
+    public static function dataDirSetting(): ?string
+    {
+        self::loadConfigFile();
+        $dir = defined('DATA_DIR') ? constant('DATA_DIR') : null;
+        return is_string($dir) && trim($dir) !== '' ? trim($dir) : null;
+    }
+
+    /**
+     * Directory of the SQLite file, its backups (schema-backups/), the sessions, the lock and maintenance files and the
+     * cache: DATA_DIR in config.php (e.g. '../data', outside the webroot; a relative path counts from the LessHeadCMS
+     * folder), otherwise data/ next to index.php. Changed under System → Einstellungen → System & Wartung (DataDir), which
+     * moves the database there and writes DATA_DIR.
+     */
     public static function dataDir(): string
     {
-        return self::root() . '/data';
+        $setting = self::dataDirSetting();
+        return $setting !== null ? self::absolute($setting) : self::root() . '/data';
+    }
+
+    public static function configFile(): string
+    {
+        return self::root() . '/config.php';
     }
 
     public static function lockFile(): string
@@ -113,10 +174,10 @@ final class Config
         return $token;
     }
 
-    /** Read config.php (optional): defines BOOTSTRAP_TOKEN and possibly MEDIA_MAX_MB. */
+    /** Read config.php (optional): defines BOOTSTRAP_TOKEN and possibly MEDIA_MAX_MB, DATA_DIR, ... */
     private static function loadConfigFile(): void
     {
-        $file = self::root() . '/config.php';
+        $file = self::configFile();
         if (is_file($file)) {
             require_once $file;
         }
@@ -197,14 +258,29 @@ final class Config
 
     /**
      * For tests only: artificial delay (milliseconds, at most 30 s) in SchemaMigration::apply() while the maintenance
-     * flag is set, so that a parallel write access can be tested reliably (TEST_MIGRATION_DELAY_MS in config.php; 0 if
-     * not given). Never set this on a real installation.
+     * flag is set, and in DataDir::move() while the write lock is held, so that a parallel write access can be tested
+     * reliably (TEST_MIGRATION_DELAY_MS in config.php; 0 if not given). Never set this on a real installation.
      */
     public static function testMigrationDelayMs(): int
     {
         self::loadConfigFile();
         $ms = defined('TEST_MIGRATION_DELAY_MS') ? constant('TEST_MIGRATION_DELAY_MS') : 0;
         return is_numeric($ms) ? max(0, min(30000, (int) $ms)) : 0;
+    }
+
+    /**
+     * For tests only: abort a move of the data directory (DataDir::move()) after step 1-5, as [step, 'exception'|'exit']
+     * (TEST_DATADIR_ABORT in config.php, e.g. '3:exit'; 'exit' ends PHP at once, like a timeout). null if not given.
+     * Never set this on a real installation.
+     */
+    public static function testDataDirAbort(): ?array
+    {
+        self::loadConfigFile();
+        $v = defined('TEST_DATADIR_ABORT') ? constant('TEST_DATADIR_ABORT') : null;
+        if (!is_string($v) || !preg_match('/^([1-5]):(exception|exit)$/', $v, $m)) {
+            return null;
+        }
+        return [(int) $m[1], $m[2]];
     }
 
     /**
@@ -277,23 +353,22 @@ HTACCESS;
         return self::dataDir() . '/cms.sqlite';
     }
 
+    /** Content of data/.htaccess: denies everything (Apache). */
+    public const DATA_HTACCESS = "<IfModule mod_authz_core.c>\n    Require all denied\n</IfModule>\n"
+        . "<IfModule !mod_authz_core.c>\n    Deny from all\n</IfModule>\n";
+
     /** Creates data/ (incl. access protection for Apache) if it is missing. */
     public static function ensureDataDir(): void
     {
         $dir = self::dataDir();
         if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
-            throw new \RuntimeException('The directory data/ cannot be created.');
+            throw new \RuntimeException('The directory ' . self::displayPath($dir, true) . ' cannot be created.');
         }
-        $htaccess = $dir . '/.htaccess';
-        if (!is_file($htaccess)) {
-            @file_put_contents(
-                $htaccess,
-                "<IfModule mod_authz_core.c>\n    Require all denied\n</IfModule>\n"
-                . "<IfModule !mod_authz_core.c>\n    Deny from all\n</IfModule>\n"
-            );
+        if (!is_file($dir . '/.htaccess')) {
+            @file_put_contents($dir . '/.htaccess', self::DATA_HTACCESS);
         }
         if (!is_writable($dir)) {
-            throw new \RuntimeException('The directory data/ is not writable.');
+            throw new \RuntimeException('The directory ' . self::displayPath($dir, true) . ' is not writable.');
         }
     }
 }
