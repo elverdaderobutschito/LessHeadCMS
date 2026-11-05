@@ -31,7 +31,7 @@ use PDO;
  *  - created_at/updated_at: DATETIME, UTC "YYYY-MM-DD HH:MM:SS" (the format of CURRENT_TIMESTAMP, like lh_task.created_at
  *    and media.uploaded_at). When creating, updated_* equals created_*.
  *  - created_by/updated_by: users.id, without a database constraint (like lh_task.created_by). Users are never deleted,
- *    only deactivated, so the id always resolves; the API shows the current username/name via a join (like
+ *    only deactivated, so the id always resolves; the API shows the current display name via Users::refs() (like
  *    media.uploaded_by), not a snapshot from the time of the change.
  *  - Rows from before this feature: all four NULL ("unbekannt"), nothing is invented.
  *
@@ -40,7 +40,7 @@ use PDO;
  * four names. An entity of an older installation that already has a field of the same name keeps it and simply has no
  * tracking metadata (applies() = false) until the field is renamed.
  *
- * Without a session (public API) created_by/updated_by are missing in _schema and in every row (usernames are
+ * Without a session (public API) created_by/updated_by are missing in _schema and in every row (user names are
  * not published); created_at/updated_at stay visible.
  */
 final class RecordMeta
@@ -126,7 +126,7 @@ final class RecordMeta
     }
 
     /**
-     * Brings the rows into the API form: timestamps as text, created_by/updated_by as {id, username, name} (current
+     * Brings the rows into the API form: timestamps as text, created_by/updated_by as {id, name} (Users::refs(): current
      * values from users, one query for all rows) or null. Without $withUsers the two user fields are removed. A row
      * whose table still lacks the columns (upgrade not done yet) gets null.
      *
@@ -145,13 +145,7 @@ final class RecordMeta
                 }
             }
         }
-        $users = [];
-        if ($ids) {
-            $stmt = $pdo->query('SELECT id, username, name FROM users WHERE id IN (' . implode(', ', array_keys($ids)) . ')');
-            foreach ($stmt->fetchAll() as $u) {
-                $users[(int) $u['id']] = ['id' => (int) $u['id'], 'username' => (string) $u['username'], 'name' => (string) $u['name']];
-            }
-        }
+        $users = $ids ? Users::refs($pdo, array_keys($ids)) : [];
         foreach ($rows as &$row) {
             foreach (self::FIELDS as $name) {
                 $value = $row[$name] ?? null;
@@ -161,7 +155,7 @@ final class RecordMeta
                         continue;
                     }
                     // a user id that no longer exists (only possible via direct SQL): id without a name
-                    $value = $value === null ? null : ($users[(int) $value] ?? ['id' => (int) $value, 'username' => '', 'name' => '']);
+                    $value = $value === null ? null : ($users[(int) $value] ?? ['id' => (int) $value, 'name' => '']);
                 } elseif ($value !== null) {
                     $value = (string) $value;
                 }

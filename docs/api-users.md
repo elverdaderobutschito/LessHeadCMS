@@ -248,6 +248,7 @@ on `per_page=500` being allowed should pass `per_page` explicitly and stay withi
 
 | Setting | Default | Effect |
 |---------|---------|--------|
+| `followups_enabled` | `true` | Switch „Wiedervorlagen an Datensätzen“ (saved at once): follow-ups at every record ([Follow-ups](followups.md)). Off: button, list filter and task sections are hidden, the routes answer `404`; stored follow-ups are kept. |
 | `revisions_keep` | `5` | „Aufbewahrte Versionen je Datensatz“, `0` to `10000`: versions kept per record ([Record versions](record-versions.md)); older ones are deleted on the next save of the record. `0` = keep all. |
 | `schema_backup_keep` | `5`, or `SCHEMA_BACKUP_KEEP` from `config.php` | „Aufbewahrte Sicherungen“, `1` to `100`: backup pairs kept before schema changes (see [Deployment](deployment.md)). A saved value takes precedence over `config.php`; older backups are deleted on the next „Anwenden“, not when saving. |
 | `schema_backup_warn_mb` | `50`, or `SCHEMA_BACKUP_WARN_MB` from `config.php` | „Speicherplatz-Hinweis ab“ in MB, `1` to `102400`: from this database size on, System → Schema points out the disk space the backups take up. A saved value takes precedence over `config.php`. |

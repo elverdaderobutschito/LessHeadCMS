@@ -49,6 +49,7 @@ class ComposerStaticInit857cf5dbd548f21ded1bf0f285ece630
         'LessHeadCMS\\Database' => __DIR__ . '/../..' . '/src/Database.php',
         'LessHeadCMS\\Download' => __DIR__ . '/../..' . '/src/Download.php',
         'LessHeadCMS\\FieldOrderUpgrade' => __DIR__ . '/../..' . '/src/FieldOrderUpgrade.php',
+        'LessHeadCMS\\Followups' => __DIR__ . '/../..' . '/src/Followups.php',
         'LessHeadCMS\\Http' => __DIR__ . '/../..' . '/src/Http.php',
         'LessHeadCMS\\Languages' => __DIR__ . '/../..' . '/src/Languages.php',
         'LessHeadCMS\\ListQuery' => __DIR__ . '/../..' . '/src/ListQuery.php',

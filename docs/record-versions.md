@@ -74,13 +74,13 @@ a restore checks them (see below).
 
 ## API
 
-All with a **session or API key** – without one `401`, also for reading: the history contains drafts and usernames.
+All with a **session or API key** – without one `401`, also for reading: the history contains drafts and the names of editors (`created_by` as `{id, name}`, no usernames – see [Privacy defaults](rest-api.md#privacy-defaults-no-usernames)).
 
 ```bash
 # versions, newest first
 curl -b jar https://example.org/api/artikel/7/revisions
 # {"versions": [{"version": 3, "action": "update", "created_at": "2026-10-15 09:12:01",
-#   "created_by": {"id": 1, "username": "admin", "name": "Administrator"}, "reason": "Preis angepasst",
+#   "created_by": {"id": 1, "name": "Administrator"}, "reason": "Preis angepasst",
 #   "restored_from": null, "transition": null, "changed": ["preis"]}, …]}
 
 # one version with its snapshot

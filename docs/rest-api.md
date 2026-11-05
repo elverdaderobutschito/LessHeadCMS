@@ -44,10 +44,11 @@ longer. Their result never changes the response – a failed call only appears i
 | `page` | page from 1 (default 1). A page past the end delivers `data: []`, not an error |
 | `per_page` | rows per page, 1 to **500** (default 50). More → `422` with a message, **no** silent capping. Both numbers are the defaults of the settings `list_max_per_page` and `list_default_per_page` ([Settings](api-users.md#settings-api_settings-system--einstellungen)) |
 | `sort`, `order` | field of the entity (also `id`, FK columns and the record metadata `created_at`/`created_by`/`updated_at`/`updated_by`; not n:n, not a media field), `order=asc`/`desc`. Empty values come last in both directions, ties are resolved by the `id`. Text case-insensitive, umlauts like their base letter, numbers in the text numerically; FK column by the label of the target row; richtext by plain text. Without `sort`: by `id` |
-| `filter[field]` | depending on the kind of field: **string/text/richtext** substring, case-insensitive (richtext in the plain text without Markdown); **FK column, n:n list** substring of the label `<entity> #<id> – <title_field>` – `<entity>` matches both in the spelling the caller sees (translation of their display language; public API: display text of the default language) and with the name from the diagram; **enum** one of the values, several separated by commas; **bool/visibility** `true`/`false` (`false` also matches empty); **int/decimal/date/id** `filter[field][from]` and/or `filter[field][to]`, bounds inclusive; **created_at/updated_at** like date (`YYYY-MM-DD` = whole day in UTC) or an exact UTC time `YYYY-MM-DD HH:MM:SS`; **created_by/updated_by** substring of the user's name or username (with a session only) |
+| `filter[field]` | depending on the kind of field: **string/text/richtext** substring, case-insensitive (richtext in the plain text without Markdown); **FK column, n:n list** substring of the label `<entity> #<id> – <title_field>` – `<entity>` matches both in the spelling the caller sees (translation of their display language; public API: display text of the default language) and with the name from the diagram; **enum** one of the values, several separated by commas; **bool/visibility** `true`/`false` (`false` also matches empty); **int/decimal/date/id** `filter[field][from]` and/or `filter[field][to]`, bounds inclusive; **created_at/updated_at** like date (`YYYY-MM-DD` = whole day in UTC) or an exact UTC time `YYYY-MM-DD HH:MM:SS`; **created_by/updated_by** substring of the user's display name, never the username (with a session only) |
 | `eq[field]` | exact value (for FK columns the id of the target row, for `created_by`/`updated_by` the user id); empty = field is empty |
 | `ids` | only these rows, separated by commas (at most 500, setting `list_max_per_page`) |
 | `q` | substring across all fields except text/richtext/bool, including FK and n:n labels |
+| `followup=open` | only rows with an open follow-up (session only, `401` without; `404` while follow-ups are switched off) – see [Follow-ups](followups.md) |
 | `for`, `for_id` | `for=<entity>.<field>`: only rows that are **selectable** as a value of this relationship (FK column or n:n list pointing to this entity); `for_id` = the row of `<entity>` currently being edited (missing when creating). Excluded are, for a self-reference, the row itself and all its descendants, for 1:1 the target rows already taken by another row, for n:n to the own entity the row itself. The exclusions are part of the query: `total` and every page only count selectable rows. This is how dropdown and selection dialog of the UI query; saving checks the same rules independently (`422`/`409`) |
 
 Several conditions apply together (AND). Examples:
@@ -92,7 +93,7 @@ once. If the field is missing in a `PUT`, the list stays unchanged. Unknown ID �
 
 | Method  | Path                    | Description |
 |---------|-------------------------|--------------|
-| GET     | `/api/_media`           | list, newest first; filters `?q=` (title, description, alt text, original name), `?kind=image\|video\|audio\|document`, `?tag=<id or name>`. Per medium the fields above plus `tags`, `uploaded_by` (`id`, `username`, `name`), `uploaded_at` (UTC), `usage_count` |
+| GET     | `/api/_media`           | list, newest first; filters `?q=` (title, description, alt text, original name), `?kind=image\|video\|audio\|document`, `?tag=<id or name>`. Per medium the fields above plus `tags`, `uploaded_by` (`id`, `name` – no username), `uploaded_at` (UTC), `usage_count` |
 | POST    | `/api/_media`           | upload as `multipart/form-data`: `file`, optionally `title`, `alt_text`, `description`, `tag_ids[]` (existing tags) and/or `tags[]` (names, missing ones are created) → `201` with the medium. `width`/`height` are read by the server from the file (images incl. SVG, MP4, WebM), never from the request |
 | GET     | `/api/_media/{id}`      | one medium |
 | PUT     | `/api/_media/{id}`      | JSON: `title`, `alt_text`, `description`, `tag_ids` and/or `tags` (replaces the tags) – only keys sent along change |
@@ -310,6 +311,26 @@ Example:
 ```bash
 curl -b jar.txt -X POST https://<host>/api/artikel -d '{"titel":"Hallo","inhalt":"# Hi","veroeffentlicht":true,"erstellt_am":"2026-09-20","gehort_zu_kategorie_id":1,"geschrieben_von_autor_id":1,"tag_ids":[1,2]}'
 ```
+
+## Privacy defaults: no usernames
+
+The username is the login. Outside the user management the API therefore **never** delivers it – every other user
+reference is `{"id", "name"}` with the **display name** only, and no other account data (e-mail, role, status):
+
+* record metadata `created_by`/`updated_by` ([Record metadata](record-metadata.md)), version history `created_by`
+  ([Record versions](record-versions.md)), media `uploaded_by`, follow-ups (`created_by`, `users`, `done_by`, the list of
+  possible responsible users – [Follow-ups](followups.md)), „Meine Aufgaben“ (`created_by_name` = display name);
+* filtering and sorting by `created_by`/`updated_by` use the display name only, so a username cannot be found out by
+  searching either;
+* without a display name (only possible via direct SQL) `name` is `""`; the editorial UI then shows the neutral
+  „Nutzer #<id>“ (English UI: "User #<id>") – everywhere via one helper (`userName()` in the frontend), never the username.
+
+**Exceptions:** the user management (`/api/users`, admins or whoever has the system area „Nutzer“) shows usernames, since they are
+managed there; `GET /api/me` contains the caller's **own** username; workflow files and the permission warnings of a
+schema change (both admins only) name users by username, because that is how a workflow file refers to them.
+
+**For new features:** resolve user IDs with `Users::refs()` / `Users::ref()` in the backend (they return `{id, name}`)
+and display them with `userName()` in the frontend.
 
 ## Error responses and messages
 

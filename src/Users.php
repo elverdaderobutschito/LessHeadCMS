@@ -41,6 +41,38 @@ final class Users
         ApiKeys::ensure($pdo); // users.api_read_only on installations from before the API users
     }
 
+    /**
+     * Privacy default for every response outside the user management: a user is shown as {id, name} only - the display
+     * name, never the username (it is the login) or other account data. An empty name stays '' (the UI shows the neutral
+     * "Nutzer #<id>", see userName() in the frontend); an id that no longer exists gets name ''.
+     * Used by record metadata, versions, media, follow-ups and tasks.
+     *
+     * @param array $ids user ids (null/duplicates allowed)
+     * @return array<int,array{id:int,name:string}>
+     */
+    public static function refs(PDO $pdo, array $ids): array
+    {
+        $ids = array_values(array_unique(array_map('intval', array_filter($ids, function ($v) {
+            return $v !== null;
+        }))));
+        $out = [];
+        foreach ($ids as $id) {
+            $out[$id] = ['id' => $id, 'name' => ''];
+        }
+        foreach (array_chunk($ids, 500) as $chunk) {
+            foreach ($pdo->query('SELECT id, name FROM users WHERE id IN (' . implode(', ', $chunk) . ')')->fetchAll() as $u) {
+                $out[(int) $u['id']]['name'] = (string) $u['name'];
+            }
+        }
+        return $out;
+    }
+
+    /** One user as {id, name} (see refs()); null for null */
+    public static function ref(PDO $pdo, $id): ?array
+    {
+        return $id === null ? null : self::refs($pdo, [$id])[(int) $id];
+    }
+
     /** @return array[] all users, without password_hash */
     public function all(): array
     {

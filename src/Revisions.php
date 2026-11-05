@@ -174,7 +174,7 @@ final class Revisions
 
     /**
      * Versions of a record, newest first, without the snapshot: version, action, created_at, created_by
-     * {id, username, name}, reason, restored_from, transition and changed (names that differ from the next older kept
+     * {id, name}, reason, restored_from, transition and changed (names that differ from the next older kept
      * version; null for the oldest kept one - nothing to compare with). $hidden: names the caller must not see.
      *
      * @param array<string,true> $hidden
@@ -306,7 +306,7 @@ final class Revisions
             'version'       => (int) $r['version'],
             'action'        => (string) $r['action'],
             'created_at'    => (string) $r['created_at'],
-            'created_by'    => $by === null ? null : ($users[$by] ?? ['id' => $by, 'username' => '', 'name' => '']),
+            'created_by'    => $by === null ? null : ($users[$by] ?? ['id' => $by, 'name' => '']),
             'reason'        => $r['reason'] === null ? null : (string) $r['reason'],
             'restored_from' => $r['restored_from'] === null ? null : (int) $r['restored_from'],
             'transition'    => $r['transition'] === null ? null : (string) $r['transition'],
@@ -314,19 +314,9 @@ final class Revisions
         ];
     }
 
-    /** @return array<int,array{id:int,username:string,name:string}> */
+    /** @return array<int,array{id:int,name:string}> (Users::refs(): no usernames) */
     private static function users(PDO $pdo, array $ids): array
     {
-        $ids = array_unique(array_map('intval', array_filter($ids, function ($v) {
-            return $v !== null;
-        })));
-        if (!$ids) {
-            return [];
-        }
-        $out = [];
-        foreach ($pdo->query('SELECT id, username, name FROM users WHERE id IN (' . implode(', ', $ids) . ')')->fetchAll() as $u) {
-            $out[(int) $u['id']] = ['id' => (int) $u['id'], 'username' => (string) $u['username'], 'name' => (string) $u['name']];
-        }
-        return $out;
+        return Users::refs($pdo, $ids);
     }
 }

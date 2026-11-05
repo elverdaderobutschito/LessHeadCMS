@@ -13,7 +13,7 @@ state without this feature. The same applies to every class without a workflow f
   edited as text, with check and apply) and "My tasks" – the sidebar entry „Meine Aufgaben“ with the page of the own
   tasks (`GET /api/_tasks/mine`, see "Transitions and tasks").
 * **Partly included – notifications:** the only hint at a new task is the counter of the open tasks at the sidebar entry
-  „Meine Aufgaben“. It is loaded at the start and after every own transition (no polling), so it is only seen by a user who
+  „Meine Aufgaben“ (it also counts due [follow-ups](followups.md)). It is loaded at the start and after every own transition (no polling), so it is only seen by a user who
   is logged in and reloads. There is no e-mail, no push message and no other active notification.
 * **Not included:** a visual workflow editor (the diagram editor only covers the main schema) and dynamic assignment
   targets (`assign=field:…`) – `assign=` only accepts `group:<name>`, `user:<login name>` and `initiator`.
@@ -126,7 +126,7 @@ state of the restored database.
 
 | Route (any role, with a session) | |
 |---|---|
-| `GET /api/_tasks/mine` | „Meine Aufgaben“ (my tasks): open tasks assigned to the logged-in user directly or via one of their groups, newest first → `{tasks, open}`; `?status=all` also completed ones, `?count=1` only `{open}`. Per task additionally `created_by_name`, `via` (`user`/`group`) and `assigned_group` (name) |
+| `GET /api/_tasks/mine` | „Meine Aufgaben“ (my tasks), since follow-ups additionally `workflow_open` and `followups_due` next to `open` (= both together, see [Follow-ups](followups.md)): open tasks assigned to the logged-in user directly or via one of their groups, newest first → `{tasks, open}`; `?status=all` also completed ones, `?count=1` only `{open}`. Per task additionally `created_by_name` (display name of the user who triggered the step), `via` (`user`/`group`) and `assigned_group` (name) |
 
 ## Transitions and tasks
 
@@ -162,7 +162,9 @@ supervision. They disappear with their record and move along when a class is ren
 spelling); a class `Tasks` in the diagram is allowed.
 
 **My tasks:** Above the data tables, the sidebar has the entry „Meine Aufgaben“ (`#/_tasks`) for every role, with
-a counter of the open tasks assigned to the user directly or via a group (without an open task no counter).
+a counter of the open tasks assigned to the user directly or via a group (without an open task no counter). The counter
+also includes the user's **due** follow-ups, and below the tasks the page shows „Fällige Wiedervorlagen“ and „Demnächst“
+(see [Follow-ups](followups.md)); without a workflow the entry only appears while a follow-up is due.
 It is loaded at the start and updated after every own transition; transitions of other users appear on the
 next load (no polling). The page lists per task the status, record (`<entity> #<id> – {title}`), transition,
 executing user, time (date+time format of the display language) and „Zugewiesen an“ (to you directly / group …), newest

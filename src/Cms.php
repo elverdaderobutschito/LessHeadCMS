@@ -476,6 +476,11 @@ final class Cms
         $e = $this->entity($table);
         $denied = $this->denied($e);
         $conditions = [];
+        // ?followup=open: only rows with an open follow-up (Followups; session only, not part of the public API)
+        $followup = Followups::listCondition($this->pdo, $this->user, $e['table'], $query['followup'] ?? null);
+        if ($followup !== null) {
+            $conditions[] = $followup;
+        }
         $visibility = $this->visibilityField($table);
         if ($visibility !== null && !$includeDrafts) {
             $conditions[] = 'e.' . SqlGenerator::q($visibility) . ' = 1';
@@ -779,7 +784,7 @@ final class Cms
 
     /**
      * GET /api/{entity}/{id}/revisions: versions of a record, newest first (Revisions::all()). Needs a session (the
-     * history shows drafts and usernames); the same read rights as the record: entity denied -> 403, denied fields are
+     * history shows drafts and editor names); the same read rights as the record: entity denied -> 403, denied fields are
      * missing in every snapshot and in "changed".
      */
     public function revisions(string $table, int $id): array
@@ -1056,6 +1061,7 @@ final class Cms
             foreach ($doomed as $t => $set) {
                 Workflows::forgetRecords($this->pdo, $t, array_keys($set)); // tasks of the deleted rows
                 Revisions::forgetRecords($this->pdo, $t, array_keys($set)); // and their versions
+                Followups::forgetRecords($this->pdo, $t, array_keys($set)); // and their follow-ups
             }
             $this->pdo->commit();
         } catch (\Throwable $ex) {
@@ -1513,7 +1519,7 @@ final class Cms
     }
 
     /**
-     * Tracking metadata in API form (RecordMeta::present): user fields as {id, username, name}, without a session
+     * Tracking metadata in API form (RecordMeta::present): user fields as {id, name} (no usernames), without a session
      * removed. Entities without tracking metadata (field of the same name, older installation) stay unchanged.
      */
     private function presentMeta(array $e, array $rows): array

@@ -11,6 +11,7 @@ use LessHeadCMS\Config;
 use LessHeadCMS\DataDir;
 use LessHeadCMS\Database;
 use LessHeadCMS\FieldOrderUpgrade;
+use LessHeadCMS\Followups;
 use LessHeadCMS\Http;
 use LessHeadCMS\Languages;
 use LessHeadCMS\Maintenance;
@@ -440,10 +441,75 @@ Flight::route('GET /api/_tasks', function () {
 });
 
 // „Meine Aufgaben“: dem angemeldeten Nutzer direkt oder über eine Gruppe zugewiesen; jede Rolle, mit Session.
-// ?status=all auch erledigte, ?count=1 nur die Anzahl der offenen (Zähler in der Sidebar)
+// ?status=all auch erledigte, ?count=1 nur die Anzahl der offenen (Zähler in der Sidebar). 'open' zählt die offenen
+// Workflow-Aufgaben und die FÄLLIGEN Wiedervorlagen (Followups, nie kommende) - im selben Aufruf berechnet, ohne Cron;
+// einzeln: workflow_open und followups_due.
 Flight::route('GET /api/_tasks/mine', function () {
     Http::userApi(function (Cms $cms, PDO $pdo, array $user) {
-        return [200, Workflows::myTasks($pdo, $user, $_GET)];
+        $result = Workflows::myTasks($pdo, $user, $_GET);
+        $due = Followups::dueCount($pdo, $cms, $user);
+        return [200, array_merge($result, ['open' => $result['open'] + $due, 'workflow_open' => $result['open'], 'followups_due' => $due])];
+    });
+});
+
+// ------------------------------------------------------------------ Wiedervorlagen (Followups)
+// Eingebaute Systemfunktion an jedem Datensatz (kein Feld im Diagramm): nur mit Session, nie für API-Nutzer, nur wenn der
+// Nutzer den Datensatz lesen darf; 404, solange die Funktion unter System → Einstellungen abgeschaltet ist. Pfade mit "_".
+
+/** Handler mit Followups-Objekt (prüft Schalter und Rolle); schreibend nicht während einer Schema-Migration */
+function followupsApi(callable $handler): void
+{
+    Http::userApi(function (Cms $cms, PDO $pdo, array $user) use ($handler) {
+        return $handler(new Followups($pdo, $cms, $user));
+    });
+}
+
+// ?entity=&record_id=: alle Wiedervorlagen eines Datensatzes (offene zuerst)
+Flight::route('GET /api/_followups', function () {
+    followupsApi(function (Followups $f) {
+        return [200, $f->forRecord($_GET)];
+    });
+});
+
+// eigene offene: {due, upcoming}
+Flight::route('GET /api/_followups/mine', function () {
+    followupsApi(function (Followups $f) {
+        return [200, $f->mine()];
+    });
+});
+
+// mögliche Zuständige: aktive Nutzer (ohne API-Nutzer) und Gruppen
+Flight::route('GET /api/_followups/assignees', function () {
+    followupsApi(function (Followups $f) {
+        return [200, $f->assignees()];
+    });
+});
+
+// Body {entity, record_id, due_date, note, interval_months?, users?, groups?}
+Flight::route('POST /api/_followups', function () {
+    followupsApi(function (Followups $f) {
+        return [201, $f->create(Http::body())];
+    });
+});
+
+// Erledigt (für alle Zuständigen), optional mit neuer Wiedervorlage: Body {done_note?, next?: {due_date, note, …}}
+Flight::route('POST /api/_followups/@id:[0-9]+/done', function ($id) {
+    followupsApi(function (Followups $f) use ($id) {
+        return [200, $f->complete((int) $id, Http::body())];
+    });
+});
+
+// Ändern einer offenen (nur Ersteller und Admins; erledigte: 409): Body {due_date?, note?, interval_months?, users?, groups?}
+Flight::route('PUT /api/_followups/@id:[0-9]+', function ($id) {
+    followupsApi(function (Followups $f) use ($id) {
+        return [200, $f->update((int) $id, Http::body())];
+    });
+});
+
+// Löschen einer offenen (nur Ersteller und Admins; erledigte: 409)
+Flight::route('DELETE /api/_followups/@id:[0-9]+', function ($id) {
+    followupsApi(function (Followups $f) use ($id) {
+        return [200, $f->delete((int) $id)];
     });
 });
 

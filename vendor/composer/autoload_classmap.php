@@ -22,6 +22,7 @@ return array(
     'LessHeadCMS\\Database' => $baseDir . '/src/Database.php',
     'LessHeadCMS\\Download' => $baseDir . '/src/Download.php',
     'LessHeadCMS\\FieldOrderUpgrade' => $baseDir . '/src/FieldOrderUpgrade.php',
+    'LessHeadCMS\\Followups' => $baseDir . '/src/Followups.php',
     'LessHeadCMS\\Http' => $baseDir . '/src/Http.php',
     'LessHeadCMS\\Languages' => $baseDir . '/src/Languages.php',
     'LessHeadCMS\\ListQuery' => $baseDir . '/src/ListQuery.php',

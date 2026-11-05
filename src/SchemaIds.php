@@ -39,7 +39,7 @@ use PDO;
  * ID) including the layout_version at the time of saving. The current layout version and the viewport (scroll position
  * + zoom) live in _meta (layout_version, layout_viewport) because they concern the whole diagram. Layout changes have
  * nothing to do with migrations; only orphaned positions of removed elements are deleted along by reassign() - as are
- * their translations (Languages, translations.ref_id = stable ID).
+ * their translations (Languages, translations.ref_id = stable ID), permissions and follow-ups (Followups).
  *
  * Existing installations (before phase 2) get their IDs when first needed (ensure(): /bootstrap, GET/PUT layout,
  * applying) from the active schema text (_meta.schema_source or the .puml as long as it matches the active schema).
@@ -402,6 +402,7 @@ final class SchemaIds
     {
         Languages::deleteRefs($pdo, $ids);
         Permissions::deleteRefs($pdo, $ids); // permissions on removed elements (permissions.ref_id = stable ID)
+        Followups::deleteRefs($pdo, $ids); // follow-ups of removed entities (lh_followup.entity_ref = stable ID)
         foreach (array_chunk($ids, 500) as $chunk) {
             $in = implode(', ', array_fill(0, count($chunk), '?'));
             $pdo->prepare("DELETE FROM schema_layout WHERE node_id IN ($in)")->execute($chunk);

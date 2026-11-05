@@ -512,7 +512,7 @@ final class Workflows
     /**
      * GET /api/_tasks/mine („Meine Aufgaben“, any role): tasks assigned to the user directly or via one of their groups
      * - open ones, with ?status=all also completed ones; newest first. Per task additionally created_by_name
-     * (login name), assigned_group (name) and via ('user' = directly, 'group' = via the group). 'open' is always the
+     * (display name, never the login name), assigned_group (name) and via ('user' = directly, 'group' = via the group). 'open' is always the
      * number of open ones (counter in the sidebar); ?count=1 delivers only that. Creates nothing: without the table there are none.
      */
     public static function myTasks(PDO $pdo, array $user, array $query): array
@@ -536,7 +536,7 @@ final class Workflows
             return ['open' => $open];
         }
         $all = ($query['status'] ?? null) === 'all';
-        $rows = $pdo->query('SELECT t.*, u.username AS created_by_name FROM lh_task t LEFT JOIN users u ON u.id = t.created_by'
+        $rows = $pdo->query('SELECT t.*, u.name AS created_by_name FROM lh_task t LEFT JOIN users u ON u.id = t.created_by'
             . " WHERE $mine" . ($all ? '' : " AND t.status = 'open'") . ' ORDER BY t.id DESC LIMIT ' . (int) Settings::get($pdo, Settings::TASKS_LIST_LIMIT))->fetchAll();
         $tasks = [];
         foreach ($rows as $r) {

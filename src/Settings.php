@@ -81,6 +81,8 @@ final class Settings
     public const TRANSLATIONS_CSV_MAX_MB = 'translations_csv_max_mb';
     /** Longest wait (seconds) for the calls of the webhooks of one save/transition/deletion, see Webhooks. */
     public const WEBHOOK_TIMEOUT_SECONDS = 'webhook_timeout_seconds';
+    /** Follow-ups („Wiedervorlage“) at the records, see Followups. Off: the data stays, routes and UI are hidden. */
+    public const FOLLOWUPS_ENABLED = 'followups_enabled';
 
     /**
      * name => ['bool', default] or ['int', default, min, max]. Default null: the value from config.php (or its own
@@ -118,6 +120,7 @@ final class Settings
         self::TESTDATA_MAX_COUNT              => ['int', TestData::MAX_COUNT, 10, 10000],
         self::TRANSLATIONS_CSV_MAX_MB         => ['int', TranslationCsv::MAX_BYTES / 1048576, 1, 32],
         self::WEBHOOK_TIMEOUT_SECONDS         => ['int', Webhooks::TIMEOUT, 1, 30],
+        self::FOLLOWUPS_ENABLED               => ['bool', true],
     ];
 
     /**
@@ -127,6 +130,7 @@ final class Settings
     private const CLIENT = [
         self::PASSWORD_MIN_LENGTH, self::PASSWORD_REQUIRE_DIGIT, self::PASSWORD_REQUIRE_SPECIAL, self::PASSWORD_REQUIRE_MIXED_CASE,
         self::LIST_DEFAULT_PER_PAGE, self::LIST_MAX_PER_PAGE, self::LIST_SELECT_PER_PAGE, self::TESTDATA_MAX_COUNT,
+        self::FOLLOWUPS_ENABLED,
     ];
 
     /** @var array<string,string>|null stored rows of this request (name => value), see stored() */

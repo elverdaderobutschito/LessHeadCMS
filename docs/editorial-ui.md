@@ -123,6 +123,10 @@ _Part of the [LessHeadCMS documentation](../README.md)._
 * **History of a record:** „Verlauf“ in the header of the edit form lists all versions (time, user, kind, reason, changed
   fields), compares two of them field by field (long texts as a line diff) and restores an older one as a new version.
   Above the save buttons, „Änderungsgrund (optional)“ is stored with the new version. See [Record versions](record-versions.md).
+* **Follow-ups:** „Wiedervorlage“ next to „Verlauf“ – "check this record again on a date", with responsible users/groups
+  and a note; open ones can be changed and deleted by whoever created them and by administrators; due ones appear under
+  „Meine Aufgaben“, every list can be filtered to „Nur mit offener Wiedervorlage“. A
+  built-in system function at every record, no field of the diagram. See [Follow-ups](followups.md).
 * **Column selection of the list view**: without a selection of your own, every list shows
   at most **5 columns** (plus actions): `id`, then the `title_field` fields (`{title}` markers in
   diagram order, without a marker the one field of the guessing heuristic), then the remaining columns in

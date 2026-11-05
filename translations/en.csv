@@ -104,6 +104,7 @@ ui_text,list.new,Create new
 ui_text,list.loading,Loading…
 ui_text,list.count,{shown} of {total} entries
 ui_text,list.reset_filters,Reset filters
+ui_text,list.followup_filter,Only with an open follow-up
 ui_text,list.columns,Columns ({visible}/{total})
 ui_text,list.columns_aria,Visible columns
 ui_text,list.columns_reset,Restore defaults
@@ -140,6 +141,7 @@ ui_text,meta.created_by,Created by
 ui_text,meta.updated_at,Last modified at
 ui_text,meta.updated_by,Last modified by
 ui_text,meta.unknown,unknown
+ui_text,meta.user_fallback,User #{id}
 ui_text,history.open,History
 ui_text,history.title,History: {entity} #{id}
 ui_text,history.loading,Loading …
@@ -885,6 +887,57 @@ ui_text,tasks.assigned_direct,You directly
 ui_text,tasks.assigned_group,Group {group}
 ui_text,tasks.assigned_group_unknown,through a group
 ui_text,tasks.by_unknown,unknown
+ui_text,tasks.workflow_heading,Workflow tasks
+ui_text,tasks.followups_error,Follow-ups could not be loaded: {error}
+ui_text,tasks.followups_due_heading,Due follow-ups
+ui_text,tasks.followups_due_empty,No due follow-ups
+ui_text,tasks.followups_upcoming_heading,Coming up
+ui_text,tasks.followups_upcoming_empty,No upcoming follow-ups
+ui_text,followups.button,Follow-up
+ui_text,followups.button_title,"{open} open, {due} of them due"
+ui_text,followups.title,Follow-ups: {entity} #{id}
+ui_text,followups.empty,No open follow-ups.
+ui_text,followups.show_done,Show completed ({count})
+ui_text,followups.hide_done,Hide completed ({count})
+ui_text,followups.new,New follow-up
+ui_text,followups.new_heading,New follow-up
+ui_text,followups.due_date,Follow up on
+ui_text,followups.quick_aria,Quick choice
+ui_text,followups.plus_months,+{n} mo.
+ui_text,followups.assignees,Responsible
+ui_text,followups.me,{name} (me)
+ui_text,followups.group,Group {group}
+ui_text,followups.loading,Loading …
+ui_text,followups.note,What is to be done?
+ui_text,followups.note_placeholder,e.g. check and update the figures
+ui_text,followups.save,Save follow-up
+ui_text,followups.saving,Saving …
+ui_text,followups.state_due,due
+ui_text,followups.state_upcoming,upcoming
+ui_text,followups.state_done,done
+ui_text,followups.responsible,Responsible: {who}
+ui_text,followups.nobody,nobody
+ui_text,followups.created,created by {by} on {at}
+ui_text,followups.changed,The record has been changed since the follow-up was created.
+ui_text,followups.compare,View changes
+ui_text,followups.done_by,Completed by {by} on {at}
+ui_text,followups.complete,Done
+ui_text,followups.complete_again,Done + follow up again
+ui_text,followups.complete_title,Complete follow-up
+ui_text,followups.again_title,Complete and follow up again
+ui_text,followups.done_note,Note on completion (optional)
+ui_text,followups.done_note_placeholder,e.g. figures updated
+ui_text,followups.next_heading,New follow-up
+ui_text,followups.created_notice,Follow-up created.
+ui_text,followups.done_notice,Follow-up completed.
+ui_text,followups.again_notice,Follow-up completed and scheduled again.
+ui_text,followups.edit,Edit
+ui_text,followups.edit_title,Edit follow-up
+ui_text,followups.save_changes,Save changes
+ui_text,followups.updated_notice,Follow-up changed.
+ui_text,followups.delete,Delete
+ui_text,followups.delete_confirm,Really delete the follow-up of {date}? This cannot be undone.
+ui_text,followups.deleted_notice,Follow-up deleted.
 ui_text,settings.loading,Loading …
 ui_text,settings.saved,Saved.
 ui_text,settings.save,Save
@@ -897,6 +950,8 @@ ui_text,settings.tab_system,System & maintenance
 ui_text,settings.tab_tools,Import & test data
 ui_text,settings.require_auth_for_read,Require authentication for read access as well
 ui_text,settings.require_auth_for_read_hint,"If this switch is on, GET requests without a valid sign-in or API key are no longer possible either – regardless of the publication status of individual records. Files of the media library remain reachable via their address. The switch is saved at once."
+ui_text,settings.followups_enabled,Follow-ups on records
+ui_text,settings.followups_enabled_hint,"Follow-ups can be created at every record („check the figures in 3 months“); due ones appear under „My tasks“. Switched off, the button, the list filter and the task section are hidden and the API answers 404 – existing follow-ups stay stored. The switch is saved at once."
 ui_text,settings.group_password,Passwords
 ui_text,settings.password_min_length,Minimum length
 ui_text,settings.password_min_length_unit,characters
@@ -1777,6 +1832,24 @@ ui_text,msg_workflows.allowed_missing,{where}: The transition '{transition}' ({f
 ui_text,msg_workflows.no_states,"Workflow '{workflow}' has no states (expected: state <name> ""Label"")."
 ui_text,msg_workflows.no_flow,"Workflow '{workflow}' has no flow line (expected: flow a -> b -> c; the first state is the initial state of new records)."
 ui_text,msg_workflows.flow_step_missing,Workflow '{workflow}': There is no transition for the flow step {from} -> {to} (expected: {from} -> {to} : label { allowed=... }).
+ui_text,msg_followups.disabled,Follow-ups are switched off (System → Settings).
+ui_text,msg_followups.no_api,Follow-ups are not available for API users.
+ui_text,msg_followups.no_schema_ids,The entity has no stable ID yet - please run “Apply” under System → Schema once.
+ui_text,msg_followups.not_responsible,"Only the responsible users, the creator or an administrator can complete this follow-up."
+ui_text,msg_followups.already_done,This follow-up has already been completed.
+ui_text,msg_followups.not_creator,Only the creator or an administrator can change or delete this follow-up.
+ui_text,msg_followups.done_locked,This follow-up has already been completed and can no longer be changed.
+ui_text,msg_followups.next_expected,Object with due_date and note expected
+ui_text,msg_followups.filter_expected,followup=open expected
+ui_text,msg_followups.entity_expected,Entity expected
+ui_text,msg_followups.not_found,Follow-up not found
+ui_text,msg_followups.date_expected,Date YYYY-MM-DD expected
+ui_text,msg_followups.interval_expected,Whole number of months from 1 to 120 expected
+ui_text,msg_followups.assignee_required,At least one responsible user or group expected
+ui_text,msg_followups.user_missing,User {ids} does not exist or is not active
+ui_text,msg_followups.group_missing,Group {ids} does not exist
+ui_text,msg_followups.ids_expected,List of IDs expected
+ui_text,msg_followups.note_required,Please describe what is to be done
 ui_text,msg_webhooks.not_found,Webhook not found
 ui_text,msg_webhooks.name_invalid,"Name of letters, digits, _ and - expected, starting with a letter (at most 50 characters)"
 ui_text,msg_webhooks.url_invalid,Full address with http:// or https:// expected

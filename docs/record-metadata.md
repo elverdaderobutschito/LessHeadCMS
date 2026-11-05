@@ -8,9 +8,9 @@ them in, and a client cannot overwrite them:
 | Field        | Type (`_schema`) | Content |
 |--------------|------------------|---------|
 | `created_at` | `datetime`       | time of creation, UTC, `"YYYY-MM-DD HH:MM:SS"` |
-| `created_by` | `user`           | the user who created the record: `{"id", "username", "name"}` |
+| `created_by` | `user`           | the user who created the record: `{"id", "name"}` (display name, no username – see [Privacy defaults](rest-api.md#privacy-defaults-no-usernames)) |
 | `updated_at` | `datetime`       | time of the last change, UTC, `"YYYY-MM-DD HH:MM:SS"` |
-| `updated_by` | `user`           | the user who made the last change: `{"id", "username", "name"}` |
+| `updated_by` | `user`           | the user who made the last change: `{"id", "name"}` |
 
 This is the "who/when" part of tracking metadata in the sense of content-management practice (metadata the system
 records, not the author). Status metadata (draft, review, published) is covered by [workflows](workflows.md); there is
@@ -34,7 +34,7 @@ like an `id` sent along – a form that sends a whole record back (e.g. after du
 ## Stored as: user ID, name resolved on reading
 
 The columns hold the `users.id` (no database constraint, like `lh_task.created_by`). Every response resolves it to the
-user's **current** username and display name, the same way the media library shows „hochgeladen von“
+user's **current** display name (`name`; never the username, see [Privacy defaults](rest-api.md#privacy-defaults-no-usernames)), the same way the media library shows „hochgeladen von“
 (`media.uploaded_by`). Users are never deleted in LessHeadCMS, only deactivated (`active = false`), so the ID always
 resolves – also for a deactivated user. A user whose display name changes appears with the new name in all records;
 the change history of names is not kept.
@@ -47,7 +47,7 @@ the change history of names is not kept.
 * **Every row** of `GET` (list and single record), `POST`, `PUT` and of a transition contains the fields.
 * **Sorting and filtering** (`GET /api/{entity}`, see [REST API](rest-api.md)): `sort=updated_at` etc.;
   `filter[updated_at][from]`/`[to]` as a date `YYYY-MM-DD` (whole day in UTC) or an exact UTC time
-  `YYYY-MM-DD HH:MM:SS`; `filter[updated_by]=<text>` matches the user's name or username; `eq[updated_by]=<user id>`.
+  `YYYY-MM-DD HH:MM:SS`; `filter[updated_by]=<text>` matches the user's display name (not the username); `eq[updated_by]=<user id>`.
   Unknown values (`null`) come last in both sort directions.
 * **Without a session (public API)**: `created_at` and `updated_at` are visible, `created_by` and `updated_by` are **not**
   – missing in `_schema` and in every row, and `sort`/`filter` on them answers `422` (the field does not exist for the

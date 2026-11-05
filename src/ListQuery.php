@@ -43,7 +43,7 @@ namespace LessHeadCMS;
  *                 bool/visibility        true | false (false also matches empty)
  *                 int/decimal/id/date    filter[f][from] and/or filter[f][to], bounds inclusive
  *                 created_at/updated_at  like date (JJJJ-MM-TT = whole day in UTC) or exact UTC time JJJJ-MM-TT HH:MM:SS
- *                 created_by/updated_by  substring of the user's name or username (with a session only)
+ *                 created_by/updated_by  substring of the user's display name (with a session only)
  *   eq[f]       exact value of a field (also an FK column: the id of the target row); empty value = field is empty
  *   ids         only these rows (separated by commas, at most MAX_PER_PAGE)
  *   q           substring across all fields except text/richtext/bool, including the labels of FK columns
@@ -422,9 +422,8 @@ final class ListQuery
             return $this->fkContains($f, $value);
         }
         if ($kind === 'user') {
-            // name or username of the user, as in the cell
-            return "$col IN (SELECT u.\"id\" FROM \"users\" u WHERE " . $this->contains('u."name"', $value) . ' OR '
-                . $this->contains('u."username"', $value) . ')';
+            // the display name, as in the cell - never the username (privacy default, see Users::refs())
+            return "$col IN (SELECT u.\"id\" FROM \"users\" u WHERE " . $this->contains('u."name"', $value) . ')';
         }
         return $this->contains($f['type'] === 'richtext' ? "lhc_plain($col)" : "CAST($col AS TEXT)", $value);
     }
@@ -562,8 +561,8 @@ final class ListQuery
             $expr = 'lhc_sortkey(' . $this->fkSortExpr($f) . ')';
             $empty = "$col IS NULL";
         } elseif ($kind === 'user') {
-            // by the displayed name (name, otherwise username)
-            $expr = "lhc_sortkey((SELECT CASE WHEN u.\"name\" <> '' THEN u.\"name\" ELSE u.\"username\" END FROM \"users\" u WHERE u.\"id\" = $col))";
+            // by the display name (no username - privacy default); without a name: '#<id>', like the neutral "Nutzer #<id>"
+            $expr = "lhc_sortkey((SELECT CASE WHEN u.\"name\" <> '' THEN u.\"name\" ELSE '#' || u.\"id\" END FROM \"users\" u WHERE u.\"id\" = $col))";
             $empty = "$col IS NULL";
         } elseif ($kind === 'text' || $kind === 'enum') {
             $expr = $f['type'] === 'richtext' ? "lhc_sortkey(lhc_plain($col))" : "lhc_sortkey($col)";

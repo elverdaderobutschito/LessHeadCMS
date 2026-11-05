@@ -192,7 +192,7 @@ final class Media
         }
         $this->backfillThumbnails();
         $stmt = $this->pdo->prepare(
-            'SELECT m.*, u.username AS uploader_username, u.name AS uploader_name FROM media m '
+            'SELECT m.*, u.name AS uploader_name FROM media m '
             . 'LEFT JOIN users u ON u.id = m.uploaded_by' . ($where ? ' WHERE ' . implode(' AND ', $where) : '')
             . ' ORDER BY m.id DESC'
         );
@@ -648,7 +648,7 @@ final class Media
     private function row(int $id): array
     {
         $stmt = $this->pdo->prepare(
-            'SELECT m.*, u.username AS uploader_username, u.name AS uploader_name FROM media m '
+            'SELECT m.*, u.name AS uploader_name FROM media m '
             . 'LEFT JOIN users u ON u.id = m.uploaded_by WHERE m.id = ?'
         );
         $stmt->execute([$id]);
@@ -664,10 +664,10 @@ final class Media
     {
         return self::present($row) + [
             'tags'        => $tags,
+            // {id, name} like Users::refs() - no username
             'uploaded_by' => $row['uploaded_by'] !== null ? [
-                'id'       => (int) $row['uploaded_by'],
-                'username' => (string) ($row['uploader_username'] ?? ''),
-                'name'     => (string) ($row['uploader_name'] ?? ''),
+                'id'   => (int) $row['uploaded_by'],
+                'name' => (string) ($row['uploader_name'] ?? ''),
             ] : null,
             'uploaded_at' => $row['uploaded_at'],
             'usage_count' => $usage,

@@ -36,6 +36,7 @@ a REST API and an editorial UI, ready to use.
 - [Record metadata (created/updated at/by)](docs/record-metadata.md)
 - [Record versions (history, comparison, restore)](docs/record-versions.md)
 - [Workflows](docs/workflows.md)
+- [Follow-ups („Wiedervorlage“: check a record again on a date)](docs/followups.md)
 - [Webhooks (build hooks on transitions and saves)](docs/webhooks.md)
 - [Multilingual support](docs/multilingual.md)
 - [API users and API keys](docs/api-users.md)
