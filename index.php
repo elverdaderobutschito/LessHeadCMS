@@ -21,6 +21,8 @@ use LessHeadCMS\Patterns;
 use LessHeadCMS\Permissions;
 use LessHeadCMS\PumlExporter;
 use LessHeadCMS\PumlParser;
+use LessHeadCMS\PatcherFailures;
+use LessHeadCMS\PumlPatcher;
 use LessHeadCMS\RecordMeta;
 use LessHeadCMS\Revisions;
 use LessHeadCMS\SchemaBackup;
@@ -88,7 +90,7 @@ Flight::map('notFound', function () {
 });
 
 Flight::map('error', function ($e) {
-    error_log('[LessHeadCMS] ' . get_class($e) . ': ' . $e->getMessage());
+    Http::logException($e);
     Http::jsonNow(['status' => 'error'] + Msg::of('msg_api.internal_error', 'Internal error')->fields(), 500);
 });
 
@@ -101,7 +103,18 @@ Flight::route('GET /', function () {
         return;
     }
     header('Content-Type: text/html; charset=utf-8');
-    readfile($index);
+    // Titel aus config.php (BACKEND_TITLE, ENVIRONMENT) schon in der ausgelieferten Seite, HTML-escaped; die Oberfläche
+    // ergänzt danach die aktuelle Ansicht (frontend appInfo.js). Ohne beides bleibt die Seite Byte für Byte, wie sie ist.
+    $title = Config::pageTitle();
+    if ($title === Config::APP_NAME) {
+        readfile($index);
+        return;
+    }
+    $html = (string) file_get_contents($index);
+    $escaped = htmlspecialchars($title, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    echo preg_replace_callback('#<title>[^<]*</title>#', function () use ($escaped) {
+        return '<title>' . $escaped . '</title>';
+    }, $html, 1) ?? $html;
 });
 
 // ------------------------------------------------------------------ Bootstrap
@@ -120,7 +133,7 @@ Flight::route('GET /bootstrap', function () {
         // error in the diagram: English message with code + params, as everywhere in the API (status 500 as before)
         Http::json(['status' => 'error'] + $e->msg->fields(), 500);
     } catch (\Throwable $e) {
-        error_log('[LessHeadCMS] Bootstrap: ' . $e->getMessage());
+        Http::logException($e, 'Bootstrap');
         Http::json(['status' => 'error', 'message' => $e->getMessage()], 500);
     }
 });
@@ -238,7 +251,31 @@ Flight::route('GET /api/_schema/source', function () {
             'file_matches_active' => hash_equals((string) Database::getMeta($pdo, 'schema_hash'), hash('sha256', $source)),
             // Sicherungen vor jedem Anwenden (data/schema-backups/): Liste, Aufbewahrung, ggf. Speicherplatz-Hinweis
             'backup' => SchemaBackup::overview($pdo),
+            // fehlgeschlagene Prüfungen des Diagramm-Editor-Patches (data/patcher-failures/, PatcherFailures)
+            'patcher_failures' => ['count' => PatcherFailures::count()],
+            // verbrauchte {renamed_from}-Marker der Datei (Umbenennung ist schon Teil des aktiven Schemas) samt Vorschau
+            // ihrer Entfernung - die Oberfläche bietet „Marker entfernen“ an (POST /api/_schema/markers/remove)
+            'consumed_markers' => (new SchemaMigration($pdo, Database::loadModel($pdo)))->consumedMarkers($source),
         ]];
+    });
+});
+
+// Verbrauchte {renamed_from}-Marker aus der aktiven Schema-Datei entfernen (SchemaMigration::removeConsumedMarkers()): ändert
+// nur den Text - keine Tabelle wird angelegt, umgebaut oder gelöscht; danach meldet „Änderungen prüfen“ keine Änderungen.
+// 200 {status: markers_removed, removed, markers, skipped, backup}, 409 (Datei weicht vom angewendeten Stand ab, nichts zu
+// entfernen, gesperrt)
+Flight::route('POST /api/_schema/markers/remove', function () {
+    Http::adminApi(function (Users $users, PDO $pdo) {
+        [$model, , $path] = activeSchema($pdo);
+        return [200, (new SchemaMigration($pdo, $model))->removeConsumedMarkers($path)];
+    });
+});
+
+// Protokollierte fehlgeschlagene Prüfungen des Diagramm-Editor-Patches (PatcherFailures) als eine JSON-Datei
+// patcher-failures.json (neueste zuerst: Zeitpunkt, Grund, Originaltext, Model-JSON des Editors). Nur für Admins.
+Flight::route('GET /api/_schema/patcher-failures', function () {
+    Http::adminApi(function () {
+        return [200, PatcherFailures::download()];
     });
 });
 
@@ -271,12 +308,21 @@ Flight::route('POST /api/_schema/model', function () {
     });
 });
 
-// Diagramm-Editor: im Diagramm bearbeitetes Model-JSON zurück als Text (PumlExporter). Body {"model": {...}} -> 200 {"source"},
-// 422 bei ungültiger Form (PumlExporter::check). Prüft nicht, ob das Schema gültig ist - das macht die Oberfläche danach mit
-// /api/_schema/model. Ändert nichts, das Ergebnis landet erst über "Speichern" im Textfeld.
+// Diagramm-Editor: im Diagramm bearbeitetes Model-JSON zurück als Text. Body {"model": {...}, "source"?: "..."}.
+// Mit "source" (Text, aus dem das Diagramm geöffnet wurde) ändert PumlPatcher nur die betroffenen Zeilen dieses Texts -
+// Kommentare, Notizen, skinparam, Leerzeilen, Einrückung bleiben - und prüft das Ergebnis semantisch gegen den kompletten
+// Export, dazu seine Warnungen gegen die des Originaltexts (eine neue Warnung = Prüfung fehlgeschlagen, wird in
+// data/patcher-failures/ protokolliert): 200 {source, mode: unchanged|patch|export, removed: [{line, text}] (mit gelöschten
+// Elementen entfernte Kommentare/Notizen), lost: [{line, text}] und reason/reason_code (nur bei mode export: ließ sich
+// nicht als Patch schreiben, der Text ist der komplette Export - die Oberfläche lässt ihn nur nach ausdrücklicher
+// Bestätigung übernehmen)}; 422
+// schema_error, wenn das bearbeitete Modell kein gültiges Schema ergibt.
+// Ohne "source" wie bisher der komplette Export (PumlExporter::toPuml) mit mode export. 422 bei ungültiger Form
+// (PumlExporter::check). Ändert nichts, das Ergebnis landet erst über "Speichern" im Textfeld.
 Flight::route('POST /api/_schema/export', function () {
     Http::adminApi(function (Users $users, PDO $pdo) {
         $model = Http::body()['model'] ?? null;
+        $source = Http::body()['source'] ?? null;
         $errors = PumlExporter::check($model);
         if ($errors) {
             throw ApiException::of(422, 'validation', Msg::spaceList(array_slice($errors, 0, 5)), [
@@ -286,7 +332,25 @@ Flight::route('POST /api/_schema/export', function () {
                 'error_list' => $errors,
             ]);
         }
-        return [200, ['source' => PumlExporter::toPuml($model)]];
+        if (!is_string($source)) {
+            return [200, ['source' => PumlExporter::toPuml($model), 'mode' => 'export', 'removed' => [], 'lost' => []]];
+        }
+        try {
+            $r = PumlPatcher::patch($source, $model, Workflows::active($pdo));
+        } catch (SchemaException $e) {
+            throw ApiException::of(422, 'schema_error', $e->msg);
+        }
+        if ($r['verify_failed']) {
+            // Prüfung nach dem Patch fehlgeschlagen = Fehler im Patcher: zum Nachstellen protokollieren (System → Schema)
+            PatcherFailures::record($source, $model, $r['reason']);
+        }
+        return [200, [
+            'source' => $r['source'], 'mode' => $r['mode'], 'removed' => $r['removed'], 'lost' => $r['lost'],
+            'reason' => $r['reason'] !== null ? $r['reason']->text() : null,
+            'reason_code' => $r['reason'] !== null ? $r['reason']->codeOnly() : null,
+            // nur nach einer fehlgeschlagenen Prüfung: neue Anzahl der protokollierten Fälle (Hinweis in System → Schema)
+            'patcher_failures' => $r['verify_failed'] ? ['count' => PatcherFailures::count()] : null,
+        ]];
     });
 });
 
@@ -1127,6 +1191,15 @@ Flight::route('POST /api/@entity/@id:[0-9]+/transition', function ($entity, $id)
     Http::api(function (Cms $cms) use ($entity, $id) {
         $body = Http::body();
         return [200, $cms->transition($entity, (int) $id, $body['transition'] ?? null, $body[Revisions::REASON_KEY] ?? null)];
+    });
+});
+
+// Manuelle Reihenfolge (Feldtyp sort): Body {"direction": "up"|"down"} plus die Listenfilter (filter, eq, q, followup wie bei
+// GET /api/{entity}) - der Server ermittelt den Nachbarn und tauscht die Werte (Cms::move()); 404 für Entitäten ohne sort-Feld,
+// 409 am Rand der Gruppe
+Flight::route('POST /api/@entity/@id:[0-9]+/move', function ($entity, $id) {
+    Http::api(function (Cms $cms) use ($entity, $id) {
+        return [200, $cms->move($entity, (int) $id, Http::body())];
     });
 });
 

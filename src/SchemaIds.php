@@ -26,7 +26,8 @@ use PDO;
 /**
  * Stable IDs of the schema elements and the stored diagram layout (visual schema editor, phase 2).
  *
- * schema_ids: per element of the active schema (entity, field, media field, relationship, enum) a permanent ID (UUID)
+ * schema_ids: per element of the active schema (entity, field, media field, relationship, enum, metadata class of media
+ * fields and its fields - kinds media_meta and media_meta_field) a permanent ID (UUID)
  * that survives renames. An element is identified via its key 'model_key' - that is the identifier of the model JSON
  * derived from the name (PumlParser::modelJson(), e.g. "entity:kurs", "field:kurs.titel",
  * "relation:kurs.dozent_id", "relation:kurs_tag", "media:kurs.galerie", "enum:status"); the remaining columns describe
@@ -114,6 +115,7 @@ final class SchemaIds
             self::delete($pdo, array_values($stale));
         }
         Languages::pruneEnumValues($pdo, $model);
+        Languages::prunePackages($pdo, $model);
     }
 
     /**
@@ -187,21 +189,31 @@ final class SchemaIds
             $id = self::resolve($candidates[$key] ?? [], $ids);
             return ['id' => $id ?? self::DRAFT . $key, 'key' => $key, 'active' => $id !== null ? ($names[$id] ?? null) : null] + $o;
         };
+        $fields = function (array $f) use ($resolve): array {
+            $f = $resolve($f);
+            // rules have no schema_ids row of their own: stable via the field (one rule type at most once per field)
+            if (isset($f['rules'])) {
+                $f['rules'] = array_map(function (array $r) use ($f): array {
+                    return ['id' => $f['id'] . ':' . $r['type'], 'key' => $r['id']] + $r;
+                }, $f['rules']);
+            }
+            return $f;
+        };
         foreach ($model['entities'] as &$e) {
             $e = $resolve($e);
-            $e['fields'] = array_map(function (array $f) use ($resolve): array {
-                $f = $resolve($f);
-                // rules have no schema_ids row of their own: stable via the field (one rule type at most once per field)
-                if (isset($f['rules'])) {
-                    $f['rules'] = array_map(function (array $r) use ($f): array {
-                        return ['id' => $f['id'] . ':' . $r['type'], 'key' => $r['id']] + $r;
-                    }, $f['rules']);
-                }
-                return $f;
-            }, $e['fields']);
+            $e['fields'] = array_map($fields, $e['fields']);
             $e['media'] = array_map($resolve, $e['media']);
         }
         unset($e);
+        // metadata classes (<<media_meta>>): a node of the diagram like an entity, their fields like entity fields
+        // (not "foreach (... ?? [] as &$mc)": a reference into the temporary array of ?? would change nothing)
+        if (isset($model['media_meta'])) {
+            $model['media_meta'] = array_map(function (array $mc) use ($resolve, $fields): array {
+                $mc = $resolve($mc);
+                $mc['fields'] = array_map($fields, $mc['fields']);
+                return $mc;
+            }, $model['media_meta']);
+        }
         $model['relations'] = array_map($resolve, $model['relations']);
         $model['enums'] = array_map($resolve, $model['enums']);
         return $model;
@@ -246,6 +258,7 @@ final class SchemaIds
             }
         }
         Languages::pruneEnumValues($pdo, $model); // translations of removed enum values
+        Languages::prunePackages($pdo, $model);
         return ['kept' => count($kept), 'created' => count($rows) - count($kept), 'removed' => count($removed)];
     }
 
@@ -279,7 +292,7 @@ final class SchemaIds
             if (!is_array($body['positions'])) {
                 $errors['positions'] = Msg::of('msg_layout.positions_expected', 'Object {id: {x, y}} expected');
             } else {
-                $nodes = $pdo->query("SELECT id FROM schema_ids WHERE kind IN ('entity', 'enum')")->fetchAll(PDO::FETCH_COLUMN);
+                $nodes = $pdo->query("SELECT id FROM schema_ids WHERE kind IN ('entity', 'enum', 'media_meta')")->fetchAll(PDO::FETCH_COLUMN);
                 $nodes = array_flip($nodes);
                 $positions = [];
                 foreach ($body['positions'] as $id => $pos) {
@@ -287,7 +300,7 @@ final class SchemaIds
                     if (!isset($nodes[$id])) {
                         $errors["positions.$id"] = strpos($id, self::DRAFT) === 0
                             ? Msg::of('msg_layout.draft_id', 'provisional ID (element not applied yet) - position is not saved')
-                            : Msg::of('msg_layout.unknown_id', 'unknown ID (no entity/enum of the active schema)');
+                            : Msg::of('msg_layout.unknown_id', 'unknown ID (no entity/enum/metadata class of the active schema)');
                         continue;
                     }
                     $x = self::number($pos['x'] ?? null, self::COORD_LIMIT);
@@ -371,6 +384,13 @@ final class SchemaIds
         }
         foreach ($model['enums'] as $en) {
             $out[] = ['model_key' => $en['id'], 'kind' => 'enum', 'name' => $en['name']];
+        }
+        // metadata classes: kinds of their own (no table - entity_name of a metadata field is the class name)
+        foreach ($model['media_meta'] ?? [] as $mc) {
+            $out[] = ['model_key' => $mc['id'], 'kind' => 'media_meta', 'name' => $mc['name']];
+            foreach ($mc['fields'] as $f) {
+                $out[] = ['model_key' => $f['id'], 'kind' => 'media_meta_field', 'entity_name' => $mc['name'], 'name' => $f['name']];
+            }
         }
         return $out;
     }

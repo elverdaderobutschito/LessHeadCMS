@@ -204,7 +204,7 @@ final class DataDir
                     . 'directory or delete it there first.', ['dir' => $dir, 'file' => 'cms.sqlite' . $suffix]));
             }
         }
-        $version = (string) (new PDO('sqlite::memory:'))->query('SELECT sqlite_version()')->fetchColumn();
+        $version = (string) Database::open(':memory:')->query('SELECT sqlite_version()')->fetchColumn();
         if (version_compare($version, '3.27.0', '<')) {
             throw $invalid(Msg::of('msg_datadir.sqlite_old', 'Moving needs SQLite 3.27 or newer (VACUUM INTO); this server has {version}.',
                 ['version' => $version]));
@@ -361,7 +361,7 @@ final class DataDir
             if ($e instanceof ApiException) {
                 throw $e;
             }
-            error_log('[LessHeadCMS] Moving the data directory: ' . get_class($e) . ': ' . $e->getMessage());
+            Http::logException($e, 'Moving the data directory');
             throw $failed($e instanceof DataDirTestAbort ? $e->msg : Msg::of('msg_datadir.internal', 'Unexpected error (see the PHP error log).'));
         } finally {
             $st->finished = true;
@@ -456,7 +456,7 @@ final class DataDir
                 $failed[] = Config::displayPath($file);
             }
         }
-        foreach (['schema-backups', 'sessions', 'cache'] as $sub) {
+        foreach (['schema-backups', 'sessions', 'cache', 'patcher-failures'] as $sub) {
             @rmdir($from . '/' . $sub); // only if empty
         }
         if ($failed) {
@@ -520,7 +520,7 @@ final class DataDir
     private static function verifyCopy(PDO $pdo, string $copy, callable $failed, string $display): void
     {
         try {
-            $check = new PDO('sqlite:' . $copy, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+            $check = Database::open($copy);
             $result = (string) $check->query('PRAGMA integrity_check')->fetchColumn();
             if ($result !== 'ok') {
                 throw $failed(Msg::of('msg_datadir.integrity', 'The copy in {dir} is damaged (integrity_check: {result}).',
@@ -715,7 +715,8 @@ final class DataDir
         foreach ($moved['backups'] ?? [] as $name) {
             $files[] = $from . '/schema-backups/' . basename((string) $name);
         }
-        $files = array_merge($files, glob($from . '/sessions/sess_*') ?: [], glob($from . '/cache/ui-texts-*.json') ?: []);
+        $files = array_merge($files, glob($from . '/sessions/sess_*') ?: [], glob($from . '/cache/ui-texts-*.json') ?: [],
+            glob($from . '/patcher-failures/*.json') ?: []); // diagnosis logs (PatcherFailures) are not moved along
         foreach (['migration.flag', 'field-order-upgrade.lock', 'bootstrap.lock', self::PENDING_FILE] as $name) {
             $files[] = $from . '/' . $name;
         }

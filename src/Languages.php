@@ -44,6 +44,12 @@ use PDO;
  *    pattern. Translatable like the schema elements (own group in elements(), CSV with kind "pattern" and the name as
  *    ref); the default language may override the message as well. Older tables (CHECK without 'pattern') are rebuilt
  *    once by migrateTranslations().
+ *  - package names (package "Katalog" { … } in the diagram, the groups of the sidebar): kind = 'package', ref_id = name of
+ *    the package (packages have no stable ID; the name is the same on every installation, so the CSV file is portable).
+ *    Translatable like entity names, the default language may override the name as well; displayed is the text of the
+ *    display language, otherwise the override, otherwise the name from the diagram. A renamed package loses its
+ *    translations (prunePackages() removes those of packages no longer in the diagram). Older tables (CHECK without
+ *    'package') are rebuilt once by migrateTranslations().
  *
  * The tables are created on the first write (creating a language, choosing a language); read access treats missing
  * tables as empty. An existing installation therefore does not need another bootstrap, and without multilingual
@@ -68,7 +74,7 @@ final class Languages
     public const TRANSLATIONS = 'translations';
     public const PREFS = 'user_language_prefs';
 
-    public const KINDS = ['entity', 'field', 'relation', 'enum', 'enum_value', 'ui_text', 'pattern'];
+    public const KINDS = ['entity', 'field', 'relation', 'enum', 'enum_value', 'ui_text', 'pattern', 'package'];
 
     /**
      * Messages of the built-in patterns as the translations/en.csv of 2026-10-30 (commit 97bb66e) shipped them as kind
@@ -97,7 +103,7 @@ final class Languages
     private const TRANSLATIONS_DDL = 'CREATE TABLE IF NOT EXISTS translations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   language_id INTEGER NOT NULL REFERENCES languages(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK (kind IN (\'entity\', \'field\', \'relation\', \'enum\', \'enum_value\', \'ui_text\', \'pattern\')),
+  kind TEXT NOT NULL CHECK (kind IN (\'entity\', \'field\', \'relation\', \'enum\', \'enum_value\', \'ui_text\', \'pattern\', \'package\')),
   ref_id TEXT NOT NULL,
   value TEXT NOT NULL DEFAULT \'\',
   text TEXT NOT NULL,
@@ -157,8 +163,8 @@ final class Languages
     }
 
     /**
-     * Rebuild translations from phase 1 (CHECK without 'ui_text', ref_id with a foreign key to schema_ids) and from before the
-     * pattern library (CHECK without 'pattern') once to the new definition - SQLite cannot change CHECK and foreign keys via
+     * Rebuild translations from phase 1 (CHECK without 'ui_text', ref_id with a foreign key to schema_ids), from before the
+     * pattern library (CHECK without 'pattern') and from before the package names (CHECK without 'package') once to the new definition - SQLite cannot change CHECK and foreign keys via
      * ALTER TABLE. Create a new table,
      * copy the rows, drop the old one, rename; all in one transaction. Nothing references translations, so
      * dropping also works with foreign keys switched on.
@@ -169,7 +175,7 @@ final class Languages
         $stmt->execute([self::TRANSLATIONS]);
         $sql = (string) $stmt->fetchColumn();
         $stmt->closeCursor(); // an open query would lock DROP TABLE ("database table is locked")
-        if ($sql === '' || strpos($sql, "'pattern'") !== false) {
+        if ($sql === '' || strpos($sql, "'package'") !== false) {
             return;
         }
         $pdo->beginTransaction();
@@ -584,6 +590,42 @@ final class Languages
         }
         unset($map);
         $out['entities'] = (object) $entities;
+        // names of the packages (groups of the sidebar): only those with a text, without one the UI shows the name itself
+        $packages = [];
+        foreach (self::packageNames($model) as $name) {
+            if (isset($texts[self::itemKey('package', $name, null)])) {
+                $packages[$name] = $texts[self::itemKey('package', $name, null)];
+            }
+        }
+        if ($packages) {
+            $out['packages'] = (object) $packages;
+        }
+        // metadata classes (<<media_meta>>), by class name: name of the class (dialog title), fields, enum values - only
+        // when there is something, so the answer stays as before for diagrams without one
+        $meta = [];
+        foreach ($model['media_meta'] ?? [] as $mc) {
+            $map = ['entity' => $t('entity', $mc['id']), 'fields' => [], 'enum_values' => []];
+            foreach ($mc['fields'] as $f) {
+                if (($text = $t('field', $f['id'])) !== null) {
+                    $map['fields'][$f['name']] = $text;
+                }
+                if (($f['type'] ?? null) === 'enum' && isset($enumKey[$f['enum_name']])) {
+                    foreach ($stored['enums'][$f['enum_name']] ?? [] as $v) {
+                        if (($text = $t('enum_value', $enumKey[$f['enum_name']], (string) $v)) !== null) {
+                            $map['enum_values'][$f['name']][$v] = $text;
+                        }
+                    }
+                }
+            }
+            if ($map['entity'] !== null || $map['fields'] || $map['enum_values']) {
+                $map['fields'] = (object) $map['fields'];
+                $map['enum_values'] = (object) $map['enum_values'];
+                $meta[$mc['name']] = $map;
+            }
+        }
+        if ($meta) {
+            $out['media_meta'] = (object) $meta;
+        }
         return $out;
     }
 
@@ -653,6 +695,38 @@ final class Languages
         }
     }
 
+    /**
+     * Packages of the model that group at least one concrete class (only those appear in the sidebar), in diagram order.
+     *
+     * @return string[]
+     */
+    private static function packageNames(array $modelJson): array
+    {
+        $names = [];
+        foreach ($modelJson['entities'] as $e) {
+            $name = $e['package'] ?? null;
+            if (empty($e['abstract']) && is_string($name) && $name !== '') {
+                $names[$name] = true;
+            }
+        }
+        return array_map('strval', array_keys($names));
+    }
+
+    /** Remove translations of packages that no longer exist in the model (after a migration; a rename counts as new) */
+    public static function prunePackages(PDO $pdo, array $modelJson): void
+    {
+        if (!Database::tableExists($pdo, self::TRANSLATIONS)) {
+            return;
+        }
+        $keep = self::packageNames($modelJson);
+        $del = $pdo->prepare('DELETE FROM translations WHERE id = ?');
+        foreach ($pdo->query("SELECT id, ref_id FROM translations WHERE kind = 'package'")->fetchAll() as $row) {
+            if (!in_array((string) $row['ref_id'], $keep, true)) {
+                $del->execute([$row['id']]);
+            }
+        }
+    }
+
     /** Delete translations for removed schema IDs (SchemaIds::delete(), also with foreign keys switched off) */
     public static function deleteRefs(PDO $pdo, array $ids): void
     {
@@ -661,7 +735,7 @@ final class Languages
         }
         foreach (array_chunk($ids, 500) as $chunk) {
             $in = implode(', ', array_fill(0, count($chunk), '?'));
-            $pdo->prepare("DELETE FROM translations WHERE kind NOT IN ('ui_text', 'pattern') AND ref_id IN ($in)")->execute($chunk);
+            $pdo->prepare("DELETE FROM translations WHERE kind NOT IN ('ui_text', 'pattern', 'package') AND ref_id IN ($in)")->execute($chunk);
         }
     }
 
@@ -826,6 +900,20 @@ final class Languages
                 $groups[] = ['title' => $e['name'], 'kind' => 'entity', 'abstract' => $e['abstract'], 'items' => $items];
             }
         }
+        // metadata classes (<<media_meta>>): a group of their own per class - the class name (shown e.g. as the title of the
+        // metadata dialog) and its fields, stored with the kinds entity/field like those of an entity
+        foreach ($model['media_meta'] ?? [] as $mc) {
+            $items = [$item('entity', $mc['id'], $mc['name'], $mc['name'], Msg::of('msg_i18n.type_media_meta', 'Metadata class'))];
+            foreach ($mc['fields'] as $f) {
+                $items[] = $item('field', $f['id'], "{$mc['name']}.{$f['name']}", $f['name'], $f['type'] === 'enum'
+                    ? Msg::of('msg_i18n.type_enum_field', 'Field (Enum {enum})', ['enum' => $f['enum_name']])
+                    : Msg::of('msg_i18n.type_field', 'Field ({type})', ['type' => $f['type']]));
+            }
+            $items = array_values(array_filter($items));
+            if ($items) {
+                $groups[] = ['title' => $mc['name'], 'kind' => 'media_meta', 'abstract' => false, 'items' => $items];
+            }
+        }
         foreach ($model['enums'] as $en) {
             $items = [$item('enum', $en['id'], $en['name'], $en['name'], Msg::of('msg_i18n.type_enum', 'Enum'))];
             foreach ($en['values'] as $v) {
@@ -835,6 +923,16 @@ final class Languages
             if ($items) {
                 $groups[] = ['title' => $en['name'], 'kind' => 'enum', 'abstract' => false, 'items' => $items];
             }
+        }
+        // names of the packages (groups of the sidebar): one group, ref_id and ref are the name from the diagram
+        $items = [];
+        foreach (self::packageNames($model) as $name) {
+            $type = Msg::of('msg_i18n.type_package', 'Package');
+            $items[] = ['kind' => 'package', 'ref_id' => $name, 'value' => null, 'original' => $name, 'type' => $type->text(),
+                'type_code' => $type->codeOnly(), 'ref' => $name];
+        }
+        if ($items) {
+            $groups[] = ['title' => 'Packages', 'kind' => 'package', 'abstract' => false, 'items' => $items];
         }
         return array_merge($groups, self::patternGroup($pdo));
     }

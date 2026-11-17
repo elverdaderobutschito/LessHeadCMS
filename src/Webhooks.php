@@ -470,7 +470,7 @@ final class Webhooks
                 $prune->execute([':w' => (int) $hook['id']]);
             }
         } catch (\Throwable $e) {
-            error_log('[LessHeadCMS] Webhooks: ' . get_class($e) . ': ' . $e->getMessage());
+            Http::logException($e, 'Webhooks');
         }
     }
 
@@ -478,7 +478,8 @@ final class Webhooks
      * hash of the payload: "sha256:" + SHA-256 (hex) over the canonical JSON of the record as GET /api/{entity}/{id}
      * delivers it without a login - reproducible by the target system from its own response:
      *  - without _min_warnings (an editorial hint, not content) and, in nested objects (media), without url and
-     *    thumbnail_url (absolute URLs depend on the host name of the request; path/thumbnail_path stay);
+     *    thumbnail_url (absolute URLs depend on the host name of the request; path/thumbnail_path stay) - not inside "meta"
+     *    of a medium (media(Klasse)), whose keys are metadata fields;
      *  - object keys sorted (byte order) at every level, lists in their order;
      *  - compact JSON (no spaces), UTF-8 and "/" unescaped - the form of JSON.stringify() in JavaScript.
      * The public view never contains created_by/updated_by; field permissions only apply to logged-in users, so it holds
@@ -499,18 +500,29 @@ final class Webhooks
         return 'sha256:' . hash('sha256', (string) $json);
     }
 
-    /** @return mixed */
-    private static function canonical($value, bool $top)
+    /**
+     * @param bool $values true inside "meta" of a medium (media(Klasse)): field values of the link - an object (also when
+     *        empty) whose keys are field names, so a metadata field called "url" is kept
+     * @return mixed
+     */
+    private static function canonical($value, bool $top, bool $values = false)
     {
+        if ($value instanceof \stdClass) {
+            $value = (array) $value;
+            if ($value === []) {
+                return (object) [];
+            }
+            $values = true;
+        }
         if (!is_array($value)) {
             return $value;
         }
-        if ($value === [] || array_keys($value) === range(0, count($value) - 1)) {
+        if (!$values && ($value === [] || array_keys($value) === range(0, count($value) - 1))) {
             return array_map(function ($v) {
                 return self::canonical($v, false);
             }, $value);
         }
-        if (!$top) {
+        if (!$top && !$values) {
             unset($value['url'], $value['thumbnail_url']);
         }
         ksort($value, SORT_STRING);
@@ -576,7 +588,9 @@ final class Webhooks
             $error = $code !== CURLE_OK ? self::curlError($code, curl_error($ch) ?: curl_strerror($code), $timeout) : null;
             $results[$i] = self::result($error, $http > 0 ? $http : null, $ms);
             curl_multi_remove_handle($mh, $ch);
-            curl_close($ch);
+            if (PHP_VERSION_ID < 80000) {
+                curl_close($ch); // no-op since PHP 8.0, deprecated since 8.5 (Flight would turn the notice into an exception)
+            }
         }
         curl_multi_close($mh);
         return $results;

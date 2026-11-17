@@ -8,7 +8,7 @@ _Part of the [LessHeadCMS documentation](../README.md)._
 | Method  | Path                    | Access        | Description                                             |
 |---------|-------------------------|---------------|---------------------------------------------------------|
 | GET     | `/api`                  | public        | list of the entities                                    |
-| GET     | `/api/{entity}/_schema` | public        | `package` (name of the `package` block or `null`), field name, type (for `enum` additionally `enum_values`, for fields with [field rules](validation.md) `rules`), `required`, `foreign_key` (target table, `title_field`, `label`, `on_delete`, `one_to_one`), `many_to_many` (`name`, target table, `title_field`, `label`, `show_label`, `symmetric`), `unique_fields` (`{unique}` group), only for media fields additionally `media` (`name`, `type: "media"`, `required`), `field_order` (display order, see below), only for classes with form sections `sections` and `section` per entry, `system_fields` (record metadata `created_at`/`created_by`/`updated_at`/`updated_by`, see [Record metadata](record-metadata.md); public without the two user fields) |
+| GET     | `/api/{entity}/_schema` | public        | `package` (name of the `package` block or `null`), field name, type (for `enum` additionally `enum_values`, for fields with [field rules](validation.md) `rules`), `required`, `foreign_key` (target table, `title_field`, `label`, `on_delete`, `one_to_one`), `many_to_many` (`name`, target table, `title_field`, `label`, `show_label`, `symmetric`), `unique_fields` (`{unique}` group), only for media fields additionally `media` (`name`, `type: "media"`, `required`; with a metadata class also `meta`, `meta_class`, `meta_sections` – see "Metadata per medium" below), `field_order` (display order, see below), only for classes with form sections `sections` and `section` per entry, `system_fields` (record metadata `created_at`/`created_by`/`updated_at`/`updated_by`, see [Record metadata](record-metadata.md); public without the two user fields) |
 | GET     | `/api/{entity}`         | public        | records, **always paginated** (default: page 1 with 50 rows) – see "Lists: paging, sorting, filtering" |
 | GET     | `/api/{entity}/{id}`    | public        | one record                                              |
 | POST    | `/api/{entity}`         | **session**   | create (JSON body) → 201                                |
@@ -43,7 +43,7 @@ longer. Their result never changes the response – a failed call only appears i
 |---|---|
 | `page` | page from 1 (default 1). A page past the end delivers `data: []`, not an error |
 | `per_page` | rows per page, 1 to **500** (default 50). More → `422` with a message, **no** silent capping. Both numbers are the defaults of the settings `list_max_per_page` and `list_default_per_page` ([Settings](api-users.md#settings-api_settings-system--einstellungen)) |
-| `sort`, `order` | field of the entity (also `id`, FK columns and the record metadata `created_at`/`created_by`/`updated_at`/`updated_by`; not n:n, not a media field), `order=asc`/`desc`. Empty values come last in both directions, ties are resolved by the `id`. Text case-insensitive, umlauts like their base letter, numbers in the text numerically; FK column by the label of the target row; richtext by plain text. Without `sort`: by `id` |
+| `sort`, `order` | field of the entity (also `id`, FK columns and the record metadata `created_at`/`created_by`/`updated_at`/`updated_by`; not n:n, not a media field), `order=asc`/`desc`. Empty values come last in both directions, ties are resolved by the `id`. Text case-insensitive, umlauts like their base letter, numbers in the text numerically; FK column by the label of the target row; richtext by plain text. Without `sort`: by `id` – or, for an entity with a `sort` field, in its manual order (see „Manual order“ below) |
 | `filter[field]` | depending on the kind of field: **string/text/richtext** substring, case-insensitive (richtext in the plain text without Markdown); **FK column, n:n list** substring of the label `<entity> #<id> – <title_field>` – `<entity>` matches both in the spelling the caller sees (translation of their display language; public API: display text of the default language) and with the name from the diagram; **enum** one of the values, several separated by commas; **bool/visibility** `true`/`false` (`false` also matches empty); **int/decimal/date/id** `filter[field][from]` and/or `filter[field][to]`, bounds inclusive; **created_at/updated_at** like date (`YYYY-MM-DD` = whole day in UTC) or an exact UTC time `YYYY-MM-DD HH:MM:SS`; **created_by/updated_by** substring of the user's display name, never the username (with a session only) |
 | `eq[field]` | exact value (for FK columns the id of the target row, for `created_by`/`updated_by` the user id); empty = field is empty |
 | `ids` | only these rows, separated by commas (at most 500, setting `list_max_per_page`) |
@@ -88,6 +88,38 @@ consuming frontend can load the file without a detour through PHP and without ac
 user data (uploaded by) is deliberately not included there. `POST`/`PUT` accept per field a list of media IDs in the
 desired order (`"galerie": [7, 3]`), as well as the objects read back (`id` is what counts); duplicate IDs count
 once. If the field is missing in a `PUT`, the list stays unchanged. Unknown ID → `422` („Medium #9 existiert nicht“).
+
+**Metadata per medium (`media(Klasse)`, see [PlantUML rules](plantuml-syntax.md)):** for a media field with a metadata
+class, `_schema.media[]` additionally has `meta` (the fields of the class in the same form as `fields`: `name`, `type`,
+`required`, `enum_values`, `rules`, `section`), `meta_class` (class name) and, if the class has separator lines,
+`meta_sections`. Media fields without a metadata class look exactly as before. Reading: every medium of such a field
+gets a `meta` object with all (permitted) fields of the class, native types like record fields (`null` = empty):
+
+```json
+"bilder": [
+  {"id": 7, "url": "https://…/media/….jpg", "title": "Strand", "description": "…", …,
+   "meta": {"bildunterschrift": "Sonnenuntergang am Meer", "fotograf": "Ute", "link": null, "hervorheben": true}}
+]
+```
+
+`meta` is a key of its own (a metadata field `title` never collides with the global `title` of the medium). Writing
+(`POST`/`PUT`) accepts a mixed list, in the desired order:
+
+* `7` (or `{"id": 7}` / an object read back without `meta`): the medium keeps its stored metadata if it is already linked to
+  this record in this field – a newly linked medium starts empty;
+* `{"id": 7, "meta": {"fotograf": "Max"}}`: only the keys sent change (partial update), the others keep their value.
+
+The metadata of the whole list are checked like record fields (type, required, rules). Errors (`422`) use keys with the
+position in the body and name the medium in the message: `"bilder[2].meta.bildunterschrift": "Medium #9: Pflichtfeld"`;
+rule violations appear in `violations` under the same key (code `msg_records.media_meta_error` with the rule message
+nested as `error`; the rule parameters stay in `params`). Also `422`: an object without `id`, `meta` that is not an
+object, unknown metadata keys (`bilder[0].meta.foo`), `meta` on a media field without a metadata class
+(`cover[0].meta`). A medium sent more than once counts once, at the position of its first occurrence; the `meta` objects of all its occurrences are **merged** (`[{"id": 3, "meta": {"fotograf": "Max"}}, {"id": 3, "meta": {"link": "https://…"}}]` sets both keys; identical values for the same key are fine). The same key with a **different** value is a contradiction: `422` under the later entry, e.g. `"galerie[1]": "Medium #3 kommt mehrfach mit unterschiedlichen Metadaten vor ('bildunterschrift': Eintrag 0 und 1) …"` (code `msg_records.media_meta_conflict`; numbers compare by value, `7` and `7.0` are the same). Field permissions apply: a restricted
+metadata field is missing in `_schema`, in `meta` and in the versions; a value sent for it is discarded silently (the
+stored value stays). A change of the metadata alone counts as a change of the record (`updated_at`/`updated_by`, new
+version, webhook `updated`). `GET /api/{entity}/{id}/_violations` and `GET /api/_violations` also report stored
+metadata that violate the current rules (field `bilder[1].meta.bildunterschrift`). The list view and „verwendet“ in the
+media library are unchanged (a medium counts once per link, with or without metadata).
 
 **Media library (admins, otherwise only with the system area `media`; a session is always needed, also for GET → otherwise `401`/`403`; class `src/Media.php`):**
 
@@ -311,6 +343,31 @@ Example:
 ```bash
 curl -b jar.txt -X POST https://<host>/api/artikel -d '{"titel":"Hallo","inhalt":"# Hi","veroeffentlicht":true,"erstellt_am":"2026-09-20","gehort_zu_kategorie_id":1,"geschrieben_von_autor_id":1,"tag_ids":[1,2]}'
 ```
+
+## Manual order (`sort` field)
+
+For an entity with a `sort` field (see the PlantUML rules), `GET /api/{entity}` **without `sort`** delivers the rows in the
+manual order: the groups one after the other (rows without a parent first; groups of parents that have a `sort` field
+themselves in *their* manual order, otherwise alphabetically by the parent's title), within a group by the value of the
+field, ties by `id`. With `sort=…` the list is sorted as usual; `sort=<sort field>` sorts by the plain number across
+all groups. `_schema` reports the field with `"type": "sort"` and additionally
+`"sort": {"field": "position", "by": ["auf_seite_id"], "shared": true}` (`by`: the FK columns of the group, `shared`: the
+order is shared with other subclasses of an abstract class). The value is read-only: `POST`/`PUT` ignore it.
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/{entity}/{id}/move` | body `{"direction": "up" \| "down"}` plus optionally the list filters (`filter`, `eq`, `q` as objects/strings like the query parameters) → `200 {"record": {…}, "swapped_with": <id>}`. Swaps the record with its neighbour **in the same group and the same table** – with filters: the next one that matches them, rows hidden by the filter keep their places. Needs the right to update the entity (`401`/`403` like `PUT`). `409 {"error": "edge"}` if there is no neighbour in that direction, `404 {"error": "no_sort"}` for an entity without a `sort` field, `422` for a missing or unknown `direction` or an invalid filter. |
+
+The client only says "up" or "down" – the server determines the neighbour and the values, so two editors moving at the
+same time cannot produce equal values. A move counts as a change of **both** records: `updated_at`/`updated_by` are set,
+both get a version (`action: "reorder"`; several moves in a row by the same user within 15 minutes of each other are one version) and the global
+`<entity>.updated` webhook fires for both (payload additionally `"reorder": true`).
+
+`GET /api/{entity}?arrange=1` (used by the list view; only without `sort`) adds to every row
+`"_arrange": {"group": "<key>", "up": bool, "down": bool}` (is there a neighbour in that direction – also beyond the page)
+and to the response `"arrange": {"groups": {"<key>": [{"table", "id", "self"}, …]}, "continued": bool}` (the parents of
+every group for the heading, for a tree the whole path; `continued`: the first group began on the previous page).
+With another sorting `"arrange": null`.
 
 ## Privacy defaults: no usernames
 

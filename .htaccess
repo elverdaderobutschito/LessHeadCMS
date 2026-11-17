@@ -31,11 +31,18 @@ DirectoryIndex index.php
 #   style-src-attr               style="..."-Attribute: der Richtext-Editor (Toast UI) setzt sie laufend selbst
 #   style-src                    nur Rückfall für alte Browser, die -elem/-attr nicht kennen
 #   img-src 'self' data:         media/ und die als data:-URI eingebetteten Symbole des Richtext-Editors
+#   media-src 'self'             Audio und Video aus media/ in der Medienvorschau der Liste (<audio>, <video>)
+#   frame-src 'self'             PDF aus media/ im PDF-Betrachter des Browsers (<iframe> der Medienvorschau)
 #   connect-src 'self'           die eigene API
 # Wer im Frontend Schriften, Bilder oder Skripte von einer anderen Adresse einbindet, muss die passende Direktive erweitern.
 <IfModule mod_headers.c>
     # Einbetten in fremde Seiten verbieten (Clickjacking); frame-ancestors in der CSP ist das moderne Gegenstück
     Header set X-Frame-Options "DENY" "expr=%{CONTENT_TYPE} =~ m#^text/html#i"
     Header set Referrer-Policy "same-origin" "expr=%{CONTENT_TYPE} =~ m#^text/html#i"
-    Header set Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'sha256-c/PHNd78dqpHpfQbEJ/PIhwmQukJpGFNXtlAp6vOzDg='; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" "expr=%{CONTENT_TYPE} =~ m#^text/html#i"
+    # ACHTUNG bei jeder Änderung der folgenden CSP-Zeile (auch X-Frame-Options/Referrer-Policy darüber): nginx liest diese
+    # Datei nicht. Die add_header-Zeilen im Abschnitt „Security headers of the UI with nginx“ in docs/deployment.md UND
+    # README.md müssen denselben Wert bekommen, sonst fehlt nginx-Installationen die neue Direktive.
+    # Der Test backend/tests/headers_test.php vergleicht diese Datei (und media/.htaccess) inhaltlich mit beiden Stellen
+    # und nennt bei einer Abweichung Datei, Header und Direktive: ddev exec php backend/tests/headers_test.php
+    Header set Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'sha256-c/PHNd78dqpHpfQbEJ/PIhwmQukJpGFNXtlAp6vOzDg='; style-src-attr 'unsafe-inline'; img-src 'self' data:; media-src 'self'; frame-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" "expr=%{CONTENT_TYPE} =~ m#^text/html#i"
 </IfModule>

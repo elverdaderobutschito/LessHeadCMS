@@ -199,6 +199,9 @@ final class Auth
         return [
             'extension_loaded' => extension_loaded('session'),
             'save_path'        => Config::displayPath(Config::sessionDir()),
+            // true = the hoster has locked session.save_path (php_admin_value): the session files still go to save_path
+            // above, through a handler of their own (see useSessionDir())
+            'save_path_locked' => session_status() !== PHP_SESSION_ACTIVE && !self::setSavePath($dir),
             'writable'         => $writable,
             'save_handler_ini' => (string) ini_get('session.save_handler'),
             'auto_start_ini'   => (string) ini_get('session.auto_start'),
@@ -295,7 +298,7 @@ final class Auth
         $pdo = Database::connectIfExists();
         $user = $pdo && Database::tableExists($pdo, 'users') ? self::currentUser($pdo) : null;
         if ($user === null) {
-            return [200, ['logged_in' => false]];
+            return [200, ['logged_in' => false, 'app' => Config::app()]];
         }
         return [200, [
             'logged_in'            => true,
@@ -307,6 +310,8 @@ final class Auth
             'settings'             => Settings::client($pdo),
             // a database move waits for config.php (DataDir): read-only until then - banner for everyone
             'relocation_pending'   => is_file(Config::dataDir() . '/' . DataDir::PENDING_FILE),
+            // name of the installation and environment from config.php (tab title, login box, sidebar) - also without a login
+            'app'                  => Config::app(),
         ]];
     }
 
@@ -608,9 +613,9 @@ final class Auth
             session_write_close();
         }
         @ini_set('session.save_handler', 'files'); // ignore hoster defaults (e.g. memcached)
+        self::useSessionDir(Config::sessionDir());
         $ok = session_start([
             'name'             => self::COOKIE,
-            'save_path'        => Config::sessionDir(),
             'use_strict_mode'  => 1,
             'use_cookies'      => 1,
             'use_only_cookies' => 1,
@@ -626,6 +631,40 @@ final class Auth
         if (!$ok) {
             throw new \RuntimeException('session_start() failed.');
         }
+    }
+
+    /**
+     * Store the session files in $dir. Normally via session.save_path. Some hosters lock that setting
+     * (php_admin_value in the FPM pool): ini_set() then fails, and the 'save_path' option of session_start() would fail
+     * with a warning that Flight turns into an exception - login impossible. Only in that case a files handler is
+     * registered that gets $dir directly in open(), whatever the locked ini value says.
+     */
+    private static function useSessionDir(string $dir): void
+    {
+        if (self::setSavePath($dir)) {
+            return;
+        }
+        session_set_save_handler(new class ($dir) extends \SessionHandler {
+            /** @var string */
+            private $dir;
+
+            public function __construct(string $dir)
+            {
+                $this->dir = $dir;
+            }
+
+            // untyped parameters: PHP 7.4 to 8.5; the return type avoids the deprecation notice since 8.1
+            public function open($path, $name): bool
+            {
+                return parent::open($this->dir, $name);
+            }
+        }, false);
+    }
+
+    /** Point session.save_path to $dir; false = the hoster has locked the setting (see useSessionDir()) */
+    private static function setSavePath(string $dir): bool
+    {
+        return @ini_set('session.save_path', $dir) !== false && ini_get('session.save_path') === $dir;
     }
 
     /** Cookie only for the folder the CMS lives in (relevant when running in a subfolder). */

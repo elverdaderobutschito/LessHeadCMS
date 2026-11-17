@@ -252,7 +252,7 @@ final class SchemaBackup
                     @file_put_contents(Workflows::dir() . '/' . basename($applied['file']), (string) $applied['source']);
                 }
             } catch (\Throwable $e) {
-                error_log('[LessHeadCMS] Workflow file after restore: ' . $e->getMessage());
+                Http::logException($e, 'Workflow file after restore');
             }
             $warning = null;
             if (!@rename($tmpPuml, $target)) {
@@ -296,7 +296,7 @@ final class SchemaBackup
                 . 'disk space or write permissions).', ['dir' => Config::displayPath(Config::dataDir(), true)]));
         }
         try {
-            $check = new PDO('sqlite:' . $tmpDb, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+            $check = Database::open($tmpDb);
             $ok = $check->query('PRAGMA integrity_check')->fetchColumn();
             $meta = Database::tableExists($check, '_meta')
                 ? $check->query('SELECT "key", "value" FROM "_meta"')->fetchAll(PDO::FETCH_KEY_PAIR) : [];

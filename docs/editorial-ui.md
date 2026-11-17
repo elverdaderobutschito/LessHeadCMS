@@ -54,6 +54,21 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   search, kind filter and integrated upload: a click on a tile adds the medium or removes it again (the dialog
   stays open), freshly uploaded files are selected immediately. In the form, media fields come after the normal
   fields and before the n:n selections; in the list view they are preview columns (see column selection below).
+* **Metadata per medium** (media field with a metadata class, `media(Klasse)`, see [PlantUML rules](plantuml-syntax.md)):
+  every tile additionally has **✎ „Metadaten bearbeiten“**. It opens a small dialog for exactly this medium (preview and
+  name at the top) with the fields of the metadata class – the same input elements as in the form (text, number, date,
+  enum select, checkbox, rich text; required marker, character counter, immediate rule hints), grouped by the separator
+  lines of the class. **Design decision:** a dialog instead of expanding the tile – the tiles stay small and in one row,
+  long metadata (rich text) have room, and the dialog works the same in the main form and in the inline form. The values
+  go straight into the form („Fertig“ only closes the dialog); they are saved with the record by „Speichern und
+  Schließen“, „Speichern und weiter“ or „Speichern und neu“ like every other field – no separate save. The tile shows the
+  first filled text value (e.g. the caption) in italics as a preview. A tile is **marked** (red frame, „1 offen“) while
+  a required metadata field is empty or a value breaks a rule, and after saving when the server reports an error for
+  this medium; the field then shows „Metadaten prüfen: n Fehler“ and the dialog shows the message at the field
+  („Medium #7: Pflichtfeld“). Moving a tile takes its metadata along; removing drops them (a medium added again starts
+  empty). **Duplicating** copies media and metadata, **restoring** a version brings both back; the **version
+  history** lists them per medium („Medium #7 (Bildunterschrift: Strand; Fotograf: Ute)“). Restricted metadata
+  fields (permissions) are not shown in the dialog. The list view is unchanged (thumbnails only).
 * **Display label of referenced rows** (FK select options, n:n selection, list view): `<entity> #<id> – <text
   of the title_field>`, e.g. „Bestellung #3 – verpackt“, with several `{title}` fields combined comma-separated (e.g.
   „Bestellung #3 – 2026-09-23, verpackt“, see [PlantUML rules](plantuml-syntax.md)). If the row has no text (yet) in any
@@ -120,6 +135,16 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   horizontally: separator line on the left, plus a shadow as long as there is still content beneath it on the right; below 720 px width
   the buttons are stacked. The list view uses the whole window width next to the sidebar (`.view-wide`);
   forms, users and test data stay at a content width of at most 1044 px.
+* **Manual order (`sort` field):** if the class has a `sort` field and no column is sorted, the list shows the manual
+  order. Every row has the arrows ↑/↓ in the actions column (only for users who may edit the entity); they swap the row
+  with its neighbour and save immediately. With `{by: …}` the list is divided by headings – the title of the parent, for
+  a tree the path („Hauptnavigation › Leistungen“), „Oberste Ebene“ for rows without a parent, „ohne <Klasse>“ for an
+  empty optional parent, „… (Fortsetzung)“ if a group continues from the previous page. The arrows only work within a
+  group and are greyed out at its ends; across a page boundary they swap with the neighbour on the other page. With an
+  active filter the row swaps with the next *visible* one, hidden rows keep their places. In the list of one subclass of
+  an abstract class with a shared order the arrows swap with the next record of the same type. A click on a column header
+  sorts as usual (no arrows, no headings); „Manuelle Reihenfolge“ in the toolbar returns. The field itself is neither a
+  column nor a form field; the history shows a move as „Reihenfolge geändert“.
 * **History of a record:** „Verlauf“ in the header of the edit form lists all versions (time, user, kind, reason, changed
   fields), compares two of them field by field (long texts as a line diff) and restores an older one as a new version.
   Above the save buttons, „Änderungsgrund (optional)“ is stored with the new version. See [Record versions](record-versions.md).
@@ -134,7 +159,15 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   the order of the relation lines; until 2026-10-21: fields incl. FK, then n:n, then media fields) until 5 are reached; if the entity has
   fewer, all appear. **Media fields** (`media`) are preview columns: up to 3 thumbnails side by side (images
   as a thumbnail, video/audio/document as a symbol with the extension), beyond that „+n weitere“; they count like any other
-  column but can be neither sorted nor filtered.
+  column but can be neither sorted nor filtered. **Media preview** (list view only, not the form): a click on a
+  thumbnail opens the medium in a dialog – images as an image fitted into the window (SVG as an image too, never inline),
+  PDF in the PDF viewer of the browser, audio and video with the player of the browser, everything else (Word, Excel, …)
+  without a preview as a large symbol with the extension. Below it always name, type, size, dimensions and upload date
+  plus „Herunterladen“ (original file name) and „In neuem Tab öffnen“. With several media in the field the dialog opens
+  at the one clicked („+n weitere“: at the first one not shown), arrow buttons and the arrow keys page through them
+  („3 / 12“) – only within this field of this record, and only the medium shown is loaded. Close with ×, a click on
+  the backdrop or Esc; the focus stays in the dialog and returns to the thumbnail. No external viewers; the dialog only
+  uses the file addresses the list already shows.
   The columns are in this order with a selection of your own as well. The button **„Spalten (x/y)“** next to „Filter
   zurücksetzen“ opens a list of all columns with checkboxes; any number can be shown or hidden,
   `id` and the actions column always stay visible. „Standard wiederherstellen“ discards your own selection. Every
@@ -173,7 +206,18 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   (reload, direct link), this group is opened. The open/closed state applies to the current login in the tab
   (`sessionStorage`, survives switching entities and reloading) and is discarded on logout – no storage on
   the server. Without a `package` block the sidebar stays exactly as before (flat list without heading/arrow). The
-  section „System“ stays below it and cannot be collapsed.
+  section „System“ stays below it and cannot be collapsed. **Package names are translatable** like entity names
+  (System → Lokalisierung → Übersetzungen, group „Packages“; CSV kind `package`): shown is the text of the display
+  language, otherwise the override of the default language, otherwise the name from the diagram. The open/closed state
+  hangs on the name from the diagram, so it survives a change of language. A package that is renamed in the diagram counts
+  as a new one (its translations are removed with the old name).
+* **Name and environment of the installation** (`config.php`, optional): `define('BACKEND_TITLE', 'Müller');` replaces
+  „LessHeadCMS“ in the browser tab, in the login box and at the top of the sidebar; the tab title is then
+  `Müller – <current view>` (`Müller – Artikel`, `Müller – Artikel #2`, `Müller – Anmeldung`) and follows the navigation.
+  `define('ENVIRONMENT', 'dev');` (`dev`, `staging` or `live`, default `live`) marks everything but live: the tab title
+  starts with it (`DEV · Müller – Artikel`), login box and sidebar show a coloured label „DEV“/„STAGING“ and the tab icon a
+  coloured dot. Without `BACKEND_TITLE` the title stays `LessHeadCMS` (with the environment prefix, if any). Both values
+  are display only and are shown as plain text (HTML-escaped).
 * **Test data** („Testdaten“, system section, `role = 'admin'` or system area `testdata`): choose a count per entity (default 10, 0 = skip,
   at most 1000), „Generieren“ creates **additional** records with random content and shows a summary.
   Nothing is changed or deleted; for an empty database still delete `data/cms.sqlite` + `/bootstrap`.

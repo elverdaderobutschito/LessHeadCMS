@@ -45,9 +45,16 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   `PUT /api/me/password` (user ID from the session - there is still no way to set another user's
   password). No hash route name of its own, hence no further reserved class name either.
 * **Sessions:** PHP sessions with their own cookie `lhcms_session` (HttpOnly, SameSite=Lax, `Secure` under HTTPS), valid for 8 hours from login (setting `session_lifetime_hours`).
-  The session files live in `data/sessions/` (not in the hoster's `session.save_path`); expired files are cleaned up by the
+  The session files live in `data/sessions/` (not in the hoster's `session.save_path`); this also works where the hoster
+  locks `session.save_path` (`php_admin_value` in the PHP-FPM pool; `/bootstrap` then reports `session_check.save_path_locked: true`); expired files are cleaned up by the
   login. Public GET requests do not start a session and do not set a cookie. A deactivated user (`active = false`)
   immediately counts as logged out even with a session that is still valid.
+  **Several tabs:** a tab showing the login page (its session expired) asks `GET /api/me` again when it becomes visible,
+  gets the focus or its hash changes; with a valid session – the user signed in again in another tab – it shows the view
+  it was on without a login. Login and logout are announced to the other tabs of the browser (`BroadcastChannel`,
+  otherwise a `storage` event), so they follow at once: logging out in one tab shows the login page in all of them. Only
+  the fact "session changed" is announced (the fallback stores a timestamp under `lhc-session-changed`); every tab then
+  asks `/api/me` itself. No credentials or tokens are stored in the browser, and there is no polling.
 
 | Method  | Path                | Description                                                                                   |
 |---------|---------------------|-----------------------------------------------------------------------------------------------|
@@ -73,7 +80,8 @@ administrators and cannot make anyone an administrator (`403`).
 | POST    | `/api/_testdata/generate` | generate test data (see below); without a session `401`, as an editor `403`             |
 
 **Test data generator** (`src/TestData.php`): body `{"count": 10}` (for all) and/or `{"counts": {"<table>": n}}`
-(individually, 0 = skip, 0–1000, otherwise `422`). Response `{"created": {table: n}, "links": {"table.x_ids": n},
+(individually, 0 = skip, 0–1000, otherwise `422`); optional `"seed": 123` (integer) for reproducible records – same
+seed, same database and same day give the same records (used by the schema fuzzer). Response `{"created": {table: n}, "links": {"table.x_ids": n},
 "skipped": {table: reason}, "failed": {…}, "order": […]}`. Writing is done exclusively via the same logic as
 `POST`/`PUT /api/{entity}` (same validation as in the UI); existing rows stay untouched.
 Order: FK targets before dependent tables; FK values randomly from existing rows (optional ones occasionally empty);

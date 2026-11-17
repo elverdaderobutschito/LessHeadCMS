@@ -67,7 +67,10 @@ are translated by phase 2 (see below, all fixed frontend texts). **Not** transla
   translation). Translatable are: concrete classes; fields and media fields (without `id`; inherited fields in their abstract
   base class, they apply to all subclasses); n:1/1:1 relationships (label, or without a label the column name); n:n relationships
   with `{label}` (without `{label}` the UI shows the name of the target class, which is translated via its class); enums
-  (name) and every enum value.
+  (name) and every enum value; metadata classes of media fields (`<<media_meta>>`, see `media(Klasse)` in
+  [PlantUML rules](plantuml-syntax.md)) in a group of their own per class, marked „(Metadaten-Klasse)“: the class name
+  (title of the metadata dialog) and its fields – CSV rows `entity,GalerieBild,…` and `field,GalerieBild.bildunterschrift,Caption`;
+  `GET /api/_i18n` delivers them under `media_meta.<Klasse>` (`entity`, `fields`, `enum_values`), only when there are some.
 * **Groups and filter (both tabs):** Every group (class or area) can be expanded/collapsed via its header with an arrow, like
   the package groups of the sidebar. The header shows „(n von m übersetzt)“ and, for unsaved changes, a ●, also when
   collapsed. Default: all collapsed so that the page does not start with a long, fully unfolded list. Expanded groups
@@ -261,13 +264,14 @@ translations that should live in the database – schema elements, pattern messa
   relation,Kurs->Autor:Verfasser,Written by
   enum,Status,State
   enum_value,Status.OFFEN,Open
+  package,Katalog,Catalogue
   ```
 
 * **`ref` is a readable identifier, not the ID.** Fixed UI texts: the key of the text as the tab „Feste UI-Texte“ lists it – the same on every
   installation, so the file is portable. Schema elements are bound in the database to the stable ID from
   `schema_ids`, and that differs per installation. The CSV therefore names them via the names of the diagram: entity `Kurs`,
   field/media field `Kurs.titel`, relationship `Source->Target:Label` (without a label the column name without `_id`; n:n only with
-  `{label}`), enum `Status`, enum value `Status.OFFEN`. Two relationships with the same identifier are numbered
+  `{label}`), enum `Status`, enum value `Status.OFFEN`, package (sidebar group) `Katalog` – its name, packages have no ID. Two relationships with the same identifier are numbered
   (`…#2`). Resolution uses the same list the translation page is built from (`Languages::elements()`, i.e.
   model key → `SchemaIds::lookup()`); the catalog delivers the identifier per element as `ref`.
 * **Export:** „Herunterladen (CSV)“ next to the language selection downloads `<code>.csv` with all **stored** translations

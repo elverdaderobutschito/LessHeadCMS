@@ -72,6 +72,20 @@ Updates: the delivery (`deploy/`) never contains this directory, uploading a new
 and `./build.sh assemble` keeps an existing `deploy/custom_translations/`. Changed files take effect on the next request
 (cache in `data/cache/` by modification time and size); faulty lines are skipped and written to the PHP error log.
 
+### Name and environment of the installation
+
+Optional, in `config.php` – so that several installations open in browser tabs can be told apart:
+
+```php
+define('BACKEND_TITLE', 'Müller');   // replaces "LessHeadCMS": tab title, login box, top of the sidebar
+define('ENVIRONMENT', 'dev');        // 'dev', 'staging' or 'live' (default); anything else counts as 'live'
+```
+
+The tab title becomes `Müller – <current view>` (`Müller – Artikel`, `Müller – Artikel #2`, `Müller – Anmeldung`); with an
+environment other than `live` it starts with it (`DEV · Müller – Artikel`), and login box, sidebar (coloured label) and
+tab icon (coloured dot) show it too. Without `BACKEND_TITLE` the title stays `LessHeadCMS`. Display only, plain text
+(at most 60 characters, HTML-escaped). `config.php` is never part of an upload – enter the lines on the server by hand.
+
 ### Storing the database outside the webroot
 
 By default the database lives in `data/` next to `index.php`, i.e. inside the webroot. It is protected there only as
@@ -220,8 +234,8 @@ location / {
 * **PHP itself** is not part of the block: `index.php` is handled by the hoster's existing PHP location. If the
   configuration already has a `location /`, nginx refuses a second one ("duplicate location") – then put the
   `try_files` line into the existing one instead.
-* **Security headers of the UI** (`X-Frame-Options`, `Referrer-Policy`, `Content-Security-Policy`) are a separate topic,
-  see "Security headers of the UI" under [Important notes](#important-notes).
+* **Security headers of the UI** (`X-Frame-Options`, `Referrer-Policy`, `Content-Security-Policy`) are not part of this
+  block: nginx needs them as well, see [Security headers of the UI with nginx](#security-headers-of-the-ui-with-nginx).
 
 ### Where the block goes – not into the project folder
 
@@ -235,6 +249,40 @@ site:
   the hoster's interface – for example Plesk: *Websites & Domains → Apache & nginx Settings → Additional nginx
   directives*. Other panels name it differently, if they offer it at all.
 * **Otherwise via the hoster's support:** send them the block and ask them to add it to the vhost of your domain.
+
+### Security headers of the UI with nginx
+
+The main `.htaccess` also sets three response headers for the page: `X-Frame-Options`, `Referrer-Policy` and
+`Content-Security-Policy` (what they allow and why: "Security headers of the UI" under [Important notes](#important-notes)).
+nginx does not read the `.htaccess`, so with nginx only they have to be set in the nginx configuration – in the same
+place as the block above (server or vhost configuration, not a file in the project folder). These are the complete,
+current values of the `.htaccess`; copy the three lines as they are, the `Content-Security-Policy` as **one** line:
+
+```nginx
+# LessHeadCMS - security headers of the UI (same values as the main .htaccess)
+# Goes into the location that runs PHP (the one with fastcgi_pass, usually "location ~ \.php$"): index.php delivers the page.
+add_header X-Frame-Options "DENY" always;
+add_header Referrer-Policy "same-origin" always;
+add_header Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'sha256-c/PHNd78dqpHpfQbEJ/PIhwmQukJpGFNXtlAp6vOzDg='; style-src-attr 'unsafe-inline'; img-src 'self' data:; media-src 'self'; frame-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" always;
+```
+
+* **Updating from an earlier version?** Add `media-src 'self'; frame-src 'self'` to your existing
+  Content-Security-Policy, otherwise PDF, audio and video previews in the list view stay empty. Simplest is to replace
+  the whole line with the one above. After every update of LessHeadCMS compare your line with the
+  `Content-Security-Policy` in the `.htaccess` of the new version – nginx does not pick up changes there by itself.
+* **Symptom of an outdated policy:** the media preview dialog of the list opens, but the area for a PDF, an audio or a
+  video file stays empty (images still show). The interface shows **no error message**; only the browser console
+  (F12) reports a Content-Security-Policy violation naming `frame-src` (PDF) or `media-src` (audio, video), e.g.
+  "Refused to frame … because it violates the following Content Security Policy directive" or "Refused to load media
+  from …".
+* **Where exactly:** in the `location` that runs PHP, not in `location ^~ /media/`. `X-Frame-Options: DENY` and
+  `frame-ancestors 'none'` on the files of `media/` would stop the PDF preview, which shows the file in a frame of the
+  own page. nginx inherits `add_header` lines from the level above only if a `location` has none of its own: if the
+  PHP location of the hoster already sets headers, add the three lines there, next to them.
+* **Difference to Apache:** the `.htaccess` sets the headers only on HTML responses. In the PHP location nginx also
+  adds them to the JSON responses of the API. That does no harm – browsers apply these headers to pages only.
+* **Check:** `curl -sI https://your-domain.example/ | grep -i -E "content-security|x-frame|referrer"` must show all three
+  headers, and a PDF opened from a list must be visible in the preview dialog.
 
 ### If the hoster offers no way to add nginx directives
 
@@ -336,7 +384,9 @@ The active diagram of an **already populated** installation can be edited as tex
    affected line (for inherited fields in the abstract class) and automatically checks again – so the matching
    still happens exclusively via the marker. „Nein“ or no choice leaves it at "removed + new". A relationship whose
    target class was renamed as well only gets its suggestion once the class is matched (next check).
-   If the line of an element cannot be found unambiguously, there is no suggestion (then set the marker by hand).
+   The line of a relationship is the one the parser read it from, so the suggestion also comes if several relationships
+   between the same classes carry the same label (e.g. one n:1 in each direction, or an n:1 next to an n:n).
+   If the line of a class or field cannot be found unambiguously, there is no suggestion (then set the marker by hand).
 
    Also blocked are: a new required relationship to an empty target table, a new required self-reference and a new
    required 1:1 relationship with several rows (a common backfill value would not work), a new uniqueness rule consisting only
@@ -418,13 +468,33 @@ n:n the link table/API list (links stay). The matching happens within the same c
 change of the existing relationship. A change of `{symmetric}` on an existing n:n self-reference is likewise
 a change, not a new creation: directed → `{symmetric}` merges "A → B" and "B → A" into one pair;
 `{symmetric}` → directed carries every pair over in both directions. Without a marker a name change counts as "old removed + new created" (with a data loss confirmation
-or backfill). The marker may stay after applying – if the new name already exists, it has no effect.
+or backfill). The marker may stay after applying – if the new name already exists, it has no effect (see „Markers after applying“ below).
 Schema errors: the old name does not exist so far; old **and** new name both exist so far (also two classes
 swapping names – please do that in two steps); two classes/fields claim the same old name. At the
 first bootstrap the markers have no meaning. FK columns are matched via target class and label: a
 renamed target class renames the column along with it; a **changed label without `{renamed_from}`**, in contrast, counts as a new
 relationship (old values are lost, confirmation needed). The same goes for an n:n relationship written from the other
 side.
+
+**Markers after applying:** Once a rename has been applied, its marker has done its job. The editor then shows
+„n Umbenennungs-Marker wurden angewendet und können entfernt werden.“ with a preview of the affected lines and the
+button „Marker entfernen“ (`consumed_markers` of `GET /api/_schema/source`, also in the responses of `analyze` and
+`apply`). Nothing is rewritten without the click. Removing changes only the `.puml` text – per marker only its own
+line, and in it only the marker; comments, notes and formatting stay. No table is created, rebuilt or dropped, a backup
+pair is written as with every apply, and „Änderungen prüfen“ reports no changes afterwards. A marker that cannot be
+removed safely (a block comment `/' … '/` on the same line) is left out and named in the preview. Consumed means: the
+element exists under its new name in the active schema and the old name exists neither there nor in the text; a marker
+that still renames something is never offered.
+
+**Outdated marker whose old name is taken again:** If an applied marker is still in the text
+(`class ZusatzNeu {renamed_from:Zusatz} {`) and the old name is used again by another element of the same kind (a new
+class `Zusatz`; likewise a field of the same class, a media field, a relationship between the same classes with the old
+label, a metadata class or one of its fields), „Änderungen prüfen“ reports a **blocker** (`kind: "stale_marker"`) with
+the line number and the line without the marker as a ready-made replacement („Marker entfernen“ in the blocker replaces
+just this line and checks again); `apply` rejects with `409 blocked` and the same message. Before, applying worked once
+and afterwards the very same text was rejected with "both … exist so far" until the marker was removed. Installations
+that are already in that state get the same blocker with the replacement instead of the schema error. Enums, enum
+values and abstract classes cannot carry `{renamed_from}`.
 
 **Important on the server (e.g. Webgo shared hosting):** After applying, the `.puml` **on the server** is authoritative. Uploading an older local version from
 `schema/` again later changes nothing about data and API (they work with `_meta.schema_json`), but makes
@@ -435,9 +505,10 @@ would change compared to the database, and is thus also the way out of `migratio
 
 | Method | Path | Description |
 |---|---|---|
-| GET  | `/api/_schema/source`  | `{"file", "source", "file_matches_active", "backup": {"backups": [{stamp, created, files: [{name, kind, bytes}]}], "keep", "db_bytes", "warning"}}` – text of the active `.puml` and existing backups |
-| POST | `/api/_schema/analyze` | body `{"source"}` → `{"has_changes", "changes": [{kind, severity, text}] (`severity`: `info`, `warning`, `confirm`, `backfill`, `permission`), "confirmations": [{key, count, text}], "backfills": [{key, label, type, rows, choices?}], "blockers": [{key, count, text, rows}], "tables": {create, rebuild, drop, unchanged}, "rename_suggestions": [{key, kind, text, line, original, options: [{value, label, replacement}]}]}`; `422 schema_error` for errors in the text |
-| POST | `/api/_schema/apply`   | body `{"source", "confirm": [keys], "backfill": {key: value}}` → `200 {"status": "applied", created, rebuilt, dropped, unchanged, rows_copied, "schema_ids": {kept, created, removed}, "backup": {stamp, files, dir}, backups_removed}`; `500 backup_failed` if the backup cannot be written |
+| GET  | `/api/_schema/source`  | `{"file", "source", "file_matches_active", "backup": {"backups": [{stamp, created, files: [{name, kind, bytes}]}], "keep", "db_bytes", "warning"}, "consumed_markers": {count, markers: [{kind, key, text, line, original, replacement}], skipped: [{kind, key, text, line, original, reason}]}}` – text of the active `.puml`, existing backups and the applied `{renamed_from}` markers that can be removed |
+| POST | `/api/_schema/markers/remove` | no body; removes the consumed markers (`consumed_markers` of `source`) from the active `.puml` → `200 {"status": "markers_removed", removed, markers, skipped, "backup": {stamp, files, dir}}`. Only the text changes (plus its copy and hash in `_meta`); `409 schema_file_changed` if the file is not the applied text, `409 no_consumed_markers`, `409 locked` |
+| POST | `/api/_schema/analyze` | body `{"source"}` → `{"has_changes", "changes": [{kind, severity, text}] (`severity`: `info`, `warning`, `confirm`, `backfill`, `permission`), "confirmations": [{key, count, text}], "backfills": [{key, label, type, rows, choices?}], "blockers": [{key, count, text, rows}], "tables": {create, rebuild, drop, unchanged}, "rename_suggestions": [{key, kind, text, line, original, options: [{value, label, replacement}]}], "consumed_markers": {count, markers, skipped}}`; a blocker for an outdated marker additionally carries `kind: "stale_marker"`, `line`, `original` and `replacement` (the line without the marker); `422 schema_error` for errors in the text |
+| POST | `/api/_schema/apply`   | body `{"source", "confirm": [keys], "backfill": {key: value}}` → `200 {"status": "applied", created, rebuilt, dropped, unchanged, rows_copied, "schema_ids": {kept, created, removed}, "backup": {stamp, files, dir}, backups_removed, "consumed_markers": {count, markers, skipped}}`; `500 backup_failed` if the backup cannot be written |
 | POST | `/api/_schema/model`   | body `{"source"}` (arbitrary text, also unsaved; changes nothing, not `schema_ids` either) → model JSON with stable IDs (see below); `422 schema_error` with the same message as `analyze` (also if a `{renamed_from}` points at nothing in the active schema) |
 | POST | `/api/_schema/export`  | body `{"model"}` (model JSON as the diagram editor edits it) → `{"source"}` (`PumlExporter::toPuml()`); changes nothing. `422 validation` with `errors[]` if the form is wrong (names/types/enum values not identifiers, line break, `"` in the package, `{}` in the label, …) – whether the schema is valid is checked afterwards by `/api/_schema/model` |
 | POST | `/api/_schema/restore` | body `{"stamp", "confirm": "WIEDERHERSTELLEN"}` → `200 {"status": "restored", "restored": {stamp, created, schema}, "backup": {stamp, files, dir}}` (backup of the state before); `422 confirmation_required` without the exact confirmation text, `404 backup_not_found`, `409 locked`/`backup_incomplete` (only `.puml`)/`backup_invalid` (damaged) |
@@ -479,10 +550,12 @@ per class additionally `field_order` (own fields and media fields in the order o
 separator lines with a title; every field/media field carries `section`, `null` = before the first own separator line);
 via `/api/_schema/model`, a **stable `id`** (UUID) that survives renames; `PumlParser::modelJson()` itself sets
 `id` = key. Comments,
-formatting and purely decorative statements are lost; the latter (`title`, `skinparam`, `note`, colours like `#FFAAAA` on class/
-package/enum/arrow, `hide`/`show`, `legend`, layout direction, methods) and every otherwise silently ignored line
-appear as „Zeile N: … wird nicht übernommen“ in `warnings`. `PumlExporter::toPuml()` writes a model JSON back as
-PlantUML (diagram editor via `/api/_schema/export`, round-trip tests). Via `/api/_schema/model` every object additionally
+formatting and purely decorative statements are not part of the model JSON; the latter (`title`, `skinparam`, `note`, colours like
+`#FFAAAA` on class/package/enum/arrow, `hide`/`show`, `legend`, layout direction, methods) and every otherwise silently ignored
+line appear as „Zeile N: … wird nicht übernommen“ in `warnings` (they are not drawn in the diagram, but they stay in the text,
+see „Speichern“ below). `PumlExporter::toPuml()` writes a model JSON back as a complete new PlantUML text – only used
+where there is no original text (round-trip tests, `/api/_schema/export` without `source`, the confirmed fallback below);
+there comments and formatting are lost. Via `/api/_schema/model` every object additionally
 carries `active` = `{name, label}` of its counterpart in the active schema (`null` for a provisional ID).
 
 ### Editing in the diagram
@@ -505,18 +578,54 @@ the relationship form. Deleting via „… löschen“ in the panel with a promp
 base class with subclasses and an enum in use cannot be deleted. Obvious errors (empty or duplicate
 name, invalid characters, `{title}` on the wrong type, self-reference without a label, …) are shown by the panel immediately.
 
-Everything stays in the browser until **„Speichern“**: the diagram is generated as text (`/api/_schema/export`), checked by the server like
-any text (`/api/_schema/model`, schema errors appear in the diagram) and shown as a **line diff** against the text field.
+Everything stays in the browser until **„Speichern“**: the server writes the changes **into the existing text**
+(`/api/_schema/export` with the text the diagram was opened from, `PumlPatcher`), checks the result like any text
+(`/api/_schema/model`, schema errors appear in the diagram) and shows it as a **line diff** against the text field.
 „Übernehmen“ writes it into the text field, closes the diagram and automatically triggers „Änderungen prüfen“ –
 the result appears as after a click on it. „Anwenden“ deliberately stays a separate step with the usual
-confirmations. Because the text is generated anew, comments and
-formatting of the previous text are dropped (the preview points this out). **„Abbrechen“** (also Escape/click next to it) discards
-all changes after a prompt; without changes the button is still called „Schließen“.
+confirmations. **„Abbrechen“** (also Escape/click next to it) discards all changes after a prompt; without changes the
+button is still called „Schließen“.
+
+**What „Speichern“ keeps.** The `.puml` is the source of truth, so only the lines affected by a change are touched; everything
+else stays character for character: line and block comments (a block comment at the end of a changed field line stays
+there), `title`, notes (single- and multi-line, `note … as N1` with its
+connecting lines), `skinparam` (also blocks), `header`/`footer`/`legend`/`caption`, `hide`/`show`, `together`, layout
+direction, colours on classes and arrows, the name after `@startuml`, blank lines, indentation (tabs and spaces), order,
+Windows line breaks and a BOM. Opening the diagram and saving without a change gives exactly the same text.
+
+* changed field/relationship/enum value → only that line is rewritten (with the indentation of the original line; a class
+  line keeps its colour, a relationship keeps its arrow – colour, direction – as long as its kind stays the same)
+* new field → after the last field of its section; new class → after the last class of its package (or into the package
+  block, or into a new one), new relationship → after the last relationship, new enum → after the last enum.
+  `+ id: int` is only written into a new class if the text writes the id explicitly in most of its classes (the parser
+  adds it otherwise anyway)
+* deleted element → its line or block is removed, together with a comment directly above it (no blank line in between)
+  and the notes attached to it (`note … of Klasse`, `note … of Klasse::feld` – a multi-line note as a whole up to
+  `end note` –, connecting lines like `N1 .. Klasse` or `N1 .. Klasse::feld`). A comment directly above a **group** of
+  elements of the same kind (several fields, relationships, enum values, or classes/enums in a row without a blank line,
+  e.g. `' Beziehungen` above the relationships) belongs to the group: it is only removed when the whole group is deleted.
+  The preview lists the removed lines separately („Mit den gelöschten Elementen entfallen auch …“). A section whose last
+  field is deleted loses its separator line.
+* renamed → the name in its line is replaced (plus `{renamed_from:…}`, see below); notes referring to the class or field
+  (`note right of Alt::feld`) are renamed along
+* class moved to another package → the class block (with the comment directly above it) moves into the package block
+
+Afterwards the server parses the result again and compares it with the complete export of the diagram; only if both are
+the same model **and** the result has no warning the previous text did not have (e.g. a left-over line of a note, reported
+as „unknown statement“), the patched text is offered. A failed check is a fault of the patcher: it is additionally logged
+in `data/patcher-failures/` (time, reason, original text, model JSON of the editor; the newest 20 cases, blocked from the
+web like the rest of `data/`), and System → Schema shows „n Patcher-Fehler protokolliert“ with a download – please send
+that file along with a bug report. **When a change cannot be written safely into the text** – a line that shares a
+block comment `/' … '/` with other content (other than a comment at its end that lies completely on that line), enum values written on the `enum` line itself (a last value before the closing `}` is fine), an unusual
+class line, or the check above fails – the preview shows a red warning with the reason and the list of lines that would be
+lost (line number + content), and offers the completely regenerated text. „Übernehmen“ is then only enabled after ticking
+„Verlust in Kauf nehmen …“. Nothing is lost silently.
 
 **Renaming:** The migration only recognizes renames via the name or `{renamed_from}`, not via the stable ID.
 The editor therefore sets the marker itself: if the name of a class, field or media field (or the label of a
 relationship with the same source/target/kind) with a stored ID differs from the name in the active schema (`active`), it writes
-`{renamed_from:<name in the active schema>}`. A marker in the text that has already been applied stays (it has no effect).
+`{renamed_from:<name in the active schema>}`. A marker in the text that has already been applied stays (it has no effect)
+until it is removed via „Marker entfernen“ (see „Markers after applying“).
 Abstract classes and enums need no marker (no table, and data is bound to the values respectively).
 
 **Stable IDs** (`SchemaIds`, table `schema_ids`: `id`, `kind` entity/field/media/relation/enum, `model_key`, plus,
@@ -551,6 +660,11 @@ active schema); no bootstrap call needed.
   user, delete the `users` row and call `/bootstrap?token=…` again (recreates `admin`/`password`). For
   other users a second admin account is enough to reactivate them via `PUT /api/users/{id}` or adapt their role –
   a password itself can only be set by the respective user via `PUT /api/me/password`.
+* **„Internal error“ (500):** The response never contains details. The cause is in the PHP error log of the server, one
+  line per error with class, message, file (relative to the LessHeadCMS folder) and line, e.g.
+  `[LessHeadCMS] ErrorException: session_start(): Setting option "save_path" failed (src/Auth.php:611)`. If the error
+  was raised inside a library, the own line that led there follows (`…, called from src/Cms.php:120`). No request data,
+  passwords or tokens are logged.
 * **`richtext` is stored as raw Markdown** (Toast UI Editor, WYSIWYG mode) – the API delivers and stores the
   text unchanged. When rendering the Markdown in a website, still use a renderer with HTML escaping/sanitizing
   if Markdown inline HTML is possible. The image button of the editor is deactivated (uploads would end up as Base64 in the DB).
@@ -571,14 +685,17 @@ active schema); no bootstrap call needed.
 * **Security headers of the UI:** The `.htaccess` sets on every HTML response (the page itself – not on the
   JSON API, `assets/` and `media/`) `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and a
   `Content-Security-Policy`: `default-src 'none'`, scripts, images and API calls only from the own address (images
-  additionally `data:` for the icons of the rich text editor), `frame-ancestors 'none'`, `base-uri 'none'`, `form-action
+  additionally `data:` for the icons of the rich text editor), audio/video and frames only from the own address
+  (`media-src 'self'`, `frame-src 'self'`: the media preview of the list plays files from `media/` and shows PDFs in the
+  PDF viewer of the browser), `frame-ancestors 'none'`, `base-uri 'none'`, `form-action
   'self'`. For styles two exceptions are needed: `style` attributes (`style-src-attr 'unsafe-inline'`, the Toast UI Editor
   sets them itself) and exactly one embedded `<style>` – the fixed stylesheet of JointJS in the diagram, allowed via
   its `sha256` value in `style-src-elem`. **After a JointJS update** this value can change: then
   the browser console reports a violation and states the new value for the `.htaccess`. Whoever embeds
   fonts, images or scripts from a foreign address in the frontend must extend the matching directive.
   Needs `mod_headers` and Apache 2.4.10 or later (without `mod_headers` only the headers are missing, the page keeps working); with nginx
-  set the same three headers on the `location` block of the page.
+  only the `.htaccess` is not read – set the same three headers in the nginx configuration, the complete lines are in
+  [Security headers of the UI with nginx](#security-headers-of-the-ui-with-nginx).
 * **Security window after the bootstrap:** As long as the initial password `password` applies, the admin can be taken over by anyone who knows the
   login URL. After `/bootstrap`, log in immediately and change the password.
 * The frontend uses relative URLs and hash routing; when running in a subfolder, call `https://host/cms/` (with the slash).

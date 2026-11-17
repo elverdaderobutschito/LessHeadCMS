@@ -203,8 +203,53 @@ final class Http
                 . 'this change could not be saved. Please try again in a moment.')->fields(), 503);
             return;
         }
-        error_log('[LessHeadCMS] ' . get_class($e) . ': ' . $e->getMessage());
+        self::logException($e);
         self::json(['error' => 'internal_error'] + Msg::of('msg_api.internal_error', 'Internal error')->fields(), 500);
+    }
+
+    /**
+     * Writes an unexpected exception to the PHP error log: class, message and where it was thrown, e.g.
+     * "[LessHeadCMS] ErrorException: session_start(): Setting option "save_path" failed (src/Auth.php:611)".
+     * Only what describeException() returns - no request data, no parameters, no full trace.
+     */
+    public static function logException(\Throwable $e, string $context = ''): void
+    {
+        error_log('[LessHeadCMS] ' . ($context !== '' ? $context . ': ' : '') . self::describeException($e));
+    }
+
+    /**
+     * "Class: message (file:line)" for the error log. The file is relative to the LessHeadCMS folder (vendor/ included);
+     * of a file outside of it only the name is shown, never an absolute server path. If the exception was not thrown in
+     * src/ or index.php (a library, PHP itself), the first frame of the trace from src/ or index.php follows as
+     * ", called from src/X.php:12": the own line that led there.
+     */
+    public static function describeException(\Throwable $e): string
+    {
+        $root = str_replace('\\', '/', dirname(__DIR__)) . '/';
+        // [shown path, true if it is own code (src/ or index.php of this installation)]
+        $place = static function (string $file) use ($root): array {
+            $file = str_replace('\\', '/', $file);
+            if (strpos($file, $root) !== 0) {
+                return [basename($file), false];
+            }
+            $shown = substr($file, strlen($root));
+            return [$shown, $shown === 'index.php' || strpos($shown, 'src/') === 0];
+        };
+        [$shown, $own] = $place($e->getFile());
+        $where = $shown . ':' . $e->getLine();
+        if (!$own) {
+            foreach ($e->getTrace() as $frame) {
+                if (!isset($frame['file'])) {
+                    continue;
+                }
+                [$caller, $ownCaller] = $place((string) $frame['file']);
+                if ($ownCaller) {
+                    $where .= ', called from ' . $caller . ':' . (int) ($frame['line'] ?? 0);
+                    break;
+                }
+            }
+        }
+        return get_class($e) . ': ' . $e->getMessage() . ' (' . $where . ')';
     }
 
     private static function apiError(ApiException $e): void

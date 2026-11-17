@@ -112,12 +112,14 @@ final class SchemaMigration
 
     /**
      * Pure analysis, no write operation. Additionally 'rename_suggestions' (see renameSuggestions()): possible
-     * renames of new elements, for which the UI only puts the {renamed_from} marker into the text.
+     * renames of new elements, for which the UI only puts the {renamed_from} marker into the text - and
+     * 'consumed_markers' (see cleanup()): markers of this text whose rename is already part of the active schema.
      */
     public function analyze(string $source): array
     {
         $plan = $this->plan($source);
         return self::publicPlan($plan) + ['rename_suggestions' => $this->renameSuggestions($plan['identity'], $plan['model'], $source)]
+            + ['consumed_markers' => self::publicCleanup($this->cleanup($plan['markers']['consumed'], $source))]
             + $this->workflowSummary($plan['model']);
     }
 
@@ -241,7 +243,56 @@ final class SchemaMigration
             $summary['warning'] = $warning->text();
             $summary['warning_code'] = $warning->codeOnly();
         }
+        // markers that have done their job with this apply (the UI offers to remove them, see removeConsumedMarkers())
+        $summary['consumed_markers'] = (new self($this->pdo, $plan['model'], $this->workflow))->consumedMarkers($source);
         return $summary;
+    }
+
+    /**
+     * {renamed_from} markers of a text whose rename is already part of the active schema (see markerStates()), with the
+     * preview of their removal: ['count', 'markers' => [['kind', 'key', 'text', 'line' (1-based), 'original',
+     * 'replacement']], 'skipped' => [['kind', 'key', 'text', 'line'|null, 'original'|null, 'reason']]]. A text that cannot be
+     * read or matched has none. Writes nothing.
+     */
+    public function consumedMarkers(string $source): array
+    {
+        return self::publicCleanup($this->consumed($source));
+    }
+
+    /**
+     * Removes the consumed {renamed_from} markers from the active .puml file (the admin confirmed the preview of
+     * consumedMarkers()). Only the text changes: the cleaned text has to yield exactly the active schema ("no changes"),
+     * otherwise nothing is written. It then takes the usual way of apply() - backup pair, file replaced, the stored text and
+     * its hash in _meta follow so that /bootstrap keeps reporting up_to_date; no table is created, rebuilt or dropped.
+     *
+     * @throws ApiException 409 schema_file_changed (the file is not the applied text), 409 no_consumed_markers,
+     *         409 conflict (the cleaned text would change the schema)
+     */
+    public function removeConsumedMarkers(string $schemaFile): array
+    {
+        $source = (string) @file_get_contents($schemaFile);
+        if (!hash_equals((string) Database::getMeta($this->pdo, 'schema_hash'), hash('sha256', $source))) {
+            throw ApiException::of(409, 'schema_file_changed', Msg::of('msg_migration.marker_file_changed', 'The schema file was changed '
+                . 'after the last apply. Please check and apply the changes first; markers are only removed from the applied text.'));
+        }
+        $cleanup = $this->consumed($source);
+        if (!$cleanup['markers']) {
+            throw ApiException::of(409, 'no_consumed_markers', Msg::of('msg_migration.marker_none', 'There are no rename markers that '
+                . 'could be removed.'));
+        }
+        $plan = $this->plan($cleanup['source']);
+        $touched = array_filter($plan['ops'], function ($op) {
+            return !$op['keep'];
+        });
+        if ($plan['changes'] || $plan['blockers'] || $plan['confirmations'] || $plan['backfills'] || $touched || $plan['drops']) {
+            throw ApiException::of(409, 'conflict', Msg::of('msg_migration.marker_cleanup_changes', 'Removing the markers would change '
+                . 'the schema. Nothing was changed.'));
+        }
+        $summary = $this->apply($cleanup['source'], [], $schemaFile);
+        return ['status' => 'markers_removed'] + Msg::of('msg_migration.markers_removed', '{count} rename marker(s) removed.', [
+            'count' => count($cleanup['markers']),
+        ])->fields() + ['removed' => count($cleanup['markers'])] + self::publicCleanup($cleanup)
+            + array_intersect_key($summary, array_flip(['backup', 'backups_removed', 'warning', 'warning_code']));
     }
 
     // ---------------------------------------------------------------- Plan
@@ -274,7 +325,7 @@ final class SchemaMigration
         $id = $this->identify($new);
         $p = [
             'model' => $new, 'ops' => [], 'drops' => [], 'changes' => [], 'confirmations' => [], 'backfills' => [],
-            'blockers' => [], 'entityMap' => $id['entityMap'], 'colMaps' => [], 'listMaps' => [],
+            'blockers' => [], 'entityMap' => $id['entityMap'], 'colMaps' => [], 'listMaps' => [], 'metaMaps' => [],
             'removedColumns' => $id['removedColumns'], 'identity' => $id,
             'denials' => Permissions::denials($this->pdo, $old), 'mediaBlocked' => Permissions::mediaBlocked($this->pdo, $old),
         ];
@@ -407,10 +458,11 @@ final class SchemaMigration
                     $this->mediaConflict($p, $t0, Msg::of('msg_migration.becomes_required', '{what} becomes required, but', ['what' => $what]), $e1['name']);
                 }
                 $cols = [$md1['own_column'] => ['from' => $md0['own_column']], 'media_id' => ['from' => 'media_id'], 'position' => ['from' => 'position']];
+                $meta = $this->metaColumns($t1, $e1, $md1, $md0, $cols, $p);
                 $keep = $md0['junction'] === $md1['junction'] && ($oldDdl[$md1['junction']] ?? null) === $statements[$md1['junction']]
                     && self::identity($cols);
                 $p['ops'][] = ['table' => $md1['junction'], 'ddl' => $statements[$md1['junction']], 'source' => $md0['junction'],
-                    'cols' => $cols, 'keep' => $keep, 'kind' => 'media'];
+                    'cols' => $cols, 'keep' => $keep, 'kind' => 'media', 'meta' => $meta];
             }
         }
         // removed n:n / media fields (links are lost)
@@ -442,6 +494,8 @@ final class SchemaMigration
             }
         }
 
+        $p['sorts'] = $this->sortChanges($p, $id);
+
         // display order and form sections: only the model changes (no table, see sameDdl())
         foreach ($new['entities'] as $t1 => $e1) {
             $t0 = $p['entityMap'][$t1];
@@ -469,9 +523,410 @@ final class SchemaMigration
             if ($op['source'] === $op['table'] && $op['kind'] === 'entity') {
                 $p['changes'][] = self::change('table_rebuilt', 'info', Msg::of('msg_migration.table_rebuilt', "Table '{table}' is rebuilt "
                     . '(structure changed; all rows are taken over).', ['table' => $op['table']]));
+            } elseif ($op['source'] === $op['table'] && $op['kind'] === 'media' && !empty($op['meta'])) {
+                $p['changes'][] = self::change('table_rebuilt', 'info', Msg::of('msg_migration.link_table_rebuilt', "Link table '{table}' "
+                    . 'is rebuilt (metadata columns changed; all links and their order are taken over).', ['table' => $op['table']]));
             }
         }
+        // {renamed_from} markers without effect: an outdated one whose old name is taken again blocks (see markerStates())
+        $p['markers'] = $this->markerStates($id, $new, $source);
+        $lines = explode("\n", $source);
+        foreach ($p['markers']['stale'] as $m) {
+            $original = $m['line'] !== null ? $lines[$m['line']] : null;
+            $params = ['what' => $m['what'], 'marker' => $m['marker'], 'from' => $m['from']];
+            if (in_array($m['kind'], ['relation', 'nn'], true)) {
+                $params['label'] = $m['from'] === '' ? Msg::of('msg_migration.no_label', '(no label)')
+                    : Msg::of('msg_migration.quoted_label', '"{label}"', ['label' => $m['from']]);
+                unset($params['from']);
+                $text = $m['existed']
+                    ? Msg::of('msg_migration.marker_stale_relation_other', '{what} {marker}: the rename has already been applied, and the '
+                        . 'label {label} now belongs to another relationship. Please remove the marker.', $params)
+                    : Msg::of('msg_migration.marker_stale_relation_new', '{what} {marker}: the rename has already been applied, and the '
+                        . 'label {label} now belongs to a new relationship. Please remove the marker.', $params);
+            } else {
+                $text = Msg::of('msg_migration.marker_stale', "{what} {marker}: the rename has already been applied, and the name '{from}' "
+                    . 'now belongs to {owner}. Please remove the marker.', $params + ['owner' => self::markerOwner($m['kind'], $m['existed'])]);
+            }
+            // 'line'/'original'/'replacement' as for rename_suggestions: the UI only replaces this line and checks again
+            $p['blockers'][] = ['key' => 'stale_marker:' . $m['key'], 'count' => 0, 'rows' => [], 'kind' => 'stale_marker']
+                + $text->fields('text') + ['line' => $m['line'] !== null ? $m['line'] + 1 : null, 'original' => $original,
+                    'replacement' => $original !== null ? RenameMarker::without($original) : null];
+        }
         return $p;
+    }
+
+    // ---------------------------------------------------------------- {renamed_from} markers without effect
+
+    /**
+     * {renamed_from} markers that have no effect (any more) because their element is matched under its own name - the rename
+     * has been applied, or the marker never was needed. Result of identify(), no matching of its own. Per marker:
+     *  - 'stale': the old name is taken again by another element of the same kind in the new text (class <- class, field <-
+     *    field of the same class, media field <- media field, relationship <- relationship of the same kind between the same
+     *    classes with the old label, metadata class/field likewise). Applying would work once, but afterwards old and new
+     *    name both exist in the active schema and the very same text is rejected as ambiguous ("both exist so far") - so it
+     *    blocks right away (plan()). 'existed' = the old name also exists in the active schema already.
+     *  - 'consumed': the old name exists neither in the active schema nor in the new text (or it is the element's own
+     *    name) - the marker can be removed without any effect (cleanup()).
+     * Everything else stays untouched: markers that still rename something, and markers whose old name still exists in
+     * the active schema without a counterpart in the text (the matching decides about those).
+     * A field marker of an abstract class counts per concrete subclass that has a predecessor: outdated as soon as it is for
+     * one of them, consumed only if it is for all. Enums and enum values cannot carry the marker (the parser rejects it).
+     *
+     * @return array ['stale' => [entry], 'consumed' => [entry]], sorted by line; entry: ['kind' => 'entity'|'field'|'media'|
+     *               'relation'|'nn'|'media_meta'|'media_meta_field', 'key', 'what' => Msg, 'marker', 'from', 'existed',
+     *               'line' => 0-based line in the text or null (not determinable)]
+     */
+    private function markerStates(array $id, array $new, string $source): array
+    {
+        if (stripos($source, '{renamed_from:') === false) {
+            return ['stale' => [], 'consumed' => []];
+        }
+        $old = $this->old;
+        $map = PumlParser::sourceMap($source, $this->workflows(), Patterns::names($this->pdo));
+        // the parser's line numbers only match the text split at "\n" without lone "\r" line breaks
+        $pos = preg_match('/\r(?!\n)/', $source) ? ['classes' => [], 'relations' => []] : $map['positions'];
+        $classes = array_column($map['model']['entities'], null, 'name');
+        $relLines = [];
+        foreach ($map['model']['relations'] as $i => $r) {
+            $relLines[$r['id']] = $pos['relations'][$i] ?? null;
+        }
+        // class (the class itself or a base class) that declares the field, media field or relationship
+        $chain = function (string $class) use ($classes): array {
+            $out = [];
+            for ($c = $classes[$class] ?? null; $c !== null && count($out) < 50; $c = $c['extends'] !== null ? ($classes[$c['extends']] ?? null) : null) {
+                $out[] = $c;
+            }
+            return $out;
+        };
+        $declaring = function (string $class, string $name, string $list) use ($chain): string {
+            foreach ($chain($class) as $c) {
+                foreach ($c[$list] as $f) {
+                    if (strtolower($f['name']) === strtolower($name)) {
+                        return $c['name'];
+                    }
+                }
+            }
+            return $class;
+        };
+        $norm = [PumlParser::class, 'normalizeLabel'];
+        $found = [];
+        $note = function (string $state, string $kind, string $key, Msg $what, string $from, bool $existed, ?int $line) use (&$found): void {
+            $found[$key]['states'][$state] = true;
+            if (!isset($found[$key]['entry']) || $state === 'stale') {
+                $found[$key]['entry'] = ['kind' => $kind, 'key' => $key, 'what' => $what, 'marker' => '{renamed_from:' . $from . '}',
+                    'from' => $from, 'existed' => $existed, 'line' => $line];
+            }
+        };
+        // marker without effect: $same = old name is the own name, $sibling = taken again in the new text, $existed = the old
+        // name exists in the active schema
+        $state = function (bool $same, bool $sibling, bool $existed): string {
+            return $same ? 'consumed' : ($sibling ? 'stale' : ($existed ? 'live' : 'consumed'));
+        };
+
+        foreach ($new['entities'] as $t1 => $e1) {
+            if (isset($e1['renamed_from'])) {
+                $r = strtolower($e1['renamed_from']);
+                $existed = isset($old['entities'][$r]);
+                $note(isset($old['entities'][$t1]) ? $state($r === $t1, isset($new['entities'][$r]), $existed) : 'live', 'entity',
+                    "entity:$t1", Msg::of('msg_migration.option_class', 'Class {class}', ['class' => $e1['name']]), $e1['renamed_from'],
+                    $existed, $pos['classes'][$t1]['head'] ?? null);
+            }
+            $t0 = $id['entityMap'][$t1];
+            if ($t0 === null) {
+                continue; // a new class: its markers (also inherited ones) rename nothing here and say nothing
+            }
+            $e0 = $old['entities'][$t0];
+            $names = function (array $e): array {
+                $out = [];
+                foreach ($e['fields'] as $f) {
+                    if (!$f['foreign_key']) {
+                        $out[strtolower($f['name'])] = true;
+                    }
+                }
+                return $out;
+            };
+            [$names0, $names1] = [$names($e0), $names($e1)];
+            foreach ($e1['fields'] as $f1) {
+                $fk = $f1['foreign_key'];
+                if ($fk) {
+                    if (!isset($fk['renamed_from'])) {
+                        continue;
+                    }
+                    $r = $norm($fk['renamed_from']);
+                    $from = $id['cols'][$t1][$f1['name']]['old'] ?? null;
+                    $sibling = false;
+                    foreach ($e1['fields'] as $g) {
+                        $sibling = $sibling || ($g['foreign_key'] && $g['name'] !== $f1['name'] && $g['foreign_key']['table'] === $fk['table']
+                            && $norm($g['foreign_key']['label']) === $r);
+                    }
+                    $existed = false;
+                    foreach ($e0['fields'] as $f0) {
+                        $existed = $existed || ($f0['foreign_key'] && $this->mapsTo($f0['foreign_key']['table'], $id['entityMap']) === $fk['table']
+                            && $norm($f0['foreign_key']['label']) === $r);
+                    }
+                    $line = null;
+                    foreach ($chain($e1['name']) as $c) {
+                        $line = $line ?? ($relLines["relation:{$c['table']}.{$f1['name']}"] ?? null);
+                    }
+                    $matched = $from !== null && $norm($from['foreign_key']['label']) === $norm($fk['label']);
+                    $note($matched ? $state($r === $norm($fk['label']), $sibling, $existed) : 'live', 'relation', "relation:$t1.{$f1['name']}",
+                        Msg::of('msg_migration.relation_what', 'Relationship {class} -> {target}', [
+                            'class' => $e1['name'], 'target' => $new['entities'][$fk['table']]['name'],
+                        ]), $fk['renamed_from'], $existed, $line);
+                    continue;
+                }
+                if (!isset($f1['renamed_from'])) {
+                    continue;
+                }
+                [$n, $r] = [strtolower($f1['name']), strtolower($f1['renamed_from'])];
+                $decl = $declaring($e1['name'], $f1['name'], 'fields');
+                $note(isset($names0[$n]) ? $state($r === $n, isset($names1[$r]), isset($names0[$r])) : 'live', 'field',
+                    'field:' . strtolower($decl) . ".$n", Msg::of('msg_migration.marker_field', 'Field {field}', ['field' => "$decl.{$f1['name']}"]),
+                    $f1['renamed_from'], isset($names0[$r]), $pos['classes'][strtolower($decl)]['fields'][$n] ?? null);
+            }
+            $media0 = array_flip(array_map('strtolower', array_column($e0['media'], 'name')));
+            $media1 = array_flip(array_map('strtolower', array_column($e1['media'], 'name')));
+            foreach ($e1['media'] as $md1) {
+                if (!isset($md1['renamed_from'])) {
+                    continue;
+                }
+                [$n, $r] = [strtolower($md1['name']), strtolower($md1['renamed_from'])];
+                $decl = $declaring($e1['name'], $md1['name'], 'media');
+                $note(isset($media0[$n]) ? $state($r === $n, isset($media1[$r]), isset($media0[$r])) : 'live', 'media',
+                    'media:' . strtolower($decl) . ".$n", Msg::of('msg_migration.media_field', 'Media field {field}', ['field' => "$decl.{$md1['name']}"]),
+                    $md1['renamed_from'], isset($media0[$r]), $pos['classes'][strtolower($decl)]['fields'][$n] ?? null);
+            }
+            foreach ($e1['many_to_many'] as $i => $m1) {
+                if (!isset($m1['renamed_from'])) {
+                    continue;
+                }
+                $r = $norm($m1['renamed_from']);
+                $m0 = $id['nnMatch'][$t1][$i];
+                $sibling = false;
+                foreach ($e1['many_to_many'] as $j => $m2) {
+                    $sibling = $sibling || ($j !== $i && $m2['table'] === $m1['table'] && $norm($m2['label']) === $r);
+                }
+                $existed = false;
+                foreach ($e0['many_to_many'] as $c0) {
+                    $existed = $existed || ($this->mapsTo($c0['table'], $id['entityMap']) === $m1['table'] && $norm($c0['label']) === $r);
+                }
+                $matched = $m0 !== null && $norm($m0['label']) === $norm($m1['label']);
+                $note($matched ? $state($r === $norm($m1['label']), $sibling, $existed) : 'live', 'nn', "nn:{$m1['junction']}",
+                    self::nnWhat($e1['name'], $new['entities'][$m1['table']]['name'], $m1['label']), $m1['renamed_from'], $existed,
+                    $relLines["relation:{$m1['junction']}"] ?? null);
+            }
+        }
+        // metadata classes (<<media_meta>>, no table): class and fields by name against the active schema
+        $meta0 = array_change_key_case($old['media_meta'] ?? [], CASE_LOWER);
+        $meta1 = array_change_key_case($new['media_meta'] ?? [], CASE_LOWER);
+        foreach ($meta1 as $n => $mc) {
+            $r = isset($mc['renamed_from']) ? strtolower($mc['renamed_from']) : null;
+            if ($r !== null) {
+                $note(isset($meta0[$n]) ? $state($r === $n, isset($meta1[$r]), isset($meta0[$r])) : 'live', 'media_meta', "media_meta:$n",
+                    Msg::of('msg_migration.marker_meta_class', 'Metadata class {class}', ['class' => $mc['name']]), $mc['renamed_from'],
+                    isset($meta0[$r]), $pos['classes'][$n]['head'] ?? null);
+            }
+            $mc0 = $meta0[$n] ?? ($r !== null ? ($meta0[$r] ?? null) : null);
+            if ($mc0 === null) {
+                continue;
+            }
+            $names0 = array_flip(array_map('strtolower', array_column($mc0['fields'], 'name')));
+            $names1 = array_flip(array_map('strtolower', array_column($mc['fields'], 'name')));
+            foreach ($mc['fields'] as $f) {
+                if (!isset($f['renamed_from'])) {
+                    continue;
+                }
+                [$fn, $fr] = [strtolower($f['name']), strtolower($f['renamed_from'])];
+                $note(isset($names0[$fn]) ? $state($fr === $fn, isset($names1[$fr]), isset($names0[$fr])) : 'live', 'media_meta_field',
+                    "media_meta_field:$n.$fn", Msg::of('msg_migration.marker_meta_field', 'Metadata field {field}', [
+                        'field' => "{$mc['name']}.{$f['name']}",
+                    ]), $f['renamed_from'], isset($names0[$fr]), $pos['classes'][$n]['fields'][$fn] ?? null);
+            }
+        }
+        $out = ['stale' => [], 'consumed' => []];
+        foreach ($found as $f) {
+            if (isset($f['states']['stale'])) {
+                $out['stale'][] = $f['entry'];
+            } elseif (!isset($f['states']['live'])) {
+                $out['consumed'][] = $f['entry'];
+            }
+        }
+        foreach ($out as &$list) {
+            usort($list, function ($a, $b) {
+                return [$a['line'] ?? PHP_INT_MAX, $a['key']] <=> [$b['line'] ?? PHP_INT_MAX, $b['key']];
+            });
+        }
+        unset($list);
+        return $out;
+    }
+
+    /** "… now belongs to {owner}": the element that carries the old name of an outdated marker */
+    private static function markerOwner(string $kind, bool $existed): Msg
+    {
+        switch ($kind) {
+            case 'entity':
+                return $existed ? Msg::of('msg_migration.marker_owner_other_class', 'another class')
+                    : Msg::of('msg_migration.marker_owner_new_class', 'a new class');
+            case 'media':
+                return $existed ? Msg::of('msg_migration.marker_owner_other_media', 'another media field')
+                    : Msg::of('msg_migration.marker_owner_new_media', 'a new media field');
+            case 'media_meta':
+                return $existed ? Msg::of('msg_migration.marker_owner_other_meta_class', 'another metadata class')
+                    : Msg::of('msg_migration.marker_owner_new_meta_class', 'a new metadata class');
+            case 'media_meta_field':
+                return $existed ? Msg::of('msg_migration.marker_owner_other_meta_field', 'another metadata field')
+                    : Msg::of('msg_migration.marker_owner_new_meta_field', 'a new metadata field');
+            default:
+                return $existed ? Msg::of('msg_migration.marker_owner_other_field', 'another field')
+                    : Msg::of('msg_migration.marker_owner_new_field', 'a new field');
+        }
+    }
+
+    /** Consumed markers of a text with the preview of their removal (see cleanup()); none if the text cannot be read or matched */
+    private function consumed(string $source): array
+    {
+        try {
+            $new = PumlParser::parse($source, $this->workflows(), Patterns::names($this->pdo));
+            return $this->cleanup($this->markerStates($this->identify($new), $new, $source)['consumed'], $source);
+        } catch (SchemaException | ApiException $e) {
+            return ['markers' => [], 'skipped' => [], 'source' => $source];
+        }
+    }
+
+    /**
+     * Removal of consumed markers as a minimal change of the text: per marker only its own line changes, and in it only the
+     * marker with the blanks in front of it (RenameMarker::without()) - comments, notes and formatting stay as they are. A
+     * marker is left out and named in 'skipped' if its line cannot be determined or changed safely (block comment on the
+     * line, a second marker in a trailing comment), or if the text without it would not yield exactly the same model.
+     *
+     * @param array $consumed entries of markerStates()
+     * @return array ['markers' => [...], 'skipped' => [...] (see consumedMarkers()), 'source' => text without the markers]
+     */
+    private function cleanup(array $consumed, string $source): array
+    {
+        $out = ['markers' => [], 'skipped' => [], 'source' => $source];
+        if (!$consumed) {
+            return $out;
+        }
+        $model = function (string $text): ?array {
+            try {
+                return self::withoutMarkers(PumlParser::parse($text, $this->workflows(), Patterns::names($this->pdo)));
+            } catch (SchemaException $e) {
+                return null;
+            }
+        };
+        $base = $model($source);
+        $lines = explode("\n", $source);
+        $item = function (array $c) use ($lines): array {
+            return ['kind' => $c['kind'], 'key' => $c['key']] + Msg::of('msg_migration.marker_consumed', '{what} {marker}', [
+                'what' => $c['what'], 'marker' => $c['marker'],
+            ])->fields('text') + ['line' => $c['line'] !== null ? $c['line'] + 1 : null, 'original' => $c['line'] !== null ? $lines[$c['line']] : null];
+        };
+        $skip = function (array $c, Msg $reason) use (&$out, $item): void {
+            $out['skipped'][] = $item($c) + ['reason' => $reason->text(), 'reason_code' => $reason->codeOnly()];
+        };
+        $unsafe = Msg::of('msg_migration.marker_skip_unsafe', 'the text without this marker would not yield the same schema');
+        $todo = [];
+        foreach ($consumed as $c) {
+            $replacement = $c['line'] !== null ? RenameMarker::without($lines[$c['line']]) : null;
+            if ($replacement === null) {
+                $skip($c, $c['line'] === null
+                    ? Msg::of('msg_migration.marker_skip_line', 'its line could not be determined unambiguously')
+                    : Msg::of('msg_migration.marker_skip_comment', 'block comment or a second marker on the same line'));
+                continue;
+            }
+            $todo[] = [$c, $replacement];
+        }
+        // all at once; only if that does not yield the same model, one by one (whatever changes the model is left out)
+        $all = $lines;
+        foreach ($todo as [$c, $replacement]) {
+            $all[$c['line']] = $replacement;
+        }
+        $together = $base !== null && $model(implode("\n", $all)) === $base;
+        $cleaned = $together ? $all : $lines;
+        foreach ($todo as [$c, $replacement]) {
+            if (!$together) {
+                $try = $cleaned;
+                $try[$c['line']] = $replacement;
+                if ($base === null || $model(implode("\n", $try)) !== $base) {
+                    $skip($c, $unsafe);
+                    continue;
+                }
+                $cleaned = $try;
+            }
+            $out['markers'][] = $item($c) + ['replacement' => $replacement];
+        }
+        $out['source'] = implode("\n", $cleaned);
+        return $out;
+    }
+
+    private static function publicCleanup(array $cleanup): array
+    {
+        return ['count' => count($cleanup['markers']), 'markers' => $cleanup['markers'], 'skipped' => $cleanup['skipped']];
+    }
+
+    /** Model without any 'renamed_from' key (what a text means once its markers are gone) */
+    private static function withoutMarkers(array $model): array
+    {
+        unset($model['renamed_from']);
+        foreach ($model as $k => $v) {
+            if (is_array($v)) {
+                $model[$k] = self::withoutMarkers($v);
+            }
+        }
+        return $model;
+    }
+
+    /**
+     * Metadata columns of a matched media field (media(Klasse), see LinkFields): the link table is treated like the table of an
+     * entity whose fields are the fields of the metadata class - the same matching (name or {renamed_from}) and the same
+     * checks (checkColumns(): removed columns with values -> confirmation, new required columns / optional -> required ->
+     * backfill, type changes, rule changes with the affected records). The messages name the columns as
+     * "<Class>.<media field>.meta.<field>", so a change to a metadata class used by several media fields shows up per link
+     * table. Adds the column mapping to $cols; the record of a link is its own_column (for listed IDs).
+     *
+     * @return bool true = the media field has or had a metadata class (the link table may change)
+     */
+    private function metaColumns(string $t1, array $e1, array $md1, array $md0, array &$cols, array &$p): bool
+    {
+        $f1 = LinkFields::of($md1);
+        $f0 = LinkFields::of($md0);
+        if (!$f1 && !$f0) {
+            return false;
+        }
+        $field = "{$e1['name']}.{$md1['name']}";
+        $c1 = $md1['meta']['class'] ?? null;
+        $c0 = $md0['meta']['class'] ?? null;
+        $params = ['field' => $field, 'class' => $c1, 'old' => $c0, 'table' => $md1['junction']];
+        if ($c0 === null) {
+            $p['changes'][] = self::change('media_meta', 'info', Msg::of('msg_migration.media_meta_added', 'Media field {field}: metadata '
+                . "class {class} added (new columns in '{table}'; links and their order are kept).", $params));
+        } elseif ($c1 === null) {
+            $p['changes'][] = self::change('media_meta', 'info', Msg::of('msg_migration.media_meta_removed', 'Media field {field}: metadata '
+                . "class {old} removed (its columns in '{table}' are dropped; links and their order are kept).", $params));
+        } elseif (strtolower($c0) !== strtolower($c1)) {
+            $p['changes'][] = self::change('media_meta', 'info', Msg::of('msg_migration.media_meta_changed', 'Media field {field}: '
+                . "metadata class {old} -> {class} (columns in '{table}' are matched by field name).", $params));
+        }
+        // {renamed_from} of a shared metadata class only counts where the previous field exists (another media field may get
+        // the class only now - for it the field is simply new)
+        $names0 = array_map('strtolower', array_column($f0, 'name'));
+        $f1 = array_map(function (array $f) use ($names0): array {
+            if (isset($f['renamed_from']) && !in_array(strtolower($f['renamed_from']), $names0, true)) {
+                unset($f['renamed_from']);
+            }
+            return $f;
+        }, $f1);
+        $e1m = ['name' => "$field.meta", 'table' => $md1['junction'], 'fields' => $f1];
+        $e0m = ['name' => "$field.meta", 'table' => $md0['junction'], 'fields' => $f0];
+        $scratch = ['model' => $p['model'], 'entityMap' => $p['entityMap'], 'changes' => [], 'removedColumns' => []];
+        [$meta, $map] = $this->mapColumns($e1m, $e0m, $scratch);
+        array_push($p['changes'], ...$scratch['changes']);
+        $p['removedColumns'][$md0['junction']] = $scratch['removedColumns'][$md0['junction']] ?? [];
+        $this->checkColumns($md1['junction'], $e1m, $md0['junction'], $e0m, $meta, $p, SqlGenerator::q($md0['own_column']));
+        $cols += $meta;
+        $p['metaMaps'][$t1][$md1['name']] = $map; // old metadata field => new one (versions, see Revisions::migrate())
+        return true;
     }
 
     /**
@@ -557,7 +1012,13 @@ final class SchemaMigration
                     }
                 }
                 $what = self::nnWhat($e1['name'], $new['entities'][$m1['table']]['name'], $m1['label']);
-                $k = self::matchRelation($cands, $m1['label'], $m1['renamed_from'] ?? null, $what);
+                $siblings = [];
+                foreach ($e1['many_to_many'] as $j => $m2) {
+                    if ($j !== $i && $m2['table'] === $m1['table'] && !isset($m2['renamed_from'])) {
+                        $siblings[] = PumlParser::normalizeLabel($m2['label']);
+                    }
+                }
+                $k = self::matchRelation($cands, $m1['label'], $m1['renamed_from'] ?? null, $what, $siblings);
                 if ($k !== null) {
                     $used[$k] = true;
                 }
@@ -588,8 +1049,23 @@ final class SchemaMigration
     {
         $old = $this->old;
         $loc = new RenameMarker($source);
-        $json = PumlParser::modelJson($source, $this->workflows());
+        $map = PumlParser::sourceMap($source, $this->workflows());
+        $json = $map['model'];
         $classes = array_column($json['entities'], null, 'name');
+        // Line of every relationship exactly as the parser read it: 'relation:<table>.<fk column>' or 'relation:<link table>'
+        // => line. A search in the text by classes and label (RenameMarker::relation()) is ambiguous as soon as two
+        // relationships between the same classes carry the same label - e.g. A "n" -- "1" B and A "1" -- "n" B (FK on
+        // either side), or an n:1 next to an n:n: then no line was found and the suggestion was silently missing.
+        // The parser's line numbers match RenameMarker's only without lone "\r" line breaks; then the search stays.
+        $relLines = [];
+        if (!preg_match('/\r(?!\n)/', $source)) {
+            foreach ($json['relations'] as $i => $r) {
+                $relLines[$r['id']] = $map['positions']['relations'][$i] ?? null;
+            }
+        }
+        $relLine = function (string $id, string $class, string $target, string $label) use ($relLines, $loc): ?int {
+            return array_key_exists($id, $relLines) ? $relLines[$id] : $loc->relation($class, $target, $label);
+        };
         // declaring class of a (possibly inherited) field or media field
         $declaring = function (string $class, string $name, string $list) use ($classes): ?string {
             for ($c = $classes[$class] ?? null; $c !== null; $c = $c['extends'] !== null ? ($classes[$c['extends']] ?? null) : null) {
@@ -691,7 +1167,7 @@ final class SchemaMigration
                     continue;
                 }
                 $target = $new['entities'][$fk['table']]['name'];
-                $line = $loc->relation($e1['name'], $target, $fk['label']);
+                $line = $relLine("relation:$t1.$name", $e1['name'], $target, $fk['label']);
                 $add("relation:$t1.$name", 'relation', Msg::of('msg_migration.suggest_relation', 'New relationship {class} → {target} {label}', [
                     'class' => $e1['name'], 'target' => $target, 'label' => $relLabel($fk['label']),
                 ]), $line, $line === null ? [] : array_map(function ($f0) use ($loc, $line, $relLabel, $option) {
@@ -714,7 +1190,7 @@ final class SchemaMigration
                     continue;
                 }
                 $target = $new['entities'][$m1['table']]['name'];
-                $line = $loc->relation($e1['name'], $target, $m1['label']);
+                $line = $relLine("relation:{$m1['junction']}", $e1['name'], $target, $m1['label']);
                 $add("nn:{$m1['junction']}", 'nn', Msg::of('msg_migration.suggest_nn', 'New n:n relationship {class} – {target} {label}', [
                     'class' => $e1['name'], 'target' => $target, 'label' => $relLabel($m1['label']),
                 ]), $line, $line === null ? [] : array_map(function ($m0) use ($loc, $line, $relLabel, $option) {
@@ -822,6 +1298,22 @@ final class SchemaMigration
         foreach ($modelJson['enums'] as $en) {
             $out[$en['id']] = [$en['id']];
         }
+        // metadata classes (<<media_meta>>): no table, so via the name or {renamed_from} of the class; their fields via the
+        // name or {renamed_from} within the (possibly renamed) class
+        foreach ($modelJson['media_meta'] ?? [] as $mc) {
+            $classes = array_values(array_unique(array_filter([strtolower($mc['name']), strtolower((string) $mc['renamed_from'])], 'strlen')));
+            $out[$mc['id']] = array_map(function ($c) {
+                return "media_meta:$c";
+            }, $classes);
+            foreach ($mc['fields'] as $f) {
+                $out[$f['id']] = [];
+                foreach ($classes as $c) {
+                    foreach (array_filter([strtolower($f['name']), strtolower((string) ($f['renamed_from'] ?? ''))], 'strlen') as $n) {
+                        $out[$f['id']][] = "media_meta_field:$c.$n";
+                    }
+                }
+            }
+        }
         return $out;
     }
 
@@ -855,9 +1347,11 @@ final class SchemaMigration
                             . "no class '{from}' in the current schema.", ['class' => $e1['name'], 'from' => $e1['renamed_from']]));
                     }
                     $src = $r;
-                } elseif ($r !== $t1 && isset($old['entities'][$r])) {
+                } elseif ($r !== $t1 && isset($old['entities'][$r])
+                    && !(isset($new['entities'][$r]) && !isset($new['entities'][$r]['renamed_from']))) {
                     // both names exist so far (also: two classes swapping names) - a silently ignored marker would be
-                    // just as wrong as a guessed matching
+                    // just as wrong as a guessed matching. Not if the new text still has a plain class of the old name: then
+                    // both classes keep their data by name and the marker is merely outdated (blocker, see markerStates())
                     throw self::schemaError(Msg::of('msg_migration.renamed_both', 'Class {class} {renamed_from:{from}}: both classes '
                         . 'exist so far - unclear which data should apply (swapping names is not supported). Please rename in two steps '
                         . 'or remove the marker.', ['class' => $e1['name'], 'from' => $e1['renamed_from']]));
@@ -884,9 +1378,12 @@ final class SchemaMigration
      * as well (ambiguous, error); if it points at nothing, that is a schema error.
      *
      * @param array<int|string,string> $cands
+     * @param string[] $siblings normalized labels of the other new relationships of the same kind to the same target that
+     *        carry no marker themselves: if one of them has the old label, it keeps the old relationship by its label and
+     *        the marker is merely outdated (blocker, see markerStates()) instead of ambiguous
      * @return int|string|null
      */
-    private static function matchRelation(array $cands, string $label, ?string $renamedFrom, Msg $what)
+    private static function matchRelation(array $cands, string $label, ?string $renamedFrom, Msg $what, array $siblings = [])
     {
         $find = function (string $l) use ($cands) {
             foreach ($cands as $k => $cl) {
@@ -902,7 +1399,7 @@ final class SchemaMigration
         }
         $old = $find($renamedFrom);
         if ($own !== null) {
-            if ($old !== null && $old !== $own) {
+            if ($old !== null && $old !== $own && !in_array(PumlParser::normalizeLabel($renamedFrom), $siblings, true)) {
                 throw self::schemaError(Msg::of('msg_migration.relation_both', '{what} {marker}: relationships with the old and the new '
                     . 'label both exist so far - unclear which values should apply. Please rename in two steps or remove the marker.', [
                         'what' => $what, 'marker' => '{renamed_from:' . $renamedFrom . '}',
@@ -970,7 +1467,14 @@ final class SchemaMigration
                 }
                 $target = $p['model']['entities'][$f1['foreign_key']['table']]['name'];
                 $what = Msg::of('msg_migration.relation_what', 'Relationship {class} -> {target}', ['class' => $e1['name'], 'target' => $target]);
-                $k = self::matchRelation($cands, $f1['foreign_key']['label'], $f1['foreign_key']['renamed_from'] ?? null, $what);
+                $siblings = [];
+                foreach ($e1['fields'] as $g) {
+                    if ($g['foreign_key'] && $g['name'] !== $f1['name'] && $g['foreign_key']['table'] === $f1['foreign_key']['table']
+                        && !isset($g['foreign_key']['renamed_from'])) {
+                        $siblings[] = PumlParser::normalizeLabel($g['foreign_key']['label']);
+                    }
+                }
+                $k = self::matchRelation($cands, $f1['foreign_key']['label'], $f1['foreign_key']['renamed_from'] ?? null, $what, $siblings);
                 $from = $k !== null ? $oldFks[$k] : null;
                 if ($from !== null && PumlParser::normalizeLabel($from['foreign_key']['label'])
                     !== PumlParser::normalizeLabel($f1['foreign_key']['label'])) {
@@ -994,8 +1498,9 @@ final class SchemaMigration
                     $p['changes'][] = self::change('field_renamed', 'info', Msg::of('msg_migration.field_renamed', 'Field {field} renamed to '
                         . '{name} (values are kept).', ['field' => "{$e1['name']}.{$from['name']}", 'name' => $f1['name']]));
                 } else {
+                    // (a plain field of the old name in the new text keeps its values by name: outdated marker, markerStates())
                     if ($own !== null && isset($f1['renamed_from']) && strtolower($f1['renamed_from']) !== strtolower($f1['name'])
-                        && isset($oldByName[strtolower($f1['renamed_from'])])) {
+                        && isset($oldByName[strtolower($f1['renamed_from'])]) && !self::plainField($e1, $f1['renamed_from'])) {
                         throw self::schemaError(Msg::of('msg_migration.field_both', 'Field {field} {marker}: both fields exist so far - '
                             . 'unclear which values should apply (swapping names is not supported). Please rename in two steps or remove '
                             . 'the marker.', ['field' => "{$e1['name']}.{$f1['name']}", 'marker' => '{renamed_from:' . $f1['renamed_from'] . '}']));
@@ -1026,6 +1531,17 @@ final class SchemaMigration
             }
         }
         return [$cols, $colMap];
+    }
+
+    /** Does the class have a field (no FK column) of this name that carries no {renamed_from} marker itself? */
+    private static function plainField(array $e, string $name): bool
+    {
+        foreach ($e['fields'] as $f) {
+            if (!$f['foreign_key'] && strtolower($f['name']) === strtolower($name) && !isset($f['renamed_from'])) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Media field in the old model for a new one (name or {renamed_from}) */
@@ -1059,7 +1575,7 @@ final class SchemaMigration
      * (notice), type/enum changes with values that cannot be converted (blocker), empty required values (backfill), new
      * uniqueness with duplicates (blocker). Adds cols[...]['backfill'] and ['convert'].
      */
-    private function checkColumns(string $t1, array $e1, string $t0, array $e0, array &$cols, array &$p): void
+    private function checkColumns(string $t1, array $e1, string $t0, array $e0, array &$cols, array &$p, string $idCol = '"id"'): void
     {
         $rows = $this->count($t0);
         foreach ($p['removedColumns'][$t0] ?? [] as $f0) {
@@ -1084,7 +1600,10 @@ final class SchemaMigration
             if ($f0 === null) {
                 $params = ['field' => "{$e1['name']}.$name", 'type' => $f1['type'],
                     'target' => $f1['foreign_key'] ? $p['model']['entities'][$f1['foreign_key']['table']]['name'] : null];
-                if ($f1['foreign_key']) {
+                if ($f1['type'] === PumlParser::SORT_TYPE) {
+                    $added = Msg::of('msg_migration.sort_added', 'New sort field {field} (manual order): the existing rows are numbered '
+                        . 'per group in the order of their IDs.', $params);
+                } elseif ($f1['foreign_key']) {
                     $added = $f1['required']
                         ? Msg::of('msg_migration.relation_added_required', 'New required relationship {field} -> {target}.', $params)
                         : Msg::of('msg_migration.relation_added_optional', 'New optional relationship {field} -> {target}.', $params);
@@ -1103,8 +1622,8 @@ final class SchemaMigration
                 ]));
                 $bad = [];
                 $total = 0;
-                $stmt = $this->pdo->query('SELECT "id", ' . SqlGenerator::q($f0['name']) . ' AS v FROM ' . SqlGenerator::q($t0)
-                    . ' WHERE ' . SqlGenerator::q($f0['name']) . ' IS NOT NULL ORDER BY "id"');
+                $stmt = $this->pdo->query("SELECT $idCol AS id, " . SqlGenerator::q($f0['name']) . ' AS v FROM ' . SqlGenerator::q($t0)
+                    . ' WHERE ' . SqlGenerator::q($f0['name']) . " IS NOT NULL ORDER BY $idCol");
                 foreach ($stmt as $r) {
                     try {
                         Cms::coerce($f1, self::raw($f1, $r['v']));
@@ -1125,6 +1644,11 @@ final class SchemaMigration
                 if (isset($f0['workflow']) !== isset($f1['workflow'])) {
                     $p['changes'][] = self::change('field_workflow', 'info', self::workflowFieldChange($label, isset($f1['workflow'])));
                 }
+                if ($f1['type'] === PumlParser::SORT_TYPE) {
+                    $p['changes'][] = self::change('sort_converted', 'info', Msg::of('msg_migration.sort_converted', '{what}: the existing '
+                        . 'values become the manual order - numbered without gaps per group (equal values by ID, empty values at the '
+                        . 'end of their group).', ['what' => $label]));
+                }
             } elseif ($f0 !== null && isset($f0['workflow']) !== isset($f1['workflow'])) {
                 $p['changes'][] = self::change('field_workflow', 'info', self::workflowFieldChange($label, isset($f1['workflow'])));
             } elseif ($f0 !== null && $f0['required'] !== $f1['required']) {
@@ -1136,7 +1660,7 @@ final class SchemaMigration
                     . 'changed ({old} -> {new}).', ['what' => $label, 'old' => self::fkSignature($f0), 'new' => self::fkSignature($f1)]));
             }
             if ($f0 !== null && !$f1['foreign_key']) {
-                $this->ruleChanges($t0, $f0, $f1, $label, (bool) $c['convert'], $p);
+                $this->ruleChanges($t0, $f0, $f1, $label, (bool) $c['convert'], $p, $idCol);
             }
             // minimum count ("1..*" on the n side): soft rule, the table stays the same - only the model changes
             if ($f0 !== null && $f1['foreign_key'] && $f0['foreign_key']
@@ -1177,7 +1701,10 @@ final class SchemaMigration
                 $empty = $f0 === null ? $rows
                     : (int) $this->pdo->query('SELECT COUNT(*) FROM ' . SqlGenerator::q($t0) . ' WHERE ' . SqlGenerator::q($f0['name'])
                         . ' IS NULL')->fetchColumn();
-                if ($empty && isset($f1['workflow'])) {
+                if ($empty && $f1['type'] === PumlParser::SORT_TYPE) {
+                    // sort field: rows without a value are numbered at the end of their group (see sortChanges(), execute())
+                    $c['auto'] = Sorting::UNSET;
+                } elseif ($empty && isset($f1['workflow'])) {
                     // workflow field: existing rows automatically start in the initial state (no backfill dialog)
                     $c['auto'] = $p['model']['workflows'][$f1['workflow']]['initial'];
                     $p['changes'][] = self::change('workflow_backfill', 'info', Msg::of('msg_migration.workflow_backfill', '{what}: {count} '
@@ -1255,7 +1782,7 @@ final class SchemaMigration
      * with the number of existing records that violate the new rules ('count', first IDs in 'ids'), otherwise 'info'. Values
      * that cannot be converted for a type change are left out here (the type change blocks for them anyway).
      */
-    private function ruleChanges(string $t0, array $f0, array $f1, Msg $label, bool $convert, array &$p): void
+    private function ruleChanges(string $t0, array $f0, array $f1, Msg $label, bool $convert, array &$p, string $idCol = '"id"'): void
     {
         $r0 = $f0['rules'] ?? [];
         $r1 = $f1['rules'] ?? [];
@@ -1265,18 +1792,21 @@ final class SchemaMigration
         $none = Msg::of('msg_migration.rules_none', '(none)');
         $rules = ['what' => $label, 'old' => $r0 ? trim(Validation::markers($r0)) : $none, 'new' => $r1 ? trim(Validation::markers($r1)) : $none];
         $ids = [];
+        $seen = [];
         $count = 0;
         if ($r1) {
             $validation = new Validation($this->pdo);
             $col = SqlGenerator::q($f0['name']);
-            $stmt = $this->pdo->query("SELECT \"id\", $col AS v FROM " . SqlGenerator::q($t0) . " WHERE $col IS NOT NULL AND $col <> '' ORDER BY \"id\"");
+            $stmt = $this->pdo->query("SELECT $idCol AS id, $col AS v FROM " . SqlGenerator::q($t0) . " WHERE $col IS NOT NULL AND $col <> '' ORDER BY $idCol");
             foreach ($stmt as $r) {
                 try {
                     $value = $convert ? Cms::coerce($f1, self::raw($f1, $r['v'])) : $r['v'];
                 } catch (\InvalidArgumentException $e) {
                     continue;
                 }
-                if ($validation->check($f1, $value)) {
+                if ($validation->check($f1, $value) && !isset($seen[(int) $r['id']])) {
+                    // a record counts once (a link table can hold several links of the same record)
+                    $seen[(int) $r['id']] = true;
                     $count++;
                     if (count($ids) < self::LIST_LIMIT) {
                         $ids[] = (int) $r['id'];
@@ -1336,6 +1866,63 @@ final class SchemaMigration
                 : Msg::of('msg_migration.media_conflict', "{what} cannot be filled without access to the system area 'media' ({owners}) "
                     . '– affected users can then no longer create new records in {entity}.', $params));
         }
+    }
+
+    /**
+     * Sort fields (manual order, see Sorting) whose numbering has to be made anew after the change: a new field, one that
+     * was another type before (int -> sort), and one whose groups changed - other {by: …} relationships, or tables that
+     * did not share the order before (a subclass with its own numbering joins an abstract class). The relative order of the
+     * rows is kept (previous value, then ID). A field that only changes its name, or a set that only loses a table, keeps
+     * its values.
+     *
+     * @return array[] one sort field per affected set of tables (argument of Sorting::renumber())
+     */
+    private function sortChanges(array &$p, array $id): array
+    {
+        $out = [];
+        $done = [];
+        foreach ($p['model']['entities'] as $t1 => $e1) {
+            $f1 = Sorting::fieldOf($e1);
+            if ($f1 === null || isset($done[$t1])) {
+                continue;
+            }
+            $renumber = false;
+            $regrouped = false;
+            foreach ($f1['sort']['tables'] as $t) {
+                $done[$t] = true;
+                $t0 = $p['entityMap'][$t] ?? null;
+                if ($t0 === null) {
+                    continue; // new class: no rows yet
+                }
+                $g1 = Sorting::fieldOf($p['model']['entities'][$t]);
+                $c = $id['cols'][$t][$g1['name']] ?? null;
+                $f0 = $c['old'] ?? null;
+                if ($f0 === null || $f0['type'] !== PumlParser::SORT_TYPE || !isset($f0['sort'])) {
+                    $renumber = true; // new or converted (reported with the field)
+                    continue;
+                }
+                $by = array_map(function ($col) use ($id, $t) {
+                    return $id['cols'][$t][$col]['from'] ?? null;
+                }, $g1['sort']['by']);
+                $shared = array_filter(array_map(function ($x) use ($p) {
+                    return $p['entityMap'][$x] ?? null;
+                }, $g1['sort']['tables']));
+                if ($by !== $f0['sort']['by'] || array_diff($shared, $f0['sort']['tables'])) {
+                    $renumber = true;
+                    $regrouped = true;
+                }
+            }
+            if ($regrouped) {
+                $p['changes'][] = self::change('sort_regrouped', 'info', Msg::of('msg_migration.sort_regrouped', '{what}: the groups of '
+                    . 'the manual order change - the rows are numbered anew per group, their relative order is kept.', [
+                        'what' => self::fieldLabel($e1['name'], $f1),
+                    ]));
+            }
+            if ($renumber) {
+                $out[] = $f1;
+            }
+        }
+        return $out;
     }
 
     /** Backfill request, or a blocker if a backfill is not possible */
@@ -1495,6 +2082,10 @@ final class SchemaMigration
             }
             foreach ($renames as $tmp => $final) {
                 $pdo->exec('ALTER TABLE ' . SqlGenerator::q($tmp) . ' RENAME TO ' . SqlGenerator::q($final));
+            }
+            // manual order (sort fields): number new/converted fields and regrouped ones per group, keeping the order
+            foreach ($plan['sorts'] as $field) {
+                Sorting::renumber($pdo, $plan['model'], $field);
             }
             // Stable IDs (SchemaIds): add missing ones of the previous schema (installation before phase 2), then transfer them
             // to the new schema via the same matching as above - before the foreign_key_check (positions of removed elements)
@@ -1769,7 +2360,9 @@ final class SchemaMigration
             $sec1 = $sectionOf($e1, []);
             foreach ($common as $n) {
                 $was = $sec0[$n] ?? null;
-                if (array_key_exists($n, $sec1) && ($renamedSection[$was] ?? $was) !== $sec1[$n]) {
+                // no section (null) is never a renamed one - and null as an array offset is deprecated since PHP 8.5
+                $now = $was !== null && isset($renamedSection[$was]) ? $renamedSection[$was] : $was;
+                if (array_key_exists($n, $sec1) && $now !== $sec1[$n]) {
                     $moved = true;
                 }
             }

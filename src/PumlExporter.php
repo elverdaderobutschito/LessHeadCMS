@@ -23,11 +23,13 @@ namespace LessHeadCMS;
 
 /**
  * Writes a model JSON (see PumlParser::modelJson()) back as PlantUML text. The goal is semantic equality:
- * PumlParser::modelJson(toPuml($m)) yields the same entities, fields, relationships and enums as $m (without warnings) -
- * comments, formatting and decorative statements of the original text no longer exist in the model JSON.
- *
- * Used by the diagram editor (POST /api/_schema/export: model JSON edited in the diagram -> text for the text field,
- * check() beforehand) and by the round-trip tests (backend/tests/parser_test.php, e2e/fuzz).
+ * PumlParser::modelJson(toPuml($m)) yields the same entities, fields, relationships and enums as $m (without warnings).
+ * toPuml() writes a complete new text: comments, formatting and decorative statements of an original text are lost
+ * there, because they do not exist in the model JSON. That only applies where there is no original text (POST
+ * /api/_schema/export without "source", round-trip tests in backend/tests/parser_test.php and e2e/fuzz, and the
+ * explicitly confirmed fallback of the diagram editor). With an original text the diagram editor goes through
+ * PumlPatcher, which changes only the affected lines and uses the building blocks below (classHead(), fieldCore(),
+ * relationText(), ...) for them; check() runs beforehand in both cases.
  *
  * Order: enums, then the classes in model order (consecutive classes of the same package in one
  * shared package block - several blocks of the same name result in one group anyway), then the relationships in
@@ -101,18 +103,30 @@ final class PumlExporter
                 }
             }
         }
+        // classes and metadata classes (<<media_meta>>, key missing in model JSON from before them): the same body checks;
+        // a metadata class has no extends/abstract/title/unique and no media fields
+        $classes = [];
         foreach ($list('entities', $model, $root) as $i => $e) {
-            $where = Msg::of('msg_export.entity', 'Entity {n}', ['n' => $i + 1]);
+            $classes[] = [$e, false, Msg::of('msg_export.entity', 'Entity {n}', ['n' => $i + 1])];
+        }
+        foreach (array_key_exists('media_meta', $model) ? $list('media_meta', $model, $root) : [] as $i => $e) {
+            $classes[] = [$e, true, Msg::of('msg_export.media_meta', 'Metadata class {n}', ['n' => $i + 1])];
+        }
+        foreach ($classes as [$e, $isMeta, $where]) {
             if (!is_array($e)) {
                 $errors[] = $object($where);
                 continue;
             }
             $text($e, 'name', $where, self::IDENT);
             $text($e, 'package', $where, '/^(?=.*\S)[^\r\n"]+$/u', true);
-            $text($e, 'extends', $where, self::IDENT, true);
             $text($e, 'renamed_from', $where, self::IDENT, true);
-            $flag($e, 'abstract', $where);
-            foreach (['title_fields', 'unique_fields'] as $k) {
+            if ($isMeta) {
+                $e['media'] = [];
+            } else {
+                $text($e, 'extends', $where, self::IDENT, true);
+                $flag($e, 'abstract', $where);
+            }
+            foreach ($isMeta ? [] : ['title_fields', 'unique_fields'] as $k) {
                 foreach ($list($k, $e, $where) as $n) {
                     if (!is_string($n)) {
                         $errors[] = Msg::of('msg_export.no_name', "{where}: '{key}' contains no name.", ['where' => $where, 'key' => $k]);
@@ -171,6 +185,22 @@ final class PumlExporter
                 }
                 $text($f, 'renamed_from', $where, self::IDENT, true);
                 $flag($f, 'required', $where);
+                // sort_by ({by: …} of a sort field): [{class: name} | {label: text}, ...]; whether the relationships exist is
+                // checked by the parser afterwards
+                if (array_key_exists('sort_by', $f)) {
+                    $ok = is_array($f['sort_by']) && ($f['type'] ?? null) === PumlParser::SORT_TYPE;
+                    foreach ($ok ? $f['sort_by'] : [] as $by) {
+                        $ok = $ok && is_array($by) && count($by) === 1
+                            && ((is_string($by['class'] ?? null) && preg_match(self::IDENT, $by['class']))
+                                || (is_string($by['label'] ?? null) && trim($by['label']) !== '' && preg_match('/^[^\r\n{}"]+$/u', $by['label'])));
+                    }
+                    if (!$ok && !(($f['sort_by'] === [] || $f['sort_by'] === null))) {
+                        $errors[] = Msg::of('msg_export.sort_by_invalid', "{where}: field '{field}' has an invalid 'sort_by' (expected: a list "
+                            . 'of {class: class name} or {label: label without line break, quotes, { and }}).', [
+                                'where' => $where, 'field' => is_string($f['name'] ?? null) ? $f['name'] : '?',
+                            ]);
+                    }
+                }
                 // rules (Validation): missing in model JSON without rules; the values must be single tokens (number, date,
                 // pattern name) - whether they fit the type is checked by the parser afterwards
                 $seenRules = [];
@@ -196,6 +226,7 @@ final class PumlExporter
                 }
                 $text($m, 'name', $where, self::IDENT);
                 $text($m, 'renamed_from', $where, self::IDENT, true);
+                $text($m, 'meta', $where, self::IDENT, true); // media(Klasse): name of the metadata class
                 $flag($m, 'required', $where);
                 $section($m);
             }
@@ -282,58 +313,29 @@ final class PumlExporter
             if (!empty($enum['workflow'])) {
                 continue; // states of a workflow: they live in the workflow file, not in the diagram text
             }
-            $out[] = "enum {$enum['name']} {";
-            foreach ($enum['values'] as $value) {
-                $out[] = "  $value";
-            }
-            $out[] = '}';
+            array_push($out, ...self::enumLines($enum));
             $out[] = '';
         }
 
+        // classes, then the metadata classes (<<media_meta>>, no table - their position does not matter for the schema)
+        $classes = $model['entities'];
+        foreach ($model['media_meta'] ?? [] as $mc) {
+            $classes[] = $mc + ['meta_class' => true];
+        }
         $package = null;
-        foreach ($model['entities'] as $e) {
-            if ($e['package'] !== $package) {
+        foreach ($classes as $e) {
+            $p = $e['package'] ?? null;
+            if ($p !== $package) {
                 if ($package !== null) {
                     $out[] = '}';
                     $out[] = '';
                 }
-                if ($e['package'] !== null) {
-                    $out[] = 'package "' . $e['package'] . '" {';
+                if ($p !== null) {
+                    $out[] = self::packageLine($p);
                 }
-                $package = $e['package'];
+                $package = $p;
             }
-            $head = ($e['abstract'] ? 'abstract ' : '') . 'class ' . $e['name']
-                . ($e['extends'] !== null ? ' extends ' . $e['extends'] : '')
-                . (($e['renamed_from'] ?? null) !== null ? ' {renamed_from:' . $e['renamed_from'] . '}' : '');
-            $out[] = $head . ' {';
-            $section = null;
-            foreach (self::body($e) as $f) {
-                if (($f['section'] ?? null) !== null && $f['section'] !== $section) {
-                    $section = $f['section'];
-                    $out[] = "  -- $section --";
-                }
-                if (!empty($f['media'])) {
-                    $out[] = "  + {$f['name']}: " . PumlParser::MEDIA_TYPE . ($f['required'] ? '' : '?')
-                        . (($f['renamed_from'] ?? null) !== null ? ' {renamed_from:' . $f['renamed_from'] . '}' : '');
-                    continue;
-                }
-                $type = $f['type'] === 'enum' ? $f['enum_name'] : $f['type'];
-                $markers = '';
-                if (in_array($f['name'], $e['title_fields'], true)) {
-                    $markers .= ' {title}';
-                }
-                if (in_array($f['name'], $e['unique_fields'], true)) {
-                    $markers .= ' {unique}';
-                }
-                if (($f['renamed_from'] ?? null) !== null) {
-                    $markers .= ' {renamed_from:' . $f['renamed_from'] . '}';
-                }
-                $markers .= Validation::markers(array_column($f['rules'] ?? [], 'value', 'type'));
-                // the id is never optional ("required" is internally false there)
-                $optional = !$f['required'] && empty($f['primary']) ? '?' : '';
-                $out[] = "  + {$f['name']}: $type$optional$markers";
-            }
-            $out[] = '}';
+            array_push($out, ...self::classLines($e));
             $out[] = '';
         }
         if ($package !== null) {
@@ -342,34 +344,154 @@ final class PumlExporter
         }
 
         foreach ($model['relations'] as $r) {
-            $markers = [];
-            if ($r['show_label']) {
-                $markers[] = '{label}';
-            }
-            if ($r['cascade']) {
-                $markers[] = '{cascade}';
-            }
-            if ($r['unique']) {
-                $markers[] = '{unique}';
-            }
-            if ($r['symmetric']) {
-                $markers[] = '{symmetric}';
-            }
-            if (($r['filter_by'] ?? null) !== null && $r['filter_by'] !== '') {
-                $markers[] = '{filter_by:' . $r['filter_by'] . '}';
-            }
-            if (($r['renamed_from'] ?? null) !== null) {
-                $markers[] = '{renamed_from:' . $r['renamed_from'] . '}';
-            }
-            $arrow = $r['kind'] === 'nn' ? '--' : '-->';
-            $line = "{$r['from_entity']} \"{$r['from_multiplicity']}\" $arrow \"{$r['to_multiplicity']}\" {$r['to_entity']}";
-            if ($r['label'] !== '') {
-                $line .= ' : ' . $r['label'];
-            }
-            $out[] = $line . ($markers ? ' ' . implode(' ', $markers) : '');
+            $out[] = self::relationText($r);
         }
         $out[] = '';
         $out[] = '@enduml';
         return implode("\n", $out) . "\n";
+    }
+
+    // --- building blocks (toPuml() and PumlPatcher, which writes single lines into an existing text) ---
+
+    /** `enum Name {`, one value per line ($indent before it), `}` */
+    public static function enumLines(array $enum, string $indent = '  '): array
+    {
+        $out = ["enum {$enum['name']} {"];
+        foreach ($enum['values'] as $value) {
+            $out[] = $indent . $value;
+        }
+        $out[] = '}';
+        return $out;
+    }
+
+    public static function packageLine(string $package): string
+    {
+        return 'package "' . $package . '" {';
+    }
+
+    /**
+     * Class line without the opening "{": `abstract class B extends A {renamed_from:Alt}`, for a metadata class
+     * (meta_class) `class M <<media_meta>>`. $color (e.g. "#EEFFEE", taken over from the original line by PumlPatcher)
+     * stands before the marker, where the parser expects it.
+     */
+    public static function classHead(array $e, string $color = ''): string
+    {
+        $head = !empty($e['meta_class'])
+            ? 'class ' . $e['name'] . ' ' . PumlParser::META_STEREOTYPE
+            : (!empty($e['abstract']) ? 'abstract ' : '') . 'class ' . $e['name'] . (($e['extends'] ?? null) !== null ? ' extends ' . $e['extends'] : '');
+        $head .= $color !== '' ? ' ' . $color : '';
+        return $head . (($e['renamed_from'] ?? null) !== null ? ' {renamed_from:' . $e['renamed_from'] . '}' : '');
+    }
+
+    /**
+     * The whole class block: class line, body (fields grouped by section, see body()), "}". $indent goes before every
+     * body line; $withId = false leaves out the id line (implicit id, see PumlPatcher).
+     */
+    public static function classLines(array $e, string $indent = '  ', bool $withId = true): array
+    {
+        $out = [self::classHead($e) . ' {'];
+        $section = null;
+        foreach (self::body($e + ['media' => []]) as $f) {
+            if (!$withId && !empty($f['primary'])) {
+                continue;
+            }
+            if (($f['section'] ?? null) !== null && $f['section'] !== $section) {
+                $section = $f['section'];
+                $out[] = $indent . self::sectionText($section);
+            }
+            $out[] = $indent . (!empty($f['media']) ? self::mediaText($f) : self::fieldText($f, $e));
+        }
+        $out[] = '}';
+        return $out;
+    }
+
+    public static function sectionText(string $title): string
+    {
+        return "-- $title --";
+    }
+
+    /** Field line without indentation: `+ name: type? {title} {unique} {renamed_from:x} {maxLength: 80}` */
+    public static function fieldText(array $f, array $e): string
+    {
+        return '+ ' . self::fieldCore($f, $e);
+    }
+
+    /** Field line after the visibility sign: `name: type? {markers}` (PumlPatcher keeps the sign of the original line) */
+    public static function fieldCore(array $f, array $e): string
+    {
+        $type = $f['type'] === 'enum' ? $f['enum_name'] : $f['type'];
+        $markers = '';
+        if (in_array($f['name'], $e['title_fields'] ?? [], true)) {
+            $markers .= ' {title}';
+        }
+        if (in_array($f['name'], $e['unique_fields'] ?? [], true)) {
+            $markers .= ' {unique}';
+        }
+        if (!empty($f['sort_by']) && $f['type'] === PumlParser::SORT_TYPE) {
+            $markers .= ' {by: ' . implode(', ', array_map(function (array $by): string {
+                return isset($by['class']) ? $by['class'] : '"' . $by['label'] . '"';
+            }, $f['sort_by'])) . '}';
+        }
+        if (($f['renamed_from'] ?? null) !== null) {
+            $markers .= ' {renamed_from:' . $f['renamed_from'] . '}';
+        }
+        $markers .= Validation::markers(array_column($f['rules'] ?? [], 'value', 'type'));
+        // the id is never optional ("required" is internally false there)
+        $optional = !$f['required'] && empty($f['primary']) ? '?' : '';
+        return "{$f['name']}: $type$optional$markers";
+    }
+
+    /** Media field line without indentation: `+ galerie: media(Bild)? {renamed_from:x}` */
+    public static function mediaText(array $m): string
+    {
+        return '+ ' . self::mediaCore($m);
+    }
+
+    public static function mediaCore(array $m): string
+    {
+        // media(Klasse): with a metadata class
+        return "{$m['name']}: " . PumlParser::MEDIA_TYPE . (($m['meta'] ?? null) !== null ? "({$m['meta']})" : '')
+            . ($m['required'] ? '' : '?')
+            . (($m['renamed_from'] ?? null) !== null ? ' {renamed_from:' . $m['renamed_from'] . '}' : '');
+    }
+
+    /** Markers of a relationship line in the order toPuml() writes them (" {cascade} {unique}", or '') */
+    public static function relationMarkers(array $r): string
+    {
+        $markers = [];
+        if ($r['show_label']) {
+            $markers[] = '{label}';
+        }
+        if ($r['cascade']) {
+            $markers[] = '{cascade}';
+        }
+        if ($r['unique']) {
+            $markers[] = '{unique}';
+        }
+        if ($r['symmetric']) {
+            $markers[] = '{symmetric}';
+        }
+        if (($r['filter_by'] ?? null) !== null && $r['filter_by'] !== '') {
+            $markers[] = '{filter_by:' . $r['filter_by'] . '}';
+        }
+        if (($r['renamed_from'] ?? null) !== null) {
+            $markers[] = '{renamed_from:' . $r['renamed_from'] . '}';
+        }
+        return $markers ? ' ' . implode(' ', $markers) : '';
+    }
+
+    public static function relationArrow(array $r): string
+    {
+        return $r['kind'] === 'nn' ? '--' : '-->';
+    }
+
+    /** Relationship line, always forwards: `A "n" --> "1" B : label {markers}` */
+    public static function relationText(array $r): string
+    {
+        $line = "{$r['from_entity']} \"{$r['from_multiplicity']}\" " . self::relationArrow($r) . " \"{$r['to_multiplicity']}\" {$r['to_entity']}";
+        if ($r['label'] !== '') {
+            $line .= ' : ' . $r['label'];
+        }
+        return $line . self::relationMarkers($r);
     }
 }

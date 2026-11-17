@@ -31,18 +31,41 @@ final class Database
         if (!is_file(Config::dbFile())) {
             DataDir::assertNotElsewhere(); // never an empty installation next to an existing database (DATA_DIR changed by hand)
         }
-        $pdo = new PDO('sqlite:' . Config::dbFile(), null, null, [
-            PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        ]);
+        $pdo = self::open(Config::dbFile(), [PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
         $pdo->exec('PRAGMA foreign_keys = ON');
-        // text helpers for lists (ListQuery): SQLite knows upper/lower case and collation for ASCII only
-        if (method_exists($pdo, 'sqliteCreateFunction')) {
-            $pdo->sqliteCreateFunction('lhc_fold', [self::class, 'fold'], 1);
-            $pdo->sqliteCreateFunction('lhc_sortkey', [self::class, 'sortKey'], 1);
-            $pdo->sqliteCreateFunction('lhc_plain', [self::class, 'plainText'], 1);
-        }
+        self::addFunctions($pdo);
         return $pdo;
+    }
+
+    /**
+     * Opens an SQLite file (or ':memory:') - the one place where the CMS creates a PDO object. From PHP 8.4 on the driver
+     * class Pdo\Sqlite (a subclass of PDO): its createFunction() replaces PDO::sqliteCreateFunction(), which is deprecated
+     * since PHP 8.5 (Flight turns a reported deprecation into an exception - every request would fail). Errors always as
+     * exceptions.
+     *
+     * @param array $options further PDO attributes
+     */
+    public static function open(string $file, array $options = []): PDO
+    {
+        $class = class_exists('Pdo\\Sqlite') ? 'Pdo\\Sqlite' : PDO::class;
+        return new $class('sqlite:' . $file, null, null, $options + [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+    }
+
+    /**
+     * Text helpers for lists (ListQuery): SQLite knows upper/lower case and collation for ASCII only. Registered through
+     * Pdo\Sqlite::createFunction() or, before PHP 8.4, PDO::sqliteCreateFunction() - same arguments (name, callback, number
+     * of arguments).
+     */
+    public static function addFunctions(PDO $pdo): void
+    {
+        $create = method_exists($pdo, 'createFunction') ? 'createFunction'
+            : (method_exists($pdo, 'sqliteCreateFunction') ? 'sqliteCreateFunction' : null);
+        if ($create === null) {
+            return;
+        }
+        $pdo->$create('lhc_fold', [self::class, 'fold'], 1);
+        $pdo->$create('lhc_sortkey', [self::class, 'sortKey'], 1);
+        $pdo->$create('lhc_plain', [self::class, 'plainText'], 1);
     }
 
     /**

@@ -17,6 +17,7 @@ derived content with change notifications, releases).
 | `POST /api/{entity}/{id}/transition` | `transition` | with the label of the transition (`transition`) – the history shows the approval process |
 | `POST /api/{entity}/{id}/revisions/{v}/restore` | `restore` | with `restored_from` = the restored version |
 | a `{symmetric}` n:n list of *another* record changes | `link` | with `linked_from` = the record that was saved, see below |
+| `POST /api/{entity}/{id}/move` (manual order, field type `sort`) | `reorder` | for both swapped records; several moves in a row by the same user are one version: a move is written into the newest version if that is a `reorder` of the same user whose last step is at most 15 minutes ago (the version before it stays, so the comparison shows before → after over all these steps); otherwise it adds a version |
 | test data generator | `create`, `update`, `link` | like `POST`/`PUT` (linking n:n lists is a second save) |
 
 The version is written in the same transaction as the change – there is no change without a version and no version
@@ -49,7 +50,9 @@ Table `lh_revision` (system table; the class name `LH_Revision` is reserved in a
 
 * every field except `id` – an FK column as the id of the target row, the workflow field with its state;
 * every **n:n list as the IDs** of the linked rows (sorted like the API delivers them);
-* every **media field as the IDs** of the media, in list order.
+* every **media field as the IDs** of the media, in list order; with a metadata class (`media(Klasse)`) as
+  `{"id": 7, "meta": {…}}` per medium – the metadata belong to the version (restoring brings them back; fields of the
+  metadata class that no longer exist are left out, renamed ones are renamed in the snapshots like record fields).
 
 Linked rows and media are **referenced, not copied**. Linked records have a history of their own; copying them into
 every version of every record that points to them would multiply the storage and still not make them restorable from
@@ -92,7 +95,15 @@ curl -b jar -X POST https://example.org/api/artikel/7/revisions/2/restore \
 # {"record": {…}, "version": 4, "restored_from": 2, "skipped": []}
 ```
 
-`changed` lists the names that differ from the next older kept version (`null` for the oldest kept one).
+`changed` lists the names that differ from the next older kept version (`null` for the oldest kept one). It is computed
+when the history is read and compares the **content**, not the stored text: empty is empty (`null`, `""`, `[]`, a key
+that an older snapshot does not have yet – e.g. a media field added to the class later), the order of JSON keys does not
+matter, and a medium counts by its id and its non-empty metadata, whether it is stored as a bare id or as `{id, meta}`
+with further details. The comparison in the UI follows the same rule.
+
+`sort_place` (entities with a `sort` field): the place of the record in its group of the manual order right after this
+change (1 = first; the rank, not the stored value – after a delete the values have gaps). `null` for versions from before
+the field or from before 2026-11-15; the table gets the column by itself on the first save.
 
 **Reason for a change:** `POST`, `PUT`, a transition and a restore accept an optional `"_reason"` (text, at most 1000
 characters, trimmed, empty = none; otherwise `422` with `errors._reason`). It is stored with the new version only – never
@@ -128,7 +139,9 @@ The history follows the rights of the record ([roles and permissions](roles-and-
   before. The table shows field by field the value of A and of B; changed fields are highlighted (old value struck
   through on red, new value on green), „Nur geänderte Felder“ hides the rest. Long texts (`text`, `richtext`) are shown
   as a line diff, like the text preview of the schema editing. FK and n:n values appear with their labels, numbers and
-  dates in the format of the display language.
+  dates in the format of the display language. The manual order (`sort` field) has a row of its own, in words instead of
+  the number: „Platz 1 in „Winter und Reise““ → „Platz 3 in „Winter und Reise““, after a change of the parent with both
+  groups, without `{by: …}` just „Platz 3“; versions that have no stored place show „Wert 3 (Gruppe „…“)“.
 * **„Wiederherstellen“** at every version except the newest, with an optional reason and a confirmation. Unsaved input in
   the form is replaced by the restored state; a notice names the new version and anything that was skipped.
 

@@ -153,6 +153,20 @@ namespace LessHeadCMS;
  * pattern: string), invalid value, minLength > maxLength or min > max, a pattern name that does not exist in the pattern
  * library (only if parse() receives the names), any rule on the id.
  *
+ * Type `sort` (`+ position: sort`, `+ position: sort {by: Kategorie}`, `{by: Navigation, Navigationspunkt}`, `{by: "auf"}`):
+ * manual order of the records of the class, an INTEGER column the CMS fills itself (Cms: new records at the end, moving
+ * swaps two values; never an input field). Without `by` one order over the whole table; with `by` one order per group -
+ * the group is the parent (or the combination of parents) over the named relationships. A `by` value is the class name
+ * of the relationship target; if the class has several relationships to that target, the label in quotes instead; the
+ * own class name is the self-reference (tree). Only outgoing relationships with at most one parent per record (n:1,
+ * n:0..1, 1:1). In an abstract class the field is inherited like any other, but all concrete subclasses share ONE order
+ * per group; every subclass needs the relationship itself (relationships are not inherited), with the same target class.
+ * In the model the field carries 'sort' => ['by' => [FK columns], 'targets' => [target tables], 'spec' => [['class' =>
+ * 'Navigation'] | ['label' => 'auf'], ...] (as written), 'tables' => [all tables sharing the order, the own one included]].
+ * Schema errors: `sort?`, {unique}/{title}, more than one sort field per class (inherited ones count), `{by: …}` on another
+ * type, unknown class/label, ambiguous class name, n:n or opposite direction, the same relationship twice, a subclass
+ * without the relationship, in a metadata class.
+ *
  * Unsupported PlantUML constructs are schema errors instead of being silently discarded: classes with `<<Stereotype>>`
  * or `implements`, `interface` blocks, class lines without a body or with an unrecognizable body (the class would
  * otherwise be dropped completely), a minimum count (`1..*`) on n:n relationships, an `id` field with a type other than
@@ -209,7 +223,12 @@ final class PumlParser
         'date'     => 'DATE',
         // visibility (published/draft): stored like bool, but stays "visibility" in the schema
         'visibility' => 'BOOLEAN',
+        // sort (manual order of the records, see class comment): an integer the CMS assigns itself
+        'sort' => 'INTEGER',
     ];
+
+    /** Field type for the manual order of the records (see class comment) */
+    public const SORT_TYPE = 'sort';
 
     /**
      * Types for which a `{title}` marker makes sense (short values that are readable on their own, plus every enum type).
@@ -220,6 +239,9 @@ final class PumlParser
 
     /** Field type for references to the media library (not a column but a link table, see class comment) */
     public const MEDIA_TYPE = 'media';
+
+    /** The only stereotype a class may carry: metadata class of media fields (see parseMetaClass()) */
+    public const META_STEREOTYPE = '<<media_meta>>';
 
     /**
      * Tables and routes the CMS occupies itself: users table, /api/login, /api/logout, /api/me and the
@@ -283,8 +305,10 @@ final class PumlParser
      * it represents the diagram the way it is written: abstract classes with their fields, per class only its own
      * fields (inherited ones via extends), relationships as a separate list with the multiplicities instead of as FK
      * columns. From it the diagram can be written back semantically identical (PumlExporter). Comments, formatting and
-     * purely decorative statements are lost; the latter (title, skinparam, note, colours, ...) and every otherwise
-     * ignored line appear in 'warnings'.
+     * purely decorative statements are not part of it; the latter (title, skinparam, note, colours, ...) and every
+     * otherwise ignored line appear in 'warnings'. They are only lost when a text is written from the model JSON alone
+     * (PumlExporter::toPuml()); the diagram editor instead patches the original text (PumlPatcher, with sourceMap()) and
+     * keeps them.
      *
      * Structure (every object with 'id'; in this version derived from the name, so only reliable within one parse
      * run - it changes on renaming):
@@ -294,6 +318,7 @@ final class PumlParser
      *       'extends' => 'Basis'|null (name as declared), 'renamed_from' => string|null,
      *       'fields' => [ ['id' => 'field:kurs.titel', 'name', 'type' (base type or 'enum'), 'enum_name' => string|null,
      *           'sql_type', 'required', 'primary', 'title', 'unique', 'renamed_from' => string|null,
+     *           only for type 'sort' 'sort_by' => [['class' => 'Navigation'] | ['label' => 'auf'], ...] ({by: …} as written),
      *           'section' => string|null, only with rules 'rules' => [['id' => 'rule:kurs.titel.maxLength', 'type' =>
  *           'maxLength', 'value' => 80], ...]] ] (own fields without FK columns and media; the id only for classes without
      *           extends - for subclasses it comes from the base),
@@ -318,7 +343,38 @@ final class PumlParser
      */
     public static function modelJson(string $source, ?array $workflows = null, ?array $patterns = null): array
     {
+        return self::modelJsonOf(self::analyze($source, $workflows, $patterns));
+    }
+
+    /**
+     * Model JSON (as modelJson()) plus where every element stands in the text - for PumlPatcher, which changes only the
+     * affected lines of the original text instead of writing it anew. Line numbers are 0-based indexes into the source
+     * split at "\n" after removing a BOM and normalizing line breaks to "\n" (as the parser reads it):
+     * [
+     *   'model' => modelJson(),
+     *   'positions' => [
+     *     'enums' => ['<lower name>' => ['head', 'end', 'values' => [[value, line, alone]]]] (alone = the value is the only
+     *         thing on its line, not on the enum line or before the closing "}"),
+     *     'classes' => ['<lower name>' => ['head', 'end', 'meta', 'fields' => ['<lower name>' => line],
+     *         'sections' => ['<title>' => line]]] (classes, abstract and metadata classes; an implicit id has no line),
+     *     'relations' => [line, ...] (same order as model.relations),
+     *     'blocks' => [['head', 'end' (null = not closed), 'package' => name|null]] (package blocks and other {...} blocks
+     *         outside classes, e.g. together),
+     *     'decor' => [['start', 'end', 'kind']] (purely decorative statements: note, title, skinparam, ..., multi-line
+     *         ones with their end line),
+     *   ],
+     * ]
+     *
+     * @throws SchemaException as parse()
+     */
+    public static function sourceMap(string $source, ?array $workflows = null, ?array $patterns = null): array
+    {
         $a = self::analyze($source, $workflows, $patterns);
+        return ['model' => self::modelJsonOf($a), 'positions' => $a['positions']];
+    }
+
+    private static function modelJsonOf(array $a): array
+    {
         $model = $a['model'];
         $entities = [];
         foreach ($a['classes'] as $table => $c) {
@@ -333,17 +389,10 @@ final class PumlParser
                     $media[] = [
                         'id' => 'media:' . $fid, 'name' => $f['name'], 'required' => $f['required'],
                         'renamed_from' => $f['renamed_from'] ?? null, 'section' => $f['section'] ?? null,
-                    ];
+                    ] + (isset($f['meta']) ? ['meta' => $a['meta_classes'][strtolower($f['meta'])]['name']] : []); // media(Klasse)
                     continue;
                 }
-                $fields[] = [
-                    'id' => 'field:' . $fid, 'name' => $f['name'], 'type' => $f['type'], 'enum_name' => $f['enum'] ?? null,
-                    'sql_type' => $f['sql_type'], 'required' => $f['required'], 'primary' => $f['primary'],
-                    'title' => in_array($f['name'], $c['title_fields'], true),
-                    'unique' => in_array($f['name'], $c['unique_fields'], true),
-                    'renamed_from' => $f['renamed_from'] ?? null, 'section' => $f['section'] ?? null,
-                ] + (isset($f['workflow']) ? ['workflow' => true] : []) // workflow field: enum_name = name of the workflow
-                    + (isset($f['rules']) ? ['rules' => self::rulesJson('rule:' . $fid, $f['rules'])] : []);
+                $fields[] = self::fieldJson('field:' . $fid, 'rule:' . $fid, $f, $c);
             }
             $entities[] = [
                 'id' => 'entity:' . $table, 'name' => $c['name'], 'table' => $table,
@@ -380,9 +429,21 @@ final class PumlParser
             $enums[] = ['id' => 'enum:' . strtolower($name), 'name' => $name, 'values' => $values]
                 + (isset($a['workflow_enums'][$name]) ? ['workflow' => true] : []);
         }
+        // metadata classes (<<media_meta>>), in diagram order
+        $metaJson = [];
+        foreach ($a['meta_classes'] as $key => $mc) {
+            $metaJson[] = [
+                'id' => 'media_meta:' . $key, 'name' => $mc['name'], 'package' => $mc['package'], 'renamed_from' => $mc['renamed_from'] ?? null,
+                'fields' => array_map(function (array $f) use ($key, $mc) {
+                    $fid = $key . '.' . strtolower($f['name']);
+                    return self::fieldJson('media_meta_field:' . $fid, 'rule:media_meta_field:' . $fid, $f, $mc + ['title_fields' => [], 'unique_fields' => []]);
+                }, $mc['fields']),
+                'field_order' => array_column($mc['fields'], 'name'), 'sections' => $mc['sections'],
+            ];
+        }
         return [
             'format' => self::MODEL_FORMAT, 'version' => self::MODEL_VERSION,
-            'entities' => $entities, 'relations' => $relations, 'enums' => $enums,
+            'entities' => $entities, 'relations' => $relations, 'enums' => $enums, 'media_meta' => $metaJson,
             'warnings' => array_map(function (Msg $w) {
                 return $w->text();
             }, $a['warnings']),
@@ -390,6 +451,20 @@ final class PumlParser
                 return $w->codeOnly();
             }, $a['warnings']),
         ];
+    }
+
+    /** Field of a class (or metadata class) in the model JSON, see modelJson() */
+    private static function fieldJson(string $id, string $rulePrefix, array $f, array $c): array
+    {
+        return [
+            'id' => $id, 'name' => $f['name'], 'type' => $f['type'], 'enum_name' => $f['enum'] ?? null,
+            'sql_type' => $f['sql_type'], 'required' => $f['required'], 'primary' => $f['primary'],
+            'title' => in_array($f['name'], $c['title_fields'], true),
+            'unique' => in_array($f['name'], $c['unique_fields'], true),
+            'renamed_from' => $f['renamed_from'] ?? null, 'section' => $f['section'] ?? null,
+        ] + (isset($f['workflow']) ? ['workflow' => true] : []) // workflow field: enum_name = name of the workflow
+            + (isset($f['sort']) ? ['sort_by' => $f['sort']['spec']] : []) // sort: {by: …} as written, [] = none
+            + (isset($f['rules']) ? ['rules' => self::rulesJson($rulePrefix, $f['rules'])] : []);
     }
 
     /**
@@ -439,8 +514,23 @@ final class PumlParser
             $warnings[] = [$lineOf[$index] ?? $index + 1, $text];
         };
 
+        // positions for sourceMap(): stripped line index -> 0-based line of the original text
+        $orig = function (int $index) use ($lineOf): int {
+            return ($lineOf[$index] ?? $index + 1) - 1;
+        };
+        $positions = ['enums' => [], 'classes' => [], 'relations' => [], 'blocks' => [], 'decor' => []];
+
         $enums = [];
-        $source = self::extractEnums($source, $enums, $warn);
+        $enumLines = [];
+        $source = self::extractEnums($source, $enums, $warn, $enumLines);
+        foreach ($enumLines as $key => $el) {
+            $positions['enums'][$key] = [
+                'head' => $orig($el['head']), 'end' => $orig($el['end']),
+                'values' => array_map(function ($v) use ($orig) {
+                    return [$v[0], $orig($v[1]), $v[2]];
+                }, $el['values']),
+            ];
+        }
         foreach (array_keys($enums) as $enum) {
             foreach (array_keys($workflows ?? []) as $wf) {
                 if (strcasecmp($enum, $wf) === 0) {
@@ -476,7 +566,10 @@ final class PumlParser
         }
         // Optionally preceded by "{renamed_from:AlterName}" (schema editing: the table of class AlterName is renamed).
         // A colour before "{" (`class A #FFEECC {`, purely decorative) is recognized and only reported as a warning.
-        $classPattern = '/^[ \t]*(abstract[ \t]+)?class[ \t]+([^\s{]+)((?:[ \t]+extends\b[^{\n]*?)?)((?:[ \t]+#\w+)?)'
+        // `<<media_meta>>` right after the name (`class GalerieBild <<media_meta>> {`): metadata class of media fields (see
+        // META_STEREOTYPE) - the only stereotype a class may carry.
+        $classPattern = '/^[ \t]*(abstract[ \t]+)?class[ \t]+([^\s{]+)((?:[ \t]+<<[ \t]*(?i:media_meta)[ \t]*>>)?)'
+            . '((?:[ \t]+extends\b[^{\n]*?)?)((?:[ \t]+#\w+)?)'
             . '(?:[ \t]*\{renamed_from:([A-Za-z_][A-Za-z0-9_]*)\})?[ \t]*\{(.*?)\n[ \t]*\}/ms';
         // line numbers of the class heads (same matches in the same order as preg_replace_callback below)
         preg_match_all($classPattern, $source, $heads, PREG_OFFSET_CAPTURE);
@@ -484,20 +577,48 @@ final class PumlParser
             return substr_count($source, "\n", 0, $h[1]);
         }, $heads[0]);
         $classes = []; // table => parsed class, abstract ones too, with 'abstract' and 'extends'
-        $rest = preg_replace_callback($classPattern, function (array $match) use (&$classes, $enums, $headLines, $warn, $workflows, $patterns): string {
-            $head = $headLines[count($classes)] ?? 0;
-            if ($match[4] !== '') {
+        $metaClasses = []; // lower-case name => metadata class (<<media_meta>>), see parseMetaClass()
+        $matchIndex = 0;
+        $rest = preg_replace_callback($classPattern, function (array $match) use (&$classes, &$metaClasses, &$matchIndex, $enums, $headLines,
+            $warn, $workflows, $patterns, &$positions, $orig): string {
+            $head = $headLines[$matchIndex++] ?? 0;
+            $bodyLines = ['fields' => [], 'sections' => []];
+            $record = function (string $table, bool $meta) use (&$positions, &$bodyLines, $orig, $head, $match): void {
+                $toOrig = function (array $lines) use ($orig, $head): array {
+                    return array_map(function (int $b) use ($orig, $head) {
+                        return $orig($head + $b);
+                    }, $lines);
+                };
+                $positions['classes'][$table] = [
+                    'head' => $orig($head), 'end' => $orig($head + substr_count($match[0], "\n")), 'meta' => $meta,
+                    'fields' => $toOrig($bodyLines['fields']), 'sections' => $toOrig($bodyLines['sections']),
+                ];
+            };
+            if ($match[5] !== '') {
                 $warn($head, Msg::of('msg_schema.warn_class_color', "Colour '{color}' on class '{class}' is not taken over", [
-                    'color' => trim($match[4]), 'class' => $match[2],
+                    'color' => trim($match[5]), 'class' => $match[2],
                 ]));
             }
-            $entity = self::parseClass($match[2], $match[6], $enums, function (int $i, Msg $text) use ($warn, $head) {
+            $bodyWarn = function (int $i, Msg $text) use ($warn, $head) {
                 $warn($head + $i, $text); // line 0 of the body is the rest of the head line after "{"
-            }, $workflows, $patterns);
-            if (isset($classes[$entity['table']])) {
+            };
+            if ($match[3] !== '') {
+                $meta = self::parseMetaClass($match, $enums, $bodyWarn, $patterns, $bodyLines);
+                if (isset($classes[$meta['table']]) || isset($metaClasses[$meta['table']])) {
+                    throw new SchemaException(Msg::of('msg_schema.class_twice', "Class '{class}' is defined twice.", ['class' => $match[2]]));
+                }
+                $metaClasses[$meta['table']] = $meta;
+                $record($meta['table'], true);
+                return "\x01{$meta['table']}\x01" . str_repeat("\n", substr_count($match[0], "\n"));
+            }
+            if (stripos($match[4], '<<') !== false && preg_match('/<<\s*media_meta\s*>>/i', $match[4])) {
+                throw new SchemaException(self::metaExtends($match[2])); // class X extends Y <<media_meta>> {
+            }
+            $entity = self::parseClass($match[2], $match[7], $enums, $bodyWarn, $workflows, $patterns, false, $bodyLines);
+            if (isset($classes[$entity['table']]) || isset($metaClasses[$entity['table']])) {
                 throw new SchemaException(Msg::of('msg_schema.class_twice', "Class '{class}' is defined twice.", ['class' => $match[2]]));
             }
-            $entity['extends'] = self::parseExtends($match[2], $match[3]);
+            $entity['extends'] = self::parseExtends($match[2], $match[4]);
             $entity['abstract'] = trim($match[1]) !== '';
             if ($entity['abstract'] && array_filter($entity['fields'], function ($f) {
                 return isset($f['workflow']);
@@ -505,14 +626,15 @@ final class PumlParser
                 throw new SchemaException(Msg::of('msg_schema.abstract_workflow', "Abstract class '{class}' cannot have a workflow field "
                     . '(a workflow belongs to exactly one class with its own table).', ['class' => $match[2]]));
             }
-            if (($match[5] ?? '') !== '') {
+            if (($match[6] ?? '') !== '') {
                 if ($entity['abstract']) {
                     throw new SchemaException(Msg::of('msg_schema.abstract_renamed', "Abstract class '{class}' cannot be marked with "
                         . '{renamed_from:…} (it has no table).', ['class' => $match[2]]));
                 }
-                $entity['renamed_from'] = $match[5];
+                $entity['renamed_from'] = $match[6];
             }
             $classes[$entity['table']] = $entity;
+            $record($entity['table'], false);
             // Placeholder for abstract classes too (modelJson() needs their package); the line breaks of the class
             // are kept so that the line numbers in the rest of the text stay correct
             return "\x01{$entity['table']}\x01" . str_repeat("\n", substr_count($match[0], "\n"));
@@ -521,9 +643,21 @@ final class PumlParser
         // disappear silently - as would a class with <<Stereotype>> or implements (between name and "{" the class pattern
         // only allows extends, a colour and {renamed_from:…}; so only uncaptured class lines remain here)
         foreach (explode("\n", $rest) as $line) {
-            if (preg_match('/^\s*(?:abstract\s+)?class\s+([^\s{<]+)\s*(<<[^>]*>>)/i', $line, $st)) {
+            // <<media_meta>> on a class line the class pattern did not capture: the layout of the line is the problem (see below)
+            if (preg_match('/^\s*(?:abstract\s+)?class\s+([^\s{<]+)\s*(<<[^>]*>>)/i', $line, $st)
+                && !preg_match('/^<<\s*media_meta\s*>>$/i', $st[2])) {
                 throw new SchemaException(Msg::of('msg_schema.stereotype', "Stereotypes ('<<...>>') are currently not supported "
-                    . "('{class} {stereotype}'). Please remove the stereotype.", ['class' => $st[1], 'stereotype' => $st[2]]));
+                    . "('{class} {stereotype}'). The only exception is {media_meta} for metadata classes of media fields. Please remove "
+                    . 'the stereotype.', ['class' => $st[1], 'stereotype' => $st[2], 'media_meta' => self::META_STEREOTYPE]));
+            }
+            if (preg_match('/^\s*abstract\s+class\s+(\S+)\s*<<\s*media_meta\s*>>/i', $line, $am)) {
+                throw new SchemaException(Msg::of('msg_schema.meta_abstract', "Class '{class}': {media_meta} cannot be combined with "
+                    . "'abstract' (a metadata class is no template and has no subclasses).", [
+                        'class' => $am[1], 'media_meta' => self::META_STEREOTYPE,
+                    ]));
+            }
+            if (preg_match('/^\s*class\s+(\S+)\s*<<\s*media_meta\s*>>.*\sextends\s/i', $line, $em)) {
+                throw new SchemaException(self::metaExtends($em[1]));
             }
             if (preg_match('/^\s*(?:abstract\s+)?class\s+(\S+)\s+implements\b\s*([^{]*)/i', $line, $im)) {
                 $iface = trim($im[2]);
@@ -550,6 +684,15 @@ final class PumlParser
                     . 'the same line and "}" alone on a line of its own): {source}', ['source' => trim($line)]));
             }
         }
+        foreach ($classes as $c) {
+            if ($c['extends'] !== null && isset($metaClasses[strtolower($c['extends'])])) {
+                throw new SchemaException(Msg::of('msg_schema.meta_extends_target', "Class '{class}' cannot inherit from the metadata "
+                    . "class '{base}' ({media_meta}): it only describes the metadata of media fields and has no table.", [
+                        'class' => $c['name'], 'base' => $metaClasses[strtolower($c['extends'])]['name'],
+                        'media_meta' => self::META_STEREOTYPE,
+                    ]));
+            }
+        }
         $entities = self::resolveInheritance($classes);
         $abstract = [];
         foreach ($classes as $c) {
@@ -563,7 +706,7 @@ final class PumlParser
                 : Msg::of('msg_schema.no_classes', 'No classes found in the .puml file.'));
         }
         foreach (array_keys($enums) as $enum) {
-            if (isset($entities[strtolower($enum)]) || isset($abstract[strtolower($enum)])) {
+            if (isset($entities[strtolower($enum)]) || isset($abstract[strtolower($enum)]) || isset($metaClasses[strtolower($enum)])) {
                 throw new SchemaException(Msg::of('msg_schema.enum_is_class', "enum '{enum}' has the same name as a class. Please rename "
                     . 'one of the two.', ['enum' => $enum]));
             }
@@ -576,11 +719,15 @@ final class PumlParser
         $blocks = []; // open {...} blocks outside of classes: package name or null (e.g. namespace, together)
         $skipUntil = null; // multi-line decorative block (note, title, legend, skinparam {...}): pattern of its end
         $noteAliases = []; // note "..." as N1 -> connecting lines "N1 .. Class" are likewise just decoration
+        $blockRecords = []; // parallel to $blocks: index into $positions['blocks'] (sourceMap())
+        $openDecor = null; // index into $positions['decor'] of the multi-line decorative block being skipped
         foreach (explode("\n", $rest) as $index => $line) {
             if (preg_match_all('/\x01([^\x01]*)\x01/', $line, $placeholders)) {
                 foreach ($placeholders[1] as $table) {
                     if (isset($entities[$table])) {
                         $entities[$table]['package'] = self::currentPackage($blocks);
+                    } elseif (isset($metaClasses[$table])) {
+                        $metaClasses[$table]['package'] = self::currentPackage($blocks); // allowed, without effect (round trip only)
                     } else {
                         $abstractPackages[$table] = self::currentPackage($blocks); // abstract class
                     }
@@ -591,13 +738,21 @@ final class PumlParser
             if ($skipUntil !== null) {
                 if (preg_match($skipUntil, $line)) {
                     $skipUntil = null;
+                    $positions['decor'][$openDecor]['end'] = $orig($index);
                 }
                 continue;
             }
             if ($line === '' || $line[0] === "'") {
                 continue;
             }
+            $depth = count($blocks);
             if (self::parsePackageLine($line, $blocks)) {
+                $opened = count($blocks) > $depth;
+                $positions['blocks'][] = ['head' => $orig($index), 'end' => $opened ? null : $orig($index), 'package' => $opened
+                    ? self::currentPackage($blocks) : null];
+                if ($opened) {
+                    $blockRecords[] = count($positions['blocks']) - 1;
+                }
                 if (preg_match('/\s#\w+/', (string) preg_replace('/"[^"]*"/', '""', $line), $color)) {
                     $warn($index, Msg::of('msg_schema.warn_package_color', "Colour '{color}' on package is not taken over", [
                         'color' => trim($color[0]),
@@ -607,6 +762,10 @@ final class PumlParser
             }
             if ($line === '}') {
                 array_pop($blocks); // surplus "}" have always been ignored
+                $closed = array_pop($blockRecords);
+                if ($closed !== null) {
+                    $positions['blocks'][$closed]['end'] = $orig($index);
+                }
                 continue;
             }
             // optional markers at the end of the line, with or without a label before them: "... B : label {cascade}" /
@@ -623,10 +782,14 @@ final class PumlParser
             if ($decor !== null) {
                 $warn($index, Msg::of('msg_schema.warn_decoration', "'{statement}' is not taken over", ['statement' => $decor[0]]));
                 $skipUntil = $decor[1];
+                $positions['decor'][] = ['start' => $orig($index), 'end' => $orig($index), 'kind' => $decor[0]];
+                $openDecor = count($positions['decor']) - 1;
                 continue;
             }
             if (substr($line, -1) === '{') {
                 $blocks[] = null; // other block (namespace, together, ...), its "}" must not close a package
+                $positions['blocks'][] = ['head' => $orig($index), 'end' => null, 'package' => null];
+                $blockRecords[] = count($positions['blocks']) - 1;
             }
             if ($isRelation) {
                 if ($arrow !== $r[3]) {
@@ -678,6 +841,13 @@ final class PumlParser
                     throw new SchemaException($multi);
                 }
                 foreach ([$r[1], $r[5]] as $side) {
+                    if (isset($metaClasses[strtolower($side)])) {
+                        throw new SchemaException(Msg::of('msg_schema.meta_relation', "Relationship from or to the metadata class '{class}' "
+                            . 'not possible - a metadata class ({media_meta}) has no table of its own, its fields are stored with the '
+                            . 'media links: {source}', [
+                                'class' => $metaClasses[strtolower($side)]['name'], 'media_meta' => self::META_STEREOTYPE, 'source' => $line,
+                            ]));
+                    }
                     if (isset($abstract[strtolower($side)])) {
                         throw new SchemaException(Msg::of('msg_schema.relation_abstract', "Relationship to abstract class '{class}' not "
                             . 'possible - abstract classes have no table of their own (relationships are not inherited; please draw '
@@ -689,6 +859,7 @@ final class PumlParser
                     $flags['symmetric'], $renamedFrom, $filterBy
                 );
                 $first = $applied['first']; // does the class named first carry the column or the n:n list?
+                $positions['relations'][] = $orig($index);
                 $relations[] = $applied + [
                     'from_multiplicity' => trim($first ? $r[2] : $r[4]), 'to_multiplicity' => trim($first ? $r[4] : $r[2]),
                     'label' => $label, 'show_label' => $marker === 'label', 'cascade' => $marker === 'cascade',
@@ -711,6 +882,8 @@ final class PumlParser
         if ($open !== null) {
             throw new SchemaException(Msg::of('msg_schema.package_unclosed', 'package "{package}" is not closed with "}".', ['package' => $open]));
         }
+
+        self::resolveSort($entities, $classes, $abstract);
 
         // Used workflows: their states count as an enum (display, translations); action=set_visibility needs a
         // visibility field of the class (an inherited one counts too)
@@ -744,8 +917,24 @@ final class PumlParser
                 return $f['foreign_key'] === null;
             }), 'name');
         }
-        $mediaJunctions = self::extractMediaFields($entities);
+        // media(Klasse): the class must exist and carry <<media_meta>> - checked for abstract classes too (even without a subclass)
+        foreach ($classes as $c) {
+            foreach ($c['fields'] as $f) {
+                if (isset($f['meta'])) {
+                    self::metaClassOf($f, $c['name'], $metaClasses, $classes);
+                }
+            }
+        }
+        $mediaJunctions = self::extractMediaFields($entities, $metaClasses);
         self::finishOrder($entities, $bodyOrder, $relations);
+        // a metadata class has no table, but its name stays free of table names (as for every class): it could not be told
+        // apart from the link table in messages, and n:n metadata may need the name later
+        foreach (array_merge(array_keys($mediaJunctions), array_column($junctions, 'table')) as $table) {
+            if (isset($metaClasses[$table])) {
+                throw new SchemaException(Msg::of('msg_schema.meta_table_clash', "Metadata class '{class}' has the same name as the link "
+                    . "table '{table}'. Please rename the class.", ['class' => $metaClasses[$table]['name'], 'table' => $table]));
+            }
+        }
 
         // Name collision entity <-> link table, and two link tables of the same name (possible if a link table
         // renamed after its label later on, see applyRelation, hits the name of another one)
@@ -786,10 +975,13 @@ final class PumlParser
             'model' => [
                 'entities' => $entities, 'junctions' => array_values($junctions), 'enums' => $enums,
                 'abstract' => array_values($abstract),
-            ] + ($workflows !== null ? ['workflows' => $workflows] : []),
-            'classes' => $classes, 'relations' => $relations, 'abstract_packages' => $abstractPackages,
+            ] + ($workflows !== null ? ['workflows' => $workflows] : [])
+                // metadata classes: only then in the model - diagrams without them yield exactly the previous model
+                + ($metaClasses ? ['media_meta' => self::metaModels($metaClasses)] : []),
+            'classes' => $classes, 'relations' => $relations, 'abstract_packages' => $abstractPackages, 'meta_classes' => $metaClasses,
             'workflow_enums' => $workflowEnums,
             'warnings' => self::sortedWarnings($warnings),
+            'positions' => $positions,
         ];
     }
 
@@ -813,6 +1005,105 @@ final class PumlParser
         return Msg::of('msg_schema.enum_empty', "enum '{enum}' has no values (expected: enum {enum} { with one value per line }).", [
             'enum' => $name,
         ]);
+    }
+
+    /**
+     * Metadata class (`class GalerieBild <<media_meta>> { ... }`): fields that an editor maintains per medium of a media field
+     * `media(GalerieBild)` - per link (this medium in this record and field), not globally for the medium. No table, no
+     * id, no API endpoint, not in the sidebar: the fields become additional columns of every link table `<table>_<field>_media`
+     * that uses the class (see extractMediaFields()). Allowed in it: all normal field types including enums, `?`, rules,
+     * {renamed_from:…} and separator lines with a title (sections of the metadata form). Schema errors: abstract, extends,
+     * the name Media, no fields, an id field, {title}, {unique}, media fields, workflow fields, visibility (publication
+     * applies to the whole record), the reserved system field names (as everywhere) - see parseClass() with $meta.
+     *
+     * @param array $match match of the class pattern in analyze() (1 abstract, 2 name, 4 extends, 6 renamed_from, 7 body)
+     * @return array ['name', 'table' (lower-case name), 'fields', 'sections', 'package' (set later), 'renamed_from'?]
+     */
+    private static function parseMetaClass(array $match, array $enums, callable $warn, ?array $patterns, ?array &$lines = null): array
+    {
+        $name = $match[2];
+        if (trim($match[1]) !== '') {
+            throw new SchemaException(Msg::of('msg_schema.meta_abstract', "Class '{class}': {media_meta} cannot be combined with "
+                . "'abstract' (a metadata class is no template and has no subclasses).", ['class' => $name, 'media_meta' => self::META_STEREOTYPE]));
+        }
+        if (trim($match[4]) !== '') {
+            throw new SchemaException(self::metaExtends($name));
+        }
+        if (strtolower($name) === self::MEDIA_TYPE) {
+            throw new SchemaException(Msg::of('msg_schema.meta_name_media', "A metadata class cannot be called '{class}' (the name belongs "
+                . 'to the media library).', ['class' => $name]));
+        }
+        $c = self::parseClass($name, $match[7], $enums, $warn, null, $patterns, true, $lines);
+        if (!$c['fields']) {
+            throw new SchemaException(Msg::of('msg_schema.meta_empty', "Metadata class '{class}' has no fields. Please add fields (e.g. "
+                . '+ caption: string?) or remove the class.', ['class' => $name]));
+        }
+        return ['name' => $name, 'table' => $c['table'], 'fields' => $c['fields'], 'sections' => $c['sections'], 'package' => null]
+            + (($match[6] ?? '') !== '' ? ['renamed_from' => $match[6]] : []);
+    }
+
+    private static function metaExtends(string $class): Msg
+    {
+        return Msg::of('msg_schema.meta_extends', "Metadata class '{class}' ({media_meta}) cannot use extends. Please write its fields "
+            . 'directly into the class.', ['class' => $class, 'media_meta' => self::META_STEREOTYPE]);
+    }
+
+    /**
+     * Metadata class named by the media field $f (`media(X)`) of class $class; schema error if there is no class X or it is
+     * not marked with <<media_meta>>.
+     */
+    private static function metaClassOf(array $f, string $class, array $metaClasses, array $classes): array
+    {
+        $ref = strtolower($f['meta']);
+        if (isset($metaClasses[$ref])) {
+            return $metaClasses[$ref];
+        }
+        $params = ['where' => self::fieldWhere($f['name'], $class), 'meta' => $f['meta'], 'media_meta' => self::META_STEREOTYPE];
+        throw new SchemaException(isset($classes[$ref])
+            ? Msg::of('msg_schema.meta_ref_not_meta', "{where}: media({meta}) - the class '{meta}' is not a metadata class. Please mark it "
+                . 'with {media_meta} (class {meta} {media_meta} { ... }).', $params)
+            : Msg::of('msg_schema.meta_ref_unknown', "{where}: media({meta}) - there is no class '{meta}'. Please declare it as class {meta} "
+                . '{media_meta} { ... }.', $params));
+    }
+
+    /**
+     * Field list of a metadata class in the model: 'section' only stays if the class has sections (as for entities,
+     * see finishOrder()).
+     */
+    private static function metaFields(array $mc): array
+    {
+        return array_map(function (array $f) use ($mc): array {
+            if (empty($mc['sections'])) {
+                unset($f['section']);
+            } else {
+                $f['section'] = $f['section'] ?? null;
+            }
+            return $f;
+        }, $mc['fields']);
+    }
+
+    /**
+     * Metadata class in the model: per media field (entities[].media[].meta, $full = false) ['class', 'fields', 'sections'?];
+     * in model['media_meta'] additionally 'name' instead of 'class', 'package' and 'renamed_from'.
+     */
+    private static function metaModel(array $mc, bool $full = true): array
+    {
+        $sections = !empty($mc['sections']) ? ['sections' => $mc['sections']] : [];
+        if (!$full) {
+            return ['class' => $mc['name'], 'fields' => self::metaFields($mc)] + $sections;
+        }
+        return ['name' => $mc['name'], 'fields' => self::metaFields($mc)] + $sections + ['package' => $mc['package']]
+            + (isset($mc['renamed_from']) ? ['renamed_from' => $mc['renamed_from']] : []);
+    }
+
+    /** model['media_meta']: name as declared => metadata class (diagram order) */
+    private static function metaModels(array $metaClasses): array
+    {
+        $out = [];
+        foreach ($metaClasses as $mc) {
+            $out[$mc['name']] = self::metaModel($mc);
+        }
+        return $out;
     }
 
     private static function renamedClassLine(string $line): Msg
@@ -840,11 +1131,14 @@ final class PumlParser
             if (preg_match('/\bas\s+(\w+)\s*$/i', $line, $alias)) {
                 $noteAliases[] = strtolower($alias[1]);
             }
-            // single-line: "note left of A : Text", "note "Text" as N1"; otherwise multi-line up to "end note"
-            $single = preg_match('/^note\b[^"]*:/i', $line) || preg_match('/^note\s+"/i', $line);
+            // single-line: "note left of A : Text", "note right of A::feld : Text", "note "Text" as N1"; otherwise multi-line
+            // up to "end note". The ":" of the text is a single one - "::" belongs to a field reference (`note right of
+            // A::feld` alone is multi-line)
+            $single = preg_match('/^note\b[^"]*?(?<!:):(?!:)/i', $line) || preg_match('/^note\s+"/i', $line);
             return ['note', $single ? null : '/^end\s*note$/i'];
         }
-        if (preg_match('/^(\w+)\s*[-.]{2,}>?\s*(\w+)$/', $line, $link)
+        // either side may name a field of a class (`N1 .. Klasse::feld`)
+        if (preg_match('/^(\w+)(?:::\w+)?\s*[-.]{2,}>?\s*(\w+)(?:::\w+)?$/', $line, $link)
             && array_intersect([strtolower($link[1]), strtolower($link[2])], $noteAliases)) {
             return ['note', null];
         }
@@ -869,9 +1163,14 @@ final class PumlParser
      * "Class.field" (for error messages). Two media fields with the same link table are a schema error (e.g.
      * class "A_B" with field "c" and class "A" with field "b_c").
      *
+     * media(Klasse) (field 'meta'): the media field gets 'meta' => ['class' => name as declared, 'fields' => [...]] (plus
+     * 'sections' if the metadata class has some) - the fields become additional columns of its link table, so they must not
+     * collide with its own columns (`<table>_id`, media_id, position).
+     *
+     * @param array<string,array> $metaClasses lower-case name => metadata class (see parseMetaClass())
      * @return array<string,string>
      */
-    private static function extractMediaFields(array &$entities): array
+    private static function extractMediaFields(array &$entities, array $metaClasses = []): array
     {
         $junctions = [];
         foreach ($entities as $table => &$e) {
@@ -888,10 +1187,26 @@ final class PumlParser
                         ]));
                 }
                 $junctions[$junction] = "{$e['name']}.{$f['name']}";
+                $meta = null;
+                if (isset($f['meta'])) {
+                    $mc = $metaClasses[strtolower($f['meta'])]; // checked in analyze() (metaClassOf)
+                    foreach ($mc['fields'] as $mf) {
+                        $column = strtolower($mf['name']);
+                        if (in_array($column, [$table . '_id', 'media_id', 'position'], true)) {
+                            throw new SchemaException(Msg::of('msg_schema.meta_column', "Field '{field}' of the metadata class '{class}' "
+                                . "collides with the column '{column}' of the link table '{table}' (media field {media}). Please rename the field.", [
+                                    'field' => $mf['name'], 'class' => $mc['name'], 'column' => $column, 'table' => $junction,
+                                    'media' => "{$e['name']}.{$f['name']}",
+                                ]));
+                        }
+                    }
+                    $meta = self::metaModel($mc, false);
+                }
                 $e['media'][] = [
                     'name' => $f['name'], 'junction' => $junction, 'own_column' => $table . '_id', 'required' => $f['required'],
                 ] + (isset($f['renamed_from']) ? ['renamed_from' => $f['renamed_from']] : [])
-                    + (array_key_exists('section', $f) ? ['section' => $f['section']] : []);
+                    + (array_key_exists('section', $f) ? ['section' => $f['section']] : [])
+                    + ($meta !== null ? ['meta' => $meta] : []);
                 unset($e['fields'][$i]);
             }
             $e['fields'] = array_values($e['fields']);
@@ -1057,6 +1372,13 @@ final class PumlParser
                     throw new SchemaException(Msg::of('msg_schema.visibility_inherited', 'Entity {class} has several visibility fields '
                         . '(inherited ones count too), at most one is allowed', ['class' => $c['name']]));
                 }
+                $sort = array_column(array_filter($c['fields'], function ($f) {
+                    return $f['type'] === self::SORT_TYPE;
+                }), 'name');
+                if (count($sort) > 1) {
+                    throw new SchemaException(Msg::of('msg_schema.sort_inherited', "Class '{class}' has several sort fields ({fields}; "
+                        . 'inherited ones count too), at most one is allowed.', ['class' => $c['name'], 'fields' => implode(', ', $sort)]));
+                }
             }
             return $resolved[$table] = $c;
         };
@@ -1085,7 +1407,7 @@ final class PumlParser
      * @param array<string,string[]> $enums is filled
      * @param callable|null $warn fn(int line index, Msg text) for warnings (colour on the enum line)
      */
-    private static function extractEnums(string $source, array &$enums, ?callable $warn = null): string
+    private static function extractEnums(string $source, array &$enums, ?callable $warn = null, ?array &$positions = null): string
     {
         $lines = explode("\n", $source);
         $n = count($lines);
@@ -1114,10 +1436,12 @@ final class PumlParser
             }
             // lines of the block: the rest of the enum line after "{", then the following lines up to the closing "}"
             $raw = [];
+            $rawLine = []; // line index of every entry of $raw (sourceMap())
             $pending = $open[1];
             $closed = false;
             while (true) {
                 $t = trim($pending);
+                $rawLine[] = $i;
                 if (substr($t, -1) === '}') {
                     $raw[] = rtrim(substr($t, 0, -1));
                     $closed = true;
@@ -1133,8 +1457,9 @@ final class PumlParser
                 throw new SchemaException(Msg::of('msg_schema.enum_unclosed', 'enum \'{enum}\' is not closed with "}".', ['enum' => $name]));
             }
             $values = [];
+            $valueLines = [];
             $seen = [];
-            foreach ($raw as $value) {
+            foreach ($raw as $k => $value) {
                 $value = trim($value);
                 if ($value === '' || $value[0] === "'" || preg_match('/^(--|\.\.|==|__)/', $value)) {
                     continue;
@@ -1152,6 +1477,8 @@ final class PumlParser
                 }
                 $seen[strtolower($value)] = true;
                 $values[] = $value;
+                // alone on its line: not on the enum line (entry 0) and not before the closing "}" (last entry)
+                $valueLines[] = [$value, $rawLine[$k], $k > 0 && $k < count($raw) - 1];
             }
             if (!$values) {
                 throw new SchemaException(self::enumEmpty($name));
@@ -1166,6 +1493,7 @@ final class PumlParser
                 }
             }
             $enums[$name] = $values;
+            $positions[strtolower($name)] = ['head' => $start, 'end' => $i, 'values' => $valueLines];
             for ($k = $start; $k <= $i; $k++) {
                 $lines[$k] = '';
             }
@@ -1217,9 +1545,13 @@ final class PumlParser
      * @param array<string,string[]> $enums declared enums (see extractEnums())
      * @param callable|null $warn fn(int line in the body, Msg text) for warnings (skipped methods)
      * @param string[]|null $patterns names of the pattern library for {pattern: x} (see parse()); null = not checked
+     * @param bool $meta metadata class (<<media_meta>>, see parseMetaClass()): no id, and the field restrictions listed there
+     * @param array|null $lines filled with the body line of every field and separator line with a title (sourceMap()):
+     *        ['fields' => [lower name => line], 'sections' => [title => line]]; line 0 = rest of the class line after "{"
      */
     private static function parseClass(
-        string $name, string $body, array $enums = [], ?callable $warn = null, ?array $workflows = null, ?array $patterns = null
+        string $name, string $body, array $enums = [], ?callable $warn = null, ?array $workflows = null, ?array $patterns = null,
+        bool $meta = false, ?array &$lines = null
     ): array
     {
         if (!preg_match(self::IDENT, $name)) {
@@ -1270,7 +1602,25 @@ final class PumlParser
                 $sections[] = $title;
                 $section = $title;
                 $sectionFields = 0;
+                $lines['sections'][$title] = $bodyLine;
                 continue;
+            }
+            // media field with metadata class: `+ bilder: media(GalerieBild)` (optionally `media(GalerieBild)?`) - read like
+            // `media` with the reference in 'meta'; otherwise the parenthesis would be taken for a method
+            $metaRef = null;
+            $shown = $line;
+            $mediaParen = preg_match('/^[^:()]*:\s*media\s*\(/i', $line) === 1; // "+ x: media(" - never a method
+            if ($mediaParen && !preg_match('/^([^:()]*:\s*)media\s*\(([^()]*)\)([^()]*)$/i', $line)) {
+                throw new SchemaException(Msg::of('msg_schema.meta_ref_syntax', "Line in class '{class}' not understood: media(...) "
+                    . 'expects the name of a metadata class (e.g. + bilder: media(GalerieBild)): {source}', ['class' => $name, 'source' => $line]));
+            }
+            if ($mediaParen && preg_match('/^([^:()]*:\s*)media\s*\(([^()]*)\)(.*)$/i', $line, $mm)) {
+                if (!preg_match('/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*$/', $mm[2], $ref)) {
+                    throw new SchemaException(Msg::of('msg_schema.meta_ref_syntax', "Line in class '{class}' not understood: media(...) "
+                        . 'expects the name of a metadata class (e.g. + bilder: media(GalerieBild)): {source}', ['class' => $name, 'source' => $line]));
+                }
+                $metaRef = $ref[1];
+                $line = $mm[1] . self::MEDIA_TYPE . $mm[3];
             }
             if (strpos($line, '(') !== false) {
                 if ($warn !== null) {
@@ -1283,11 +1633,12 @@ final class PumlParser
             $pattern = '/^(?:\{\w+\}\s*)?[+\-#~]?\s*([^\s:]+)\s*:\s*(\w+)\s*(\?)?\s*((?:\{[^{}]*\}\s*)*)$/';
             $unclear = new SchemaException(Msg::of('msg_schema.field_line', "Line in class '{class}' not understood (expected: + field: "
                 . 'type or + field: type? or + field: type {title} and/or {unique}, optionally {renamed_from:old_name} and rules like '
-                . '{maxLength: 140}): {source}', ['class' => $name, 'source' => $line]));
+                . '{maxLength: 140}): {source}', ['class' => $name, 'source' => $shown]));
             if (!preg_match($pattern, $line, $f)) {
                 throw $unclear;
             }
             [, $field, $type] = $f;
+            $lines['fields'][strtolower($field)] = $bodyLine;
             $optional = ($f[3] ?? '') === '?'; // '?' directly after the type = optional, otherwise a required field
             // Markers at the end of the line, in any order, each at most once: {title}, {unique}, {renamed_from:x} and the
             // rules (Validation): {maxLength: 140}, several in one marker separated by commas ({min: 1, max: 20})
@@ -1297,10 +1648,22 @@ final class PumlParser
             // {renamed_from:alter_name}: only for schema editing (SchemaMigration) - the data of column alter_name
             // moves into this field; without meaning at the first bootstrap
             $renamedFrom = null;
+            $sortBy = null; // {by: Klasse, "Label"}: groups of a sort field, resolved in analyze() once the relations are known
             foreach ($markers[1] as $raw) {
                 $m = trim($raw);
                 if (preg_match('/^(title|unique)$/i', $m)) {
                     $markerNames[] = strtolower($m);
+                } elseif (preg_match('/^by\s*:(.*)$/is', $m, $bm)) {
+                    $markerNames[] = 'by';
+                    $sortBy = self::parseSortBy($bm[1]);
+                    if ($sortBy === null) {
+                        throw new SchemaException(Msg::of('msg_schema.sort_by_syntax', '{where}: {marker} not understood (expected: class '
+                            . 'names of relationship targets separated by commas, or the label of a relationship in quotes, e.g. {example}): '
+                            . '{source}', [
+                                'where' => self::fieldWhere($field, $name), 'marker' => '{' . $m . '}',
+                                'example' => '{by: Kategorie} / {by: "gehört zu"}', 'source' => $shown,
+                            ]));
+                    }
                 } elseif (preg_match('/^renamed_from:/i', $m)) {
                     if (!preg_match('/^renamed_from:([A-Za-z_][A-Za-z0-9_]*)$/i', $m, $rf)) {
                         throw $unclear;
@@ -1327,7 +1690,7 @@ final class PumlParser
             }
             if (count($markerNames) !== count(array_unique($markerNames))) {
                 throw new SchemaException(Msg::of('msg_schema.marker_twice', '{where}: marker given twice: {source}', [
-                    'where' => self::fieldWhere($field, $name), 'source' => $line,
+                    'where' => self::fieldWhere($field, $name), 'source' => $shown,
                 ]));
             }
             $isTitle = in_array('title', $markerNames, true);
@@ -1337,6 +1700,10 @@ final class PumlParser
                     . '{renamed_from:…}.', ['class' => $name]));
             }
             $type = strtolower($type);
+            if ($sortBy !== null && $type !== self::SORT_TYPE) {
+                throw new SchemaException(Msg::of('msg_schema.by_not_sort', "{where}: {by} is only possible on a field of the type "
+                    . "'sort' (not on '{type}').", ['where' => self::fieldWhere($field, $name), 'by' => '{by: …}', 'type' => $f[2]]));
+            }
             if (!preg_match(self::IDENT, $field)) {
                 throw new SchemaException(Msg::of('msg_schema.field_name', "Invalid field name '{field}' in class '{class}'.", [
                     'field' => $field, 'class' => $name,
@@ -1349,15 +1716,47 @@ final class PumlParser
                     $enum = $e;
                 }
             }
+            $suffix = strtolower(WorkflowParser::SUFFIX);
+            if ($meta) {
+                $where = self::fieldWhere($field, $name);
+                $params = ['where' => $where, 'media_meta' => self::META_STEREOTYPE, 'title' => '{title}', 'unique' => '{unique}'];
+                if (strtolower($field) === 'id') {
+                    throw new SchemaException(Msg::of('msg_schema.meta_id', "{where}: a metadata class ({media_meta}) has no 'id' field "
+                        . '(its values belong to the link of a medium). Please remove the line.', $params));
+                }
+                if ($type === self::MEDIA_TYPE) {
+                    throw new SchemaException(Msg::of('msg_schema.meta_media', '{where}: media fields are not possible in a metadata class '
+                        . '({media_meta}).', $params));
+                }
+                if ($enum === null && strlen($type) > strlen($suffix) && substr($type, -strlen($suffix)) === $suffix) {
+                    throw new SchemaException(Msg::of('msg_schema.meta_workflow', '{where}: workflow fields are not possible in a '
+                        . 'metadata class ({media_meta}).', $params));
+                }
+                if ($type === self::SORT_TYPE) {
+                    throw new SchemaException(Msg::of('msg_schema.meta_sort', "{where}: the type 'sort' is not possible in a metadata "
+                        . 'class ({media_meta}) - the media of a field already have their own order.', $params));
+                }
+                if ($type === 'visibility') {
+                    throw new SchemaException(Msg::of('msg_schema.meta_visibility', "{where}: the type 'visibility' is not possible in a "
+                        . 'metadata class ({media_meta}) - publication applies to the whole record. Please use bool.', $params));
+                }
+                if ($isTitle) {
+                    throw new SchemaException(Msg::of('msg_schema.meta_title', '{where}: {title} is not possible in a metadata class '
+                        . '({media_meta}).', $params));
+                }
+                if ($isUnique) {
+                    throw new SchemaException(Msg::of('msg_schema.meta_unique', '{where}: {unique} is not possible in a metadata class '
+                        . '({media_meta}).', $params));
+                }
+            }
             // workflow field: type name ends in "Workflow" (see class comment)
             $workflow = null;
-            $suffix = strtolower(WorkflowParser::SUFFIX);
             if ($enum === null && strlen($type) > strlen($suffix) && substr($type, -strlen($suffix)) === $suffix
                 && strtolower($field) !== 'id') {
                 $workflow = self::workflowFor($name, $field, $f[2], $workflows);
                 if ($optional || $isTitle || $isUnique) {
                     throw new SchemaException(Msg::of('msg_schema.workflow_field_markers', "{where}: A workflow field is always required "
-                        . "and knows neither '?' nor {title} or {unique}: {source}", ['where' => self::fieldWhere($field, $name), 'source' => $line]));
+                        . "and knows neither '?' nor {title} or {unique}: {source}", ['where' => self::fieldWhere($field, $name), 'source' => $shown]));
                 }
                 foreach ($fields as $other) {
                     if (isset($other['workflow'])) {
@@ -1386,6 +1785,16 @@ final class PumlParser
                         'where' => self::fieldWhere($field, $name), 'title' => '{title}',
                         'types' => implode(', ', array_diff(self::TITLE_ALLOWED_TYPES, ['enum'])), 'type' => $type,
                     ]));
+            }
+            if ($type === self::SORT_TYPE && strtolower($field) !== 'id') {
+                if ($optional) {
+                    throw new SchemaException(Msg::of('msg_schema.sort_optional', "{where}: a sort field is always required (no '?') - "
+                        . 'every record has a place in the order: {source}', ['where' => self::fieldWhere($field, $name), 'source' => $shown]));
+                }
+                if ($isUnique) {
+                    throw new SchemaException(Msg::of('msg_schema.sort_unique', '{where}: {unique} is not possible on a sort field (the '
+                        . 'CMS assigns the values itself, unique per group).', ['where' => self::fieldWhere($field, $name), 'unique' => '{unique}']));
+                }
             }
             if ($isUnique && $type === self::MEDIA_TYPE && strtolower($field) !== 'id') {
                 throw new SchemaException(Msg::of('msg_schema.unique_media', '{where}: {unique} is not possible on media fields (a list of '
@@ -1456,7 +1865,11 @@ final class PumlParser
             $fields[] = [
                 'name' => $field, 'type' => $type, 'sql_type' => self::TYPE_MAP[$type] ?? null, // media: no column
                 'primary' => false, 'required' => !$optional, 'foreign_key' => null,
-            ] + ($renamedFrom !== null ? ['renamed_from' => $renamedFrom] : []) + ($rules ? ['rules' => $rules] : []);
+            ] + ($renamedFrom !== null ? ['renamed_from' => $renamedFrom] : []) + ($rules ? ['rules' => $rules] : [])
+                // sort: 'class' = the class the field is written in (an abstract one: its subclasses share the order);
+                // 'by'/'targets'/'tables' are added by resolveSort()
+                + ($type === self::SORT_TYPE ? ['sort' => ['spec' => $sortBy ?? [], 'class' => $name]] : [])
+                + ($metaRef !== null ? ['meta' => $metaRef] : []); // media(Klasse): name as written, resolved in analyze()
         }
 
         if ($section !== null && $sectionFields === 0) {
@@ -1478,8 +1891,15 @@ final class PumlParser
             throw new SchemaException(Msg::of('msg_schema.visibility_twice', 'Entity {class} has several visibility fields, at most one '
                 . 'is allowed', ['class' => $name]));
         }
+        $sort = array_column(array_filter($fields, function ($f) {
+            return $f['type'] === self::SORT_TYPE;
+        }), 'name');
+        if (count($sort) > 1) {
+            throw new SchemaException(Msg::of('msg_schema.sort_twice', "Class '{class}' has several sort fields ({fields}), at most one "
+                . 'is allowed.', ['class' => $name, 'fields' => implode(', ', $sort)]));
+        }
 
-        if (!isset($seen['id'])) {
+        if (!isset($seen['id']) && !$meta) {
             array_unshift($fields, [
                 'name' => 'id', 'type' => 'int', 'sql_type' => 'INTEGER',
                 'primary' => true, 'required' => false, 'foreign_key' => null,
@@ -1555,6 +1975,242 @@ final class PumlParser
                 . '(available: {available}).', $params)
             : Msg::of('msg_schema.workflow_none', "{where}: The workflow '{type}' does not exist in the active workflow file (it "
                 . 'contains no workflow).', $params));
+    }
+
+    /**
+     * Values of a `{by: …}` marker: class names and labels in quotes, separated by commas - [['class' => 'Navigation'],
+     * ['label' => 'auf']]. null = not understood (empty, an empty value, an invalid class name).
+     */
+    private static function parseSortBy(string $text): ?array
+    {
+        $out = [];
+        $rest = trim($text);
+        if ($rest === '') {
+            return null;
+        }
+        while (true) {
+            if (!preg_match('/^(?:"([^"]*)"|([^\s,"]+))\s*(,\s*|$)/', $rest, $m)) {
+                return null;
+            }
+            if (($m[2] ?? '') !== '') {
+                if (!preg_match(self::IDENT, $m[2])) {
+                    return null;
+                }
+                $out[] = ['class' => $m[2]];
+            } elseif (trim($m[1]) !== '') {
+                $out[] = ['label' => trim($m[1])];
+            } else {
+                return null;
+            }
+            $rest = (string) substr($rest, strlen($m[0]));
+            if ($rest === '') {
+                return $m[3] === '' ? $out : null; // a trailing comma is not understood
+            }
+        }
+    }
+
+    /**
+     * Sort fields (type sort, see class comment): resolves `{by: …}` to the FK columns of every class and records which
+     * tables share one order (the concrete subclasses of the abstract class the field is written in). The class names in
+     * 'spec' are replaced by the names as declared (in $classes too, for modelJson()).
+     *
+     * @param array<string,array> $entities concrete classes after inheritance and relations
+     * @param array<string,array> $classes all classes as written
+     * @param array<string,string> $abstract lower name => name of the abstract classes
+     */
+    private static function resolveSort(array &$entities, array &$classes, array $abstract): void
+    {
+        $declared = function (string $name) use ($classes): ?string {
+            return isset($classes[strtolower($name)]) ? $classes[strtolower($name)]['name'] : null;
+        };
+        foreach ($classes as &$c) {
+            foreach ($c['fields'] as &$f) {
+                foreach ($f['sort']['spec'] ?? [] as $i => $item) {
+                    if (isset($item['class']) && $declared($item['class']) !== null) {
+                        $f['sort']['spec'][$i]['class'] = $declared($item['class']);
+                    }
+                }
+            }
+            unset($f);
+        }
+        unset($c);
+        // tables per declaring class (diagram order)
+        $groups = [];
+        foreach ($entities as $t => $e) {
+            foreach ($e['fields'] as $f) {
+                if (isset($f['sort'])) {
+                    $groups[strtolower($f['sort']['class'])][] = $t;
+                }
+            }
+        }
+        $quoted = function (array $labels): string {
+            return implode(', ', array_map(function ($l) {
+                return $l === '' ? '""' : '"' . $l . '"';
+            }, $labels));
+        };
+        foreach ($groups as $owner => $tables) {
+            $field = null;
+            foreach ($classes[$owner]['fields'] as $f) {
+                if (isset($f['sort'])) {
+                    $field = $f;
+                }
+            }
+            $inherited = isset($abstract[$owner]);
+            $where = self::fieldWhere($field['name'], $classes[$owner]['name']);
+            $spec = $field['sort']['spec'];
+            $by = array_fill_keys($tables, []);
+            $targets = [];
+            foreach ($spec as $item) {
+                $value = isset($item['class']) ? $item['class'] : '"' . $item['label'] . '"';
+                $params = ['where' => $where, 'by' => '{by: ' . $value . '}', 'value' => $item['class'] ?? $item['label']];
+                if (isset($item['class']) && !isset($entities[strtolower($item['class'])])) {
+                    throw new SchemaException(isset($abstract[strtolower($item['class'])])
+                        ? Msg::of('msg_schema.sort_by_abstract', "{where}: {by} names the abstract class '{value}' - it has no table "
+                            . 'and no relationships.', $params)
+                        : Msg::of('msg_schema.sort_by_unknown_class', "{where}: {by} names the unknown class '{value}'. Expected is the "
+                            . 'class a relationship of this class points to (or its label in quotes).', $params));
+                }
+                $missing = [];
+                $target = null;
+                foreach ($tables as $t) {
+                    $e = $entities[$t];
+                    $hit = self::sortRelation($e, $item, $entities);
+                    $params['class'] = $e['name'];
+                    if ($hit['state'] === 'ambiguous') {
+                        throw new SchemaException(Msg::of('msg_schema.sort_by_ambiguous', "{where}: {by} is ambiguous - '{class}' has "
+                            . "several relationships to '{target}' (labels: {labels}). Please name the label in quotes instead of the "
+                            . 'class, e.g. {example}.', $params + [
+                                'target' => $entities[strtolower($item['class'])]['name'], 'labels' => $quoted($hit['labels']),
+                                'example' => '{by: "' . $hit['labels'][0] . '"}',
+                            ]));
+                    }
+                    if ($hit['state'] === 'ambiguous_label') {
+                        throw new SchemaException(Msg::of('msg_schema.sort_by_label_twice', "{where}: {by} is ambiguous - '{class}' has "
+                            . 'several relationships with this label (to {targets}). Please give them different labels.', $params + [
+                                'targets' => implode(', ', $hit['labels']),
+                            ]));
+                    }
+                    if ($hit['state'] === 'nn' || $hit['state'] === 'reverse') {
+                        throw new SchemaException($hit['state'] === 'nn'
+                            ? Msg::of('msg_schema.sort_by_nn', "{where}: {by} refers to an n:n relationship of '{class}'. Groups are only "
+                                . 'possible over relationships in which every record has at most one parent (n:1 or n:0..1).', $params)
+                            : Msg::of('msg_schema.sort_by_reverse', "{where}: {by} refers to a relationship in the opposite direction "
+                                . "('{other}' points to '{class}'). Groups are only possible over relationships that start at '{class}' and "
+                                . 'give every record at most one parent (n:1 or n:0..1).', $params + ['other' => $hit['other']]));
+                    }
+                    if ($hit['state'] !== 'ok') {
+                        if (!$inherited) {
+                            throw new SchemaException(isset($item['class'])
+                                ? Msg::of('msg_schema.sort_by_no_relation', "{where}: {by} needs a relationship from '{class}' to '{value}' "
+                                    . '(e.g. {class} "n" --> "1" {value}), but there is none.', $params)
+                                : Msg::of('msg_schema.sort_by_unknown_label', "{where}: {by} - '{class}' has no relationship with this "
+                                    . 'label (labels of its relationships: {labels}).', $params + [
+                                        'labels' => $hit['labels'] ? $quoted($hit['labels']) : '–',
+                                    ]));
+                        }
+                        $missing[] = $e['name'];
+                        continue;
+                    }
+                    if (in_array($hit['column'], $by[$t], true)) {
+                        throw new SchemaException(Msg::of('msg_schema.sort_by_twice', '{where}: {by} names the same relationship twice.', $params));
+                    }
+                    if ($target !== null && $target !== $hit['target']) {
+                        throw new SchemaException(Msg::of('msg_schema.sort_by_targets', "{where}: {by} leads to different classes in the "
+                            . "subclasses ('{a}' and '{b}'). A shared order needs the same parent class in every subclass.", $params + [
+                                'a' => $entities[$target]['name'], 'b' => $entities[$hit['target']]['name'],
+                            ]));
+                    }
+                    $target = $hit['target'];
+                    $by[$t][] = $hit['column'];
+                }
+                if ($missing) {
+                    throw new SchemaException(Msg::of('msg_schema.sort_by_subclasses', "{where}: every concrete subclass needs the "
+                        . 'relationship of {by} itself (relationships are not inherited). It is missing in: {classes}.', $params + [
+                            'classes' => implode(', ', $missing),
+                        ]));
+                }
+                $targets[] = $target;
+            }
+            foreach ($tables as $t) {
+                foreach ($entities[$t]['fields'] as &$f) {
+                    if (isset($f['sort'])) {
+                        $f['sort'] = ['by' => $by[$t], 'targets' => $targets, 'spec' => $spec, 'tables' => $tables];
+                    }
+                }
+                unset($f);
+            }
+        }
+    }
+
+    /**
+     * The relationship of class $e a `{by: …}` value means: ['state' => 'ok', 'column', 'target'] or why not -
+     * 'ambiguous' (several relationships to the class; 'labels'), 'ambiguous_label' (several with the label; 'labels' =
+     * target classes), 'nn', 'reverse' ('other' = class that points here), 'none' ('labels' = labels of the relationships).
+     */
+    private static function sortRelation(array $e, array $item, array $entities): array
+    {
+        $fold = function (string $s): string {
+            return mb_strtolower(trim($s), 'UTF-8');
+        };
+        $fks = array_values(array_filter($e['fields'], function ($f) {
+            return $f['foreign_key'] !== null;
+        }));
+        if (isset($item['class'])) {
+            $table = strtolower($item['class']);
+            $hits = array_values(array_filter($fks, function ($f) use ($table) {
+                return $f['foreign_key']['table'] === $table;
+            }));
+            $nn = (bool) array_filter($e['many_to_many'], function ($m) use ($table) {
+                return $m['table'] === $table;
+            });
+        } else {
+            $label = $fold($item['label']);
+            $hits = array_values(array_filter($fks, function ($f) use ($label, $fold) {
+                return $fold($f['foreign_key']['label']) === $label;
+            }));
+            $nn = (bool) array_filter($e['many_to_many'], function ($m) use ($label, $fold) {
+                return $fold($m['label']) === $label;
+            });
+        }
+        if (count($hits) === 1) {
+            return ['state' => 'ok', 'column' => $hits[0]['name'], 'target' => $hits[0]['foreign_key']['table']];
+        }
+        if (count($hits) > 1) {
+            return isset($item['class'])
+                ? ['state' => 'ambiguous', 'labels' => array_map(function ($f) {
+                    return $f['foreign_key']['label'];
+                }, $hits)]
+                : ['state' => 'ambiguous_label', 'labels' => array_map(function ($f) use ($entities) {
+                    return $entities[$f['foreign_key']['table']]['name'];
+                }, $hits)];
+        }
+        // n:n written from the other class: the list sits there
+        foreach ($entities as $other) {
+            foreach ($other['many_to_many'] as $m) {
+                if ($m['table'] === $e['table'] && (isset($item['class']) ? $other['table'] === strtolower($item['class'])
+                    : $fold($m['label']) === $fold($item['label']))) {
+                    $nn = true;
+                }
+            }
+        }
+        if ($nn) {
+            return ['state' => 'nn'];
+        }
+        // opposite direction: the other class carries the FK column to this one
+        foreach ($entities as $other) {
+            foreach ($other['fields'] as $f) {
+                if ($f['foreign_key'] === null || $f['foreign_key']['table'] !== $e['table'] || $other['table'] === $e['table']) {
+                    continue;
+                }
+                if (isset($item['class']) ? $other['table'] === strtolower($item['class'])
+                    : $fold($f['foreign_key']['label']) === $fold($item['label'])) {
+                    return ['state' => 'reverse', 'other' => $other['name']];
+                }
+            }
+        }
+        return ['state' => 'none', 'labels' => array_map(function ($f) {
+            return $f['foreign_key']['label'];
+        }, $fks)];
     }
 
     private static function cardinality(string $raw): string

@@ -74,6 +74,15 @@ permissions of these groups themselves and permissions of the user themselves.
   Only what newly creates a denial is rejected: a `PUT` on a row that was already `entity`/`deny` on
   the same entity before (e.g. only a different owner) stays possible, even if a migration has added a
   required relationship in the meantime – this does not change the denial situation.
+* `deny` on a **field of a metadata class** (`media(Klasse)`, target e.g. `media_meta_field:galeriebild.fotograf`, kind
+  `media_meta_field` in `GET /api/_permissions/targets`, `entity` = class name): applies to every media field using the
+  class – the value is missing in `meta` of every medium, in `_schema.media[].meta` and in the versions, a value sent along
+  is discarded. Required metadata fields cannot be denied. The permission belongs to the field of the **metadata class**
+  (a model element, like a field of an abstract base class), not to a single media field: if `Galerie.bilder` and
+  `Artikel.bilder` both use `media(GalerieBild)`, a `deny` on `media_meta_field:galeriebild.fotograf` hides the
+  photographer in both. Tip: if you need different permissions per media field, create separate metadata classes
+  (e.g. `GalerieBild` and `ArtikelBild`). The rights editor shows a group per metadata class with the media fields it
+  applies to („Gilt für: Artikel.Bilder, Galerie.Bilder“).
 * `deny` on a **field** (`scope: field` – field, media field or relationship, i.e. FK column or n:n list): it is missing in
   `_schema` and in every row (key removed, not `null`); a value sent along in `POST`/`PUT` is discarded without
   an error, the stored value stays. `deny` on a required field or `id` is rejected (`422`). The record metadata

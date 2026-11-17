@@ -23,6 +23,16 @@ define('BOOTSTRAP_TOKEN', 'CHANGE_ME_TO_A_LONG_RANDOM_STRING');
 // A size saved in the admin area (System -> Einstellungen, in MB; 0 there = automatic) takes precedence over this one.
 // define('LIST_MAX_BYTES', 8 * 1024 * 1024);
 
+// Optional: name of this installation for the admin UI, e.g. the customer. It replaces "LessHeadCMS" in the browser tab
+// ("Müller – Artikel", "Müller – Artikel #2", "Müller – Anmeldung"), in the login box and at the top of the sidebar - so
+// several installations open in tabs can be told apart. Plain text, at most 60 characters.
+// define('BACKEND_TITLE', 'Müller');
+
+// Optional: environment of this installation - 'dev', 'staging' or 'live' (default: 'live'). Anything but 'live' is
+// marked: the tab title starts with it ("DEV · Müller – Artikel"), the login box and the sidebar show a coloured label
+// and the tab icon a coloured dot. Display only; 'live' shows nothing.
+// define('ENVIRONMENT', 'live');
+
 // Optional: own language files of this installation (e.g. of an agency). Every <code>.csv in this directory (same format
 // as translations/en.csv) counts as the built-in texts of its language - without an import - and beats the shipped
 // file of the same language per key. The directory is not part of the delivery; an update never touches it. Keep it

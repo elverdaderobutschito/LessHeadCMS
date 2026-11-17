@@ -4,7 +4,7 @@ _Part of the [LessHeadCMS documentation](../README.md)._
 
 * `class Artikel { + titel: string }` → table `artikel`, column `titel`.
 * Types: `string`→`VARCHAR(255)`, `text`/`richtext`→`TEXT`, `int`→`INTEGER`, `decimal`→`REAL`, `bool`→`BOOLEAN`, `date`→`DATE`,
-  `visibility`→`BOOLEAN` (see below), plus every `enum` name declared in the diagram (see below). Other types are a
+  `visibility`→`BOOLEAN` (see below), `sort`→`INTEGER` (manual order, see below), plus every `enum` name declared in the diagram (see below). Other types are a
   schema error („Unbekannter Typ …“).
 * **`enum` blocks** (PlantUML standard) declare a named value range, fields reference it as a type via the
   name – any number of fields in any number of classes:
@@ -53,6 +53,54 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   (reserved), `enum Media` (name of the base type), a link table that coincides with a class, an n:n link table
   or that of another media field (e.g. class `Kurs_Galerie_Media` next to `Kurs.galerie`). Existing
   diagrams without `media` yield the same tables and the same `_schema`, unchanged.
+* **`media(Klasse)`** – metadata per medium (`+ bilder: media(GalerieBild)`, optionally `media(GalerieBild)?`): values that
+  belong to **this medium in this record and field**, not to the medium itself – e.g. a caption, a photographer
+  credit or a link per image of a gallery. The class in brackets is a **metadata class**, marked with the stereotype
+  `<<media_meta>>` (see below). Everything else is exactly as for `media` (ordered list, `?`, link table, inheritance).
+  The global description, alt text and title of a medium (media library) stay what they are; a frontend can use the
+  metadata first and fall back to the global values (e.g. caption → description of the medium).
+
+  ```plantuml
+  class Galerie {
+    + titel: string {title}
+    + bilder: media(GalerieBild)
+    + cover: media?
+  }
+
+  class GalerieBild <<media_meta>> {
+    + bildunterschrift: string {maxLength: 80}
+    + fotograf: string?
+    + link: string? {pattern: url}
+    -- Darstellung --
+    + ausrichtung: Ausrichtung?
+    + hervorheben: bool?
+  }
+  ```
+
+  **Metadata class** (`class Name <<media_meta>> { … }`): has **no table of its own**. Its fields become additional
+  columns of every link table using it (`galerie_bilder_media`: `galerie_id`, `media_id`, `position`,
+  `bildunterschrift`, `fotograf`, …), a required field (without `?`) becomes `NOT NULL`. One metadata class can be used by
+  several media fields (also in different classes). Allowed in it: all normal field types including enums, `?`,
+  field rules (`{maxLength: …}`, `{pattern: …}`, …, see [Validation](validation.md)), `{renamed_from:…}` on the class and
+  on its fields, notes/comments and separator lines (`-- Titel --`, sections of the metadata dialog). A metadata class
+  that no media field uses is **not** an error (like an unused enum). `<<media_meta>>` is the only stereotype the
+  parser accepts on a class (case-insensitive).
+
+  **Schema errors:** `media(X)` with an unknown class or with a class without `<<media_meta>>`, `media(` without a valid
+  class name; in a metadata class: `id`, `{title}`, `{unique}`, media fields, `visibility` (publication applies to the
+  whole record – use `bool`), a workflow field, reserved field names (`created_at`, …), a field named like a column of the
+  link table (`position`, `media_id` or `<table>_id`, e.g. `galerie_id`), no fields at all; relations from or to a
+  metadata class, `extends` on a metadata class or from it, `abstract` combined with `<<media_meta>>`, a metadata class
+  named `Media` or named like a table/link table.
+
+  **API, form, migration:** `_schema.media[]` gets `meta` (the fields, like `fields`), `meta_class` and, with sections,
+  `meta_sections`; every medium of the record gets a `meta` object (see [REST API](rest-api.md)). The editorial form has
+  an edit button per tile (see [Editorial UI](editorial-ui.md)). Adding, changing or removing a metadata class or its
+  fields is a normal schema change (Schema → „Änderungen prüfen“): new required fields need a backfill value for the
+  existing links, removing a field with values needs a confirmation, `{renamed_from}` keeps values; the links and their
+  order always stay. Translations: an own group per metadata class (class name and fields). Permissions: a field of a
+  metadata class can be restricted (it then applies to every media field using the class; required fields cannot).
+  Versions, duplicating and restoring include the metadata.
 * **`decimal`** (floating point numbers, e.g. amounts of money, `+ preis: decimal`): API and form accept integers and
   decimal numbers (decimal point), `_schema` reports `"type": "decimal"`. Form field: `<input type="number" step="0.01">`
   – two decimal places as the default for the main case, an amount of money (deliberately not `step="any"`: this way the browser points out
@@ -121,6 +169,59 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   default value is `false` (`BOOLEAN NOT NULL DEFAULT 0`; the API also sets `false` if the field is missing on creation), so a new
   record is never public by accident. **At most one `visibility` field per class**, otherwise a schema error
   („Entität X hat mehrere visibility-Felder, erlaubt ist maximal eines“). Effect on the API: see [REST API](rest-api.md).
+* **`sort`** (manual order, e.g. `+ position: sort`): an `INTEGER NOT NULL` column whose values the CMS assigns itself.
+  The editors arrange the records with arrows in the list view; the API delivers them in this order when no `sort`
+  parameter is given (the value is part of the record, e.g. `"position": 3`, so a frontend can also sort itself). There is
+  no form field and no list column, a value sent with `POST`/`PUT` is ignored. Always required (no `?`), no `{unique}`,
+  **at most one `sort` field per class** (inherited ones count), not in a `<<media_meta>>` class.
+  * **Without `{by: …}`** all records of the class share one order:
+    ```
+    class Kategorie {
+      + name: string {title}
+      + position: sort
+    }
+    ```
+  * **`{by: Class}`** – one order per parent. The class named is the target of an n:1 (or 1:1) relationship **of this
+    class**; every parent row has its own numbering 1, 2, 3 …, an empty optional parent is a group of its own:
+    ```
+    class FaqEintrag {
+      + frage: string {title}
+      + position: sort {by: FaqBlock}
+    }
+    FaqEintrag "n" --> "1" FaqBlock : gehoert zu
+    ```
+  * **Several relationships, also to the class itself** (a tree): the group is the combination of all parents named.
+    Menu items are ordered per navigation *and* per parent item; pages per parent page:
+    ```
+    class Navigationspunkt {
+      + bezeichnung: string {title}
+      + position: sort {by: Navigation, Navigationspunkt}
+    }
+    Navigationspunkt "n" --> "1" Navigation : gehoert zu
+    Navigationspunkt "n" --> "0..1" Navigationspunkt : Unterpunkt von
+    ```
+  * **By label** – if a class has several relationships to the same target, the class name is ambiguous (schema error
+    that names the labels); write the label of the relationship in quotes instead. Class names and labels can be mixed:
+    ```
+    class HeroBlock {
+      + position: sort {by: "auf"}
+    }
+    HeroBlock "n" --> "1" Seite : auf
+    HeroBlock "n" --> "0..1" Seite : Button-Ziel
+    ```
+  * **In an abstract class** the concrete subclasses **share one order** per group: with
+    `abstract class Block { + position: sort {by: "auf"} }` and `HeroBlock`, `TextBlock`, `FaqBlock` each having
+    `… "n" --> "1" Seite : auf`, the blocks of a page are numbered 1, 2, 3 … across all three tables – a frontend merges
+    the three lists by `position`. Relationships are not inherited, so **every** concrete subclass needs the relationship
+    itself (same label or same target class in all of them; the error message names the subclasses that lack it).
+  * **Behaviour:** a new record goes to the end of its group; a record that changes its group (another parent) goes to the
+    end of the new group; deleting leaves a gap (nothing is renumbered); duplicating appends the copy at the end.
+  * **Schema errors:** `{by: …}` on another type, an unknown or abstract class, a class without a relationship to it, an
+    n:n relationship or one in the opposite direction (a group needs *one* parent per record), an unknown label, the same
+    relationship twice, `sort?`, `{unique}`, a second `sort` field.
+  * **Schema editing:** a new `sort` field needs no backfill value (existing rows are numbered per group in the order of
+    their IDs). `int`/`int?` → `sort` keeps the existing order: per group renumbered without gaps, equal values by ID, empty
+    values at the end of their group. A changed `{by: …}` renumbers per new group, the relative order is kept.
 * `A "n" --> "1" B : label` → foreign key in `a` (`NOT NULL`; optional with `"0..1"`). Whether the FK is required depends only
   on the multiplicity, not on the `?` syntax. `A "1" <-- "n" B` is recognized as well: the FK belongs to the n side.
   On the n side `n`, `0..*`, `*`, `m`, `0..n` are allowed, as well as the **minimum count** `"1..*"`/`"1..n"` (see
@@ -304,7 +405,9 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   too (see Separator lines = form sections).
 * **Further unsupported constructs are schema errors** (instead of being silently discarded as before):
   * Stereotype on a class (`class Kunde <<Entity>> {`, any stereotype, also on `abstract class`): „Stereotypen
-    ('<<...>>') werden aktuell nicht unterstützt …“ – remove the stereotype. On `package` and `enum` it stays allowed.
+    ('<<...>>') werden aktuell nicht unterstützt … Einzige Ausnahme ist <<media_meta>> für Metadaten-Klassen von
+    Medienfeldern …“ – remove the stereotype. The only exception is `<<media_meta>>` (metadata class, see `media(Klasse)`).
+    On `package` and `enum` it stays allowed.
   * `implements` (`class B implements A {`): take the fields of `A` directly into `B` or use `extends` with an
     `abstract class`.
   * `interface X { … }`: message right at the interface line – use a normal class instead.

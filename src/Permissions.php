@@ -503,6 +503,16 @@ final class Permissions
             }
         } elseif ($r['kind'] === 'relation') {
             $out = self::relationProps($model, (string) $r['entity_name'], (string) $r['name']);
+        } elseif ($r['kind'] === 'media_meta_field') {
+            // field of a metadata class (entity_name = class name): denied in every media field using the class, as the
+            // property "<media field>.meta.<field>" (Cms::metaHidden())
+            foreach ($model['entities'] as $t => $e) {
+                foreach ($e['media'] ?? [] as $m) {
+                    if (($m['meta']['class'] ?? null) === $r['entity_name']) {
+                        $out[] = [$t, $m['name'] . '.meta.' . $r['name']];
+                    }
+                }
+            }
         }
         return $out;
     }
@@ -654,6 +664,12 @@ final class Permissions
                 }
             }
             $add($r['id'], 'field', 'relation', $r['from_entity'], (string) ($r['own_column'] ?? $r['junction']), $required);
+        }
+        // fields of metadata classes (<<media_meta>>): 'entity' is the class name; they apply to every media field using it
+        foreach ($json['media_meta'] ?? [] as $mc) {
+            foreach ($mc['fields'] as $f) {
+                $add($f['id'], 'field', 'media_meta_field', $mc['name'], $f['name'], (bool) $f['required']);
+            }
         }
         return $out;
     }

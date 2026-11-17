@@ -38,15 +38,7 @@ final class SqlGenerator
                     $lines[] = "$col INTEGER PRIMARY KEY AUTOINCREMENT";
                     continue;
                 }
-                // required visibility: default value false (draft) - a new record is never public by accident
-                $default = $f['required'] && $f['type'] === 'visibility' ? ' DEFAULT 0' : '';
-                // Enum: only the declared values, also with direct SQL (NULL stays allowed for optional fields,
-                // a CHECK with a NULL result counts as satisfied in SQL). Cms::coerce() checks beforehand itself for a
-                // comprehensible 422.
-                $check = $f['type'] === 'enum' ? ' CHECK (' . $col . ' IN (' . implode(', ', array_map(function ($v) {
-                    return "'" . str_replace("'", "''", $v) . "'";
-                }, $f['enum_values'])) . '))' : '';
-                $lines[] = "$col {$f['sql_type']}" . ($f['required'] ? ' NOT NULL' : '') . $default . $check;
+                $lines[] = self::columnDefinition($f);
                 if ($f['foreign_key']) {
                     $fk = $f['foreign_key'];
                     // {cascade}: the database itself cascades as well (also with direct SQL). Restrict deliberately
@@ -94,13 +86,20 @@ final class SqlGenerator
         // does not exist yet is allowed in SQLite). A medium appears at most once in the same list; position
         // is the order (0, 1, ...). Deleting the row takes its links along; a medium that is still linked, in contrast,
         // cannot be deleted (no ON DELETE, Media::delete() checks beforehand itself for a comprehensible 409).
+        // media(Klasse): the fields of the metadata class as additional columns after position (LinkFields) - without one the
+        // statement is exactly the previous one.
         foreach ($model['entities'] as $table => $entity) {
             foreach ($entity['media'] ?? [] as $m) {
                 $own = self::q($m['own_column']);
+                $extra = '';
+                foreach (LinkFields::columnDefinitions(LinkFields::of($m)) as $line) {
+                    $extra .= "  $line,\n";
+                }
                 $sql[$m['junction']] = "CREATE TABLE " . self::q($m['junction']) . " (\n"
                     . "  $own INTEGER NOT NULL,\n"
                     . "  \"media_id\" INTEGER NOT NULL,\n"
                     . "  \"position\" INTEGER NOT NULL,\n"
+                    . $extra
                     . "  PRIMARY KEY ($own, \"media_id\"),\n"
                     . "  FOREIGN KEY ($own) REFERENCES " . self::q($table) . "(\"id\") ON DELETE CASCADE,\n"
                     . "  FOREIGN KEY (\"media_id\") REFERENCES \"media\"(\"id\")\n"
@@ -109,6 +108,28 @@ final class SqlGenerator
         }
 
         return $sql;
+    }
+
+    /**
+     * Column definition of a (non-primary) field: type, NOT NULL for required fields, default value, CHECK for enums. Also
+     * for the extra columns of link tables (LinkFields).
+     */
+    public static function columnDefinition(array $f): string
+    {
+        $col = self::q($f['name']);
+        // required visibility: default value false (draft) - a new record is never public by accident
+        $default = $f['required'] && $f['type'] === 'visibility' ? ' DEFAULT 0' : '';
+        // sort: the CMS always writes the value itself (Sorting); the default only keeps a direct INSERT past the CMS possible
+        if ($f['type'] === PumlParser::SORT_TYPE) {
+            $default = ' DEFAULT 0';
+        }
+        // Enum: only the declared values, also with direct SQL (NULL stays allowed for optional fields,
+        // a CHECK with a NULL result counts as satisfied in SQL). Cms::coerce() checks beforehand itself for a
+        // comprehensible 422.
+        $check = $f['type'] === 'enum' ? ' CHECK (' . $col . ' IN (' . implode(', ', array_map(function ($v) {
+            return "'" . str_replace("'", "''", $v) . "'";
+        }, $f['enum_values'])) . '))' : '';
+        return "$col {$f['sql_type']}" . ($f['required'] ? ' NOT NULL' : '') . $default . $check;
     }
 
     /**

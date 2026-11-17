@@ -32,7 +32,9 @@ namespace LessHeadCMS;
  *               updated_by, see RecordMeta; not n:n, not a media field), order = asc | desc.
  *               Empty values come last in both directions, ties are resolved by the id. Text: case-insensitive,
  *               umlauts like their base letter, numbers in the text numerically ("Hafen 2" before "Hafen 12"); FK
- *               column: by the label of the target row (title_field). Without sort: by id.
+ *               column: by the label of the target row (title_field). Without sort: by id - or, for an entity with a
+ *               sort field (manual order, see Sorting), by group and then by that order (see manualOrder()); `manual`
+ *               says whether this order applies. order=desc without sort: by id descending, as before.
  *   filter[f]   depending on the kind of field (like the filter row of the UI):
  *                 string/text/richtext   substring, case-insensitive (richtext: in the plain text without Markdown syntax)
  *                 FK column, n:n list    substring of the label "<entity> #<id> – <title_field>". <entity> is the
@@ -74,6 +76,8 @@ final class ListQuery
     public $page = 1;
     /** @var int */
     public $perPage = self::DEFAULT_PER_PAGE;
+    /** @var bool the rows come in the manual order of the entity's sort field (no sort/order parameter) */
+    public $manual = false;
 
     /** @var array */
     private $model;
@@ -334,6 +338,7 @@ final class ListQuery
         switch ($f['type']) {
             case 'int':
             case 'decimal':
+            case 'sort':
                 return 'number';
             case 'date':
                 return 'date';
@@ -464,7 +469,7 @@ final class ListQuery
     {
         $parts = [];
         foreach ($this->entity['fields'] as $f) {
-            if (isset($this->denied[$f['name']]) || in_array($f['type'], ['text', 'richtext', 'bool', 'visibility'], true)) {
+            if (isset($this->denied[$f['name']]) || in_array($f['type'], ['text', 'richtext', 'bool', 'visibility', 'sort'], true)) {
                 continue;
             }
             $parts[] = $f['foreign_key'] ? $this->fkContains($f, $needle)
@@ -537,6 +542,58 @@ final class ListQuery
         return $out;
     }
 
+    /**
+     * ORDER BY of the manual order (sort field): group by group, inside a group by the sort value. The groups come in the
+     * order of their parents - per {by: …} value: rows without a parent first, then by the parent's own manual order if
+     * it has a sort field (its groups first, so the groups follow each other the way the parents themselves are listed),
+     * otherwise alphabetically by its title; the parent's id keeps a group together.
+     */
+    private function manualOrder(array $field): string
+    {
+        $n = 0;
+        $keys = $this->groupKeys($field, function (string $col): string {
+            return 'e.' . SqlGenerator::q($col);
+        }, 0, $n);
+        $keys[] = 'e.' . SqlGenerator::q($field['name']);
+        $keys[] = 'e."id"';
+        return implode(', ', $keys);
+    }
+
+    /**
+     * @param callable $col fn(column): SQL expression of that column of the row whose groups are ordered
+     * @param int $depth how many parents up we already are (the parents' own order is followed over at most 3 levels)
+     * @param int $n counter for unique table aliases
+     * @return string[] SQL expressions
+     */
+    private function groupKeys(array $field, callable $col, int $depth, int &$n): array
+    {
+        $keys = [];
+        foreach ($field['sort']['by'] as $i => $c) {
+            $target = $this->model['entities'][$field['sort']['targets'][$i]];
+            $fk = $col($c);
+            $alias = 'g' . (++$n);
+            $sub = function (string $expr) use ($target, $alias, $fk): string {
+                return "(SELECT $expr FROM " . SqlGenerator::q($target['table']) . " $alias WHERE $alias.\"id\" = $fk)";
+            };
+            $keys[] = "$fk IS NOT NULL";
+            $parentSort = Sorting::fieldOf($target);
+            if ($parentSort !== null && $depth < 3) {
+                $inner = $this->groupKeys($parentSort, function (string $c2) use ($alias): string {
+                    return "$alias." . SqlGenerator::q($c2);
+                }, $depth + 1, $n);
+                foreach ($inner as $k) {
+                    $keys[] = $sub($k);
+                }
+                $keys[] = $sub("$alias." . SqlGenerator::q($parentSort['name']));
+            } else {
+                [$text, $label] = $this->titleExpr($target, $alias);
+                $keys[] = 'lhc_sortkey(' . $sub("CASE WHEN $text = '' THEN $label ELSE $text END") . ')';
+            }
+            $keys[] = $fk;
+        }
+        return $keys;
+    }
+
     private function sort(array $query): void
     {
         $order = $query['order'] ?? 'asc';
@@ -547,6 +604,9 @@ final class ListQuery
         if (!isset($query['sort']) || $query['sort'] === '') {
             if (isset($query['order']) && !isset($this->errors['order'])) {
                 $this->orderBy = 'e."id" ' . strtoupper($order);
+            } elseif (($field = Sorting::fieldOf($this->entity)) !== null) {
+                $this->orderBy = $this->manualOrder($field);
+                $this->manual = true;
             }
             return;
         }

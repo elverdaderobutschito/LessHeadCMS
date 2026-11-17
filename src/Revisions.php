@@ -25,7 +25,8 @@ use PDO;
 
 /**
  * Versions of the records (table lh_revision): every save through Cms - create (version 1), update, workflow
- * transition, restore - writes one row with a JSON snapshot of the whole record, in the same transaction as the change.
+ * transition, restore, moving in the manual order (reorder; consecutive moves by the same user are one version, see
+ * record()) - writes one row with a JSON snapshot of the whole record, in the same transaction as the change.
  *
  * Snapshot: {"<field>": value, ...} of all fields of the model except the id (FK columns as the id of the target row,
  * the workflow field with its state), every n:n list as the IDs of the linked rows and every media field as the IDs of
@@ -53,19 +54,26 @@ final class Revisions
     public const REASON_MAX = 1000;
     /** Request body key of the optional reason for a change (POST/PUT/transition/restore) - cannot be a field name */
     public const REASON_KEY = '_reason';
-    public const ACTIONS = ['create', 'update', 'transition', 'restore', 'link'];
+    public const ACTIONS = ['create', 'update', 'transition', 'restore', 'link', 'reorder'];
+
+    /**
+     * Moving a record several times in a row (action 'reorder', same user) is one history entry - but only while the last
+     * step of that entry is at most this many minutes ago. After that a move starts a new entry. See record().
+     */
+    public const REORDER_MERGE_MINUTES = 15;
 
     private const DDL = "CREATE TABLE IF NOT EXISTS lh_revision (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   entity TEXT NOT NULL,
   record_id INTEGER NOT NULL,
   version INTEGER NOT NULL,
-  action TEXT NOT NULL CHECK (action IN ('create', 'update', 'transition', 'restore', 'link')),
+  action TEXT NOT NULL CHECK (action IN ('create', 'update', 'transition', 'restore', 'link', 'reorder')),
   snapshot TEXT NOT NULL,
   reason TEXT,
   restored_from INTEGER,
   transition TEXT,
   linked_from INTEGER,
+  sort_place INTEGER,
   created_at DATETIME NOT NULL,
   created_by INTEGER,
   UNIQUE (entity, record_id, version)
@@ -82,8 +90,50 @@ final class Revisions
         }
         $created = !Database::tableExists($pdo, self::TABLE);
         $pdo->exec(self::DDL);
+        if (!$created) {
+            self::upgrade($pdo);
+        }
         self::$ensured = true;
         return $created;
+    }
+
+    /**
+     * Table from before the action 'reorder' (moving a record in its manual order, see Cms::move()): its CHECK constraint
+     * does not know the action. Rebuilt once with all rows, inside the caller's transaction if there is one.
+     */
+    private static function upgrade(PDO $pdo): void
+    {
+        $stmt = $pdo->prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?");
+        $stmt->execute([self::TABLE]);
+        $sql = (string) $stmt->fetchColumn();
+        $stmt->closeCursor();
+        if (strpos($sql, "'reorder'") !== false) {
+            // table from before sort_place (rank of the record in its group at the time of the version): one new column
+            if (strpos($sql, 'sort_place') === false) {
+                $pdo->exec('ALTER TABLE lh_revision ADD COLUMN sort_place INTEGER');
+            }
+            return;
+        }
+        $own = !$pdo->inTransaction();
+        if ($own) {
+            $pdo->beginTransaction();
+        }
+        try {
+            $pdo->exec('DROP TABLE IF EXISTS lh_revision_old');
+            $pdo->exec('ALTER TABLE lh_revision RENAME TO lh_revision_old');
+            $pdo->exec(self::DDL);
+            $cols = 'id, entity, record_id, version, action, snapshot, reason, restored_from, transition, linked_from, created_at, created_by';
+            $pdo->exec("INSERT INTO lh_revision ($cols) SELECT $cols FROM lh_revision_old");
+            $pdo->exec('DROP TABLE lh_revision_old');
+            if ($own) {
+                $pdo->commit();
+            }
+        } catch (\Throwable $e) {
+            if ($own) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
     }
 
     /**
@@ -137,8 +187,11 @@ final class Revisions
             $out[$m['name']] = array_values(array_map('intval', $row[$m['name']] ?? []));
         }
         foreach ($e['media'] ?? [] as $m) {
-            $out[$m['name']] = array_values(array_map(function ($medium) {
-                return (int) (is_array($medium) ? $medium['id'] : $medium);
+            // media(Klasse): {id, meta} per medium (the metadata belong to the version); without one the IDs as before
+            $meta = (bool) LinkFields::of($m);
+            $out[$m['name']] = array_values(array_map(function ($medium) use ($meta) {
+                $id = (int) (is_array($medium) ? $medium['id'] : $medium);
+                return $meta ? ['id' => $id, 'meta' => (object) (is_array($medium) ? (array) ($medium['meta'] ?? []) : [])] : $id;
             }, $row[$m['name']] ?? []));
         }
         return $out;
@@ -148,11 +201,33 @@ final class Revisions
      * New version of a record (inside the caller's transaction) and pruning beyond the retention. @return int version number
      *
      * @param array $row the record after the change (Cms::fetchRow, unfiltered)
-     * @param array $extra 'reason', 'restored_from', 'transition', 'linked_from'
+     * @param array $extra 'reason', 'restored_from', 'transition', 'linked_from', 'sort_place' (rank of the record in its group
+     *        of the manual order right after the change, see Sorting::place(); the history shows "Platz 3 in …")
      */
     public static function record(PDO $pdo, array $e, int $id, array $row, string $action, ?array $user, array $extra = []): int
     {
         self::ensure($pdo);
+        $userId = $user !== null ? (int) $user['id'] : null;
+        if ($action === 'reorder') {
+            // several moves in a row are ONE entry "order changed": the newest version is overwritten if it is a reorder of
+            // the same user (nothing else happened to the record in between) and was last written at most
+            // REORDER_MERGE_MINUTES ago (created_at of a merged entry is the time of its last step). The version before it
+            // stays as it is - it is the state the comparison "before -> after" starts from, over all merged steps.
+            $stmt = $pdo->prepare('SELECT id, version, action, created_by, created_at FROM lh_revision WHERE entity = ? AND record_id = ? '
+                . 'ORDER BY version DESC LIMIT 1');
+            $stmt->execute([$e['table'], $id]);
+            $last = $stmt->fetch();
+            $stmt->closeCursor();
+            $now = is_string($row[RecordMeta::UPDATED_AT] ?? null) ? $row[RecordMeta::UPDATED_AT] : RecordMeta::now();
+            if ($last !== false && $last['action'] === 'reorder'
+                && ($last['created_by'] === null ? null : (int) $last['created_by']) === $userId
+                && self::withinMinutes((string) $last['created_at'], $now, self::REORDER_MERGE_MINUTES)) {
+                $pdo->prepare('UPDATE lh_revision SET snapshot = ?, sort_place = ?, created_at = ? WHERE id = ?')->execute([
+                    json_encode(self::snapshot($e, $row), JSON_UNESCAPED_UNICODE), $extra['sort_place'] ?? null, $now, (int) $last['id'],
+                ]);
+                return (int) $last['version'];
+            }
+        }
         $stmt = $pdo->prepare('SELECT COALESCE(MAX(version), 0) FROM lh_revision WHERE entity = ? AND record_id = ?');
         $stmt->execute([$e['table'], $id]);
         $version = (int) $stmt->fetchColumn() + 1;
@@ -160,16 +235,24 @@ final class Revisions
         // not saved, its updated_at stays) gets the current time
         $at = $action !== 'link' && is_string($row[RecordMeta::UPDATED_AT] ?? null) ? $row[RecordMeta::UPDATED_AT] : RecordMeta::now();
         $pdo->prepare('INSERT INTO lh_revision (entity, record_id, version, action, snapshot, reason, restored_from, transition,
-                       linked_from, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+                       linked_from, sort_place, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
             ->execute([$e['table'], $id, $version, $action, json_encode(self::snapshot($e, $row), JSON_UNESCAPED_UNICODE),
                 $extra['reason'] ?? null, $extra['restored_from'] ?? null, $extra['transition'] ?? null, $extra['linked_from'] ?? null,
-                $at, $user !== null ? (int) $user['id'] : null]);
+                $extra['sort_place'] ?? null, $at, $user !== null ? (int) $user['id'] : null]);
         $keep = Settings::get($pdo, Settings::REVISIONS_KEEP);
         if ($keep > 0 && $version > $keep) {
             $pdo->prepare('DELETE FROM lh_revision WHERE entity = ? AND record_id = ? AND version <= ?')
                 ->execute([$e['table'], $id, $version - $keep]);
         }
         return $version;
+    }
+
+    /** Both points in time 'Y-m-d H:i:s' (UTC): $to is at most $minutes after $from (unreadable values: no) */
+    private static function withinMinutes(string $from, string $to, int $minutes): bool
+    {
+        $a = strtotime($from . ' UTC');
+        $b = strtotime($to . ' UTC');
+        return $a !== false && $b !== false && $b - $a <= $minutes * 60;
     }
 
     /**
@@ -191,12 +274,12 @@ final class Revisions
         $out = [];
         $previous = null;
         foreach ($rows as $r) {
-            $snapshot = array_diff_key((array) json_decode((string) $r['snapshot'], true), $hidden);
+            $snapshot = self::hide((array) json_decode((string) $r['snapshot'], true), $hidden);
             $changed = null;
             if ($previous !== null) {
                 $changed = [];
                 foreach (array_unique(array_merge(array_keys($previous), array_keys($snapshot))) as $name) {
-                    if (($previous[$name] ?? null) !== ($snapshot[$name] ?? null)) {
+                    if (self::canonical($previous[$name] ?? null) !== self::canonical($snapshot[$name] ?? null)) {
                         $changed[] = $name;
                     }
                 }
@@ -205,6 +288,48 @@ final class Revisions
             $previous = $snapshot;
         }
         return array_reverse($out);
+    }
+
+    /**
+     * Value of a snapshot reduced to its content, for "did this field change?": differences of mere representation do not
+     * count. Empty is empty (null, '', [], {} and a missing key - a snapshot from before a field existed has no key, a
+     * newer one of the same empty media field has []); objects compare without the order of their keys and without empty
+     * entries; a medium compares by its id and its non-empty metadata, whether it was stored as a bare id or as
+     * {id, meta, ...} (anything else delivered along, e.g. uploaded_at, is not content of the record). The same rule in
+     * the UI: RevisionHistory.jsx canonical().
+     *
+     * @param mixed $value
+     * @return mixed
+     */
+    public static function canonical($value)
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+        if (!is_array($value)) {
+            return $value;
+        }
+        if ($value === []) {
+            return null;
+        }
+        if (array_keys($value) === range(0, count($value) - 1)) {
+            return array_map(function ($item) {
+                if (is_array($item) && array_key_exists('id', $item)) {
+                    $meta = self::canonical($item['meta'] ?? null);
+                    return $meta === null ? (int) $item['id'] : ['id' => (int) $item['id'], 'meta' => $meta];
+                }
+                return self::canonical($item);
+            }, $value);
+        }
+        $out = [];
+        foreach ($value as $k => $v) {
+            $v = self::canonical($v);
+            if ($v !== null) {
+                $out[$k] = $v;
+            }
+        }
+        ksort($out);
+        return $out ?: null;
     }
 
     /** One version with its snapshot (without $hidden), or null */
@@ -220,7 +345,7 @@ final class Revisions
             return null;
         }
         return self::present($r, self::users($pdo, [$r['created_by']]))
-            + ['snapshot' => array_diff_key((array) json_decode((string) $r['snapshot'], true), $hidden)];
+            + ['snapshot' => self::hide((array) json_decode((string) $r['snapshot'], true), $hidden)];
     }
 
     /** Delete the versions of deleted records (Cms::delete(), in its transaction) */
@@ -276,6 +401,13 @@ final class Revisions
             foreach ($names as $name) {
                 $same = $same && ($map[$name] ?? null) === $name;
             }
+            // metadata of media fields (media(Klasse)): old field => new field per media field (new name)
+            $metaMaps = $plan['metaMaps'][$new] ?? [];
+            foreach ($metaMaps as $metaMap) {
+                foreach ($metaMap as $from => $to) {
+                    $same = $same && $from === $to;
+                }
+            }
             if ($same) {
                 if ($new !== $old) {
                     $pdo->prepare('UPDATE lh_revision SET entity = ? WHERE entity = ?')->execute([' ' . $new, $old]);
@@ -288,7 +420,8 @@ final class Revisions
                 $snapshot = [];
                 foreach ((array) json_decode((string) $r['snapshot'], true) as $name => $value) {
                     if (isset($map[$name])) {
-                        $snapshot[$map[$name]] = $value;
+                        $snapshot[$map[$name]] = isset($metaMaps[$map[$name]]) && is_array($value)
+                            ? self::renameMeta($value, $metaMaps[$map[$name]]) : $value;
                     }
                 }
                 // a placeholder with a space cannot be a table name: A -> B with a new A at the same time
@@ -299,6 +432,45 @@ final class Revisions
     }
 
     /** API form of a version row (without the snapshot) */
+    /** Media list of a snapshot with the metadata fields renamed ($map old => new; fields without a mapping are dropped) */
+    private static function renameMeta(array $list, array $map): array
+    {
+        return array_map(function ($medium) use ($map) {
+            if (!is_array($medium) || !is_array($medium['meta'] ?? null)) {
+                return $medium;
+            }
+            $meta = [];
+            foreach ($medium['meta'] as $k => $v) {
+                if (isset($map[$k])) {
+                    $meta[$map[$k]] = $v;
+                }
+            }
+            return ['id' => $medium['id'], 'meta' => (object) $meta];
+        }, $list);
+    }
+
+    /**
+     * Snapshot without the denied properties: top-level names and denied metadata fields ("<media field>.meta.<field>", see
+     * Permissions) inside the media lists
+     */
+    private static function hide(array $snapshot, array $hidden): array
+    {
+        $snapshot = array_diff_key($snapshot, $hidden);
+        foreach ($hidden as $key => $true) {
+            $parts = explode('.meta.', (string) $key, 2);
+            if (count($parts) !== 2 || !isset($snapshot[$parts[0]]) || !is_array($snapshot[$parts[0]])) {
+                continue;
+            }
+            foreach ($snapshot[$parts[0]] as &$medium) {
+                if (is_array($medium) && is_array($medium['meta'] ?? null)) {
+                    unset($medium['meta'][$parts[1]]);
+                }
+            }
+            unset($medium);
+        }
+        return $snapshot;
+    }
+
     private static function present(array $r, array $users): array
     {
         $by = $r['created_by'] === null ? null : (int) $r['created_by'];
@@ -311,6 +483,7 @@ final class Revisions
             'restored_from' => $r['restored_from'] === null ? null : (int) $r['restored_from'],
             'transition'    => $r['transition'] === null ? null : (string) $r['transition'],
             'linked_from'   => ($r['linked_from'] ?? null) === null ? null : (int) $r['linked_from'],
+            'sort_place'    => ($r['sort_place'] ?? null) === null ? null : (int) $r['sort_place'],
         ];
     }
 

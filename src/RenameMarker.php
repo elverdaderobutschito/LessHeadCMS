@@ -127,6 +127,21 @@ final class RenameMarker
         );
     }
 
+    /**
+     * Line without its {renamed_from:…} marker (and the blanks in front of it), everything else unchanged - the counterpart to
+     * appended()/classMarked(). Null if the marker cannot be removed safely: a block comment (/' … '/) on the line, or not
+     * exactly one marker on it (e.g. a second one inside a trailing comment).
+     */
+    public static function without(string $line): ?string
+    {
+        if (strpos($line, "/'") !== false || strpos($line, "'/") !== false
+            || preg_match_all('/[ \t]*\{renamed_from:[^{}]*\}/i', $line, $m, PREG_OFFSET_CAPTURE) !== 1) {
+            return null;
+        }
+        [$marker, $at] = $m[0][0];
+        return substr($line, 0, $at) . substr($line, $at + strlen($marker));
+    }
+
     private static function headPattern(string $class): string
     {
         return '/^\s*(?:abstract\s+)?class\s+' . preg_quote($class, '/') . '(?=[\s{])[^{]*\{/';

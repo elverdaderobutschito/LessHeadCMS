@@ -174,7 +174,66 @@ final class Config
         return $token;
     }
 
-    /** Read config.php (optional): defines BOOTSTRAP_TOKEN and possibly MEDIA_MAX_MB, DATA_DIR, ... */
+    /** Name of the admin UI when config.php sets no BACKEND_TITLE */
+    public const APP_NAME = 'LessHeadCMS';
+    /** Longest BACKEND_TITLE shown (characters); the rest is cut off */
+    public const BACKEND_TITLE_MAX = 60;
+    /** Values of ENVIRONMENT in config.php; anything else counts as the last one (live, no marking) */
+    public const ENVIRONMENTS = ['dev', 'staging', 'live'];
+
+    /**
+     * BACKEND_TITLE from config.php: name of this installation (e.g. the customer) for the browser tab, the login box and
+     * the head of the sidebar. Line breaks and repeated whitespace become one space; null if not set or empty - then the UI
+     * says "LessHeadCMS". Plain text: every place that shows it escapes it.
+     */
+    public static function backendTitle(): ?string
+    {
+        self::loadConfigFile();
+        $title = defined('BACKEND_TITLE') ? constant('BACKEND_TITLE') : null;
+        if (!is_string($title) && !is_int($title) && !is_float($title)) {
+            return null;
+        }
+        $title = (string) $title;
+        if (preg_match('//u', $title) !== 1) {
+            return null; // not UTF-8: would break the JSON of /api/me
+        }
+        $title = trim((string) preg_replace('/[\s\x00-\x1F\x7F]+/u', ' ', $title));
+        if ($title === '') {
+            return null;
+        }
+        return function_exists('mb_substr') ? mb_substr($title, 0, self::BACKEND_TITLE_MAX, 'UTF-8')
+            : (string) preg_replace('/^(.{0,' . self::BACKEND_TITLE_MAX . '}).*$/su', '$1', $title);
+    }
+
+    /**
+     * ENVIRONMENT from config.php: 'dev', 'staging' or 'live' (upper/lower case does not matter). Not set, empty or any
+     * other value = 'live'. Display only (prefix of the tab title, label in the UI) - it switches nothing else.
+     */
+    public static function environment(): string
+    {
+        self::loadConfigFile();
+        $env = defined('ENVIRONMENT') ? constant('ENVIRONMENT') : null;
+        $env = is_string($env) ? strtolower(trim($env)) : '';
+        return in_array($env, self::ENVIRONMENTS, true) ? $env : 'live';
+    }
+
+    /** What the UI needs of config.php before and after the login (GET /api/me): {title: string|null, environment} */
+    public static function app(): array
+    {
+        return ['title' => self::backendTitle(), 'environment' => self::environment()];
+    }
+
+    /**
+     * Title of the HTML page as the server delivers it, before the UI sets the one of the current view:
+     * "[DEV · ]<BACKEND_TITLE or LessHeadCMS>". Plain text - escape it for HTML.
+     */
+    public static function pageTitle(): string
+    {
+        $env = self::environment();
+        return ($env !== 'live' ? strtoupper($env) . ' · ' : '') . (self::backendTitle() ?? self::APP_NAME);
+    }
+
+    /** Read config.php (optional): defines BOOTSTRAP_TOKEN and possibly MEDIA_MAX_MB, DATA_DIR, BACKEND_TITLE, ... */
     private static function loadConfigFile(): void
     {
         $file = self::configFile();

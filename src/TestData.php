@@ -48,6 +48,9 @@ use PDO;
  *
  * Media fields (type media) deliberately stay empty - there are no sensibly invented image/video files. This also
  * applies to required media fields (Cms::create() with $allowEmptyMedia); the result lists them under media_empty.
+ * Exception: a media field with a metadata class (media(Klasse)) gets 1-3 media that already exist in the library, each
+ * with invented metadata (same rules as for fields; required metadata fields are always filled) - so the metadata
+ * can be seen and tried out. With an empty library it stays empty as well (media_empty).
  *
  * Field rules (Validation): the values keep to them - texts are cut or extended to minLength/maxLength (for richtext the
  * plain text counts, so such fields get plain text), numbers and dates lie within min/max. A field with {pattern: x}
@@ -92,6 +95,10 @@ final class TestData
     private $validation;
     /** @var array<string,array> pattern library (Patterns::all()) */
     private $patterns;
+    /** @var int[]|null IDs of the media library (only read when a media field has a metadata class) */
+    private $mediaIds;
+    /** @var array<string,true> "<table>.<field>": media field with a metadata class that got media */
+    private $mediaFilled = [];
 
     /** Generated records call no webhooks (otherwise every global webhook once per record), see Cms::withoutWebhooks() */
     public function __construct(Cms $cms, PDO $pdo, array $model)
@@ -104,7 +111,8 @@ final class TestData
     }
 
     /**
-     * @param array $input {"count": 10} (for all) and/or {"counts": {"<table>": n}} (individually, takes precedence)
+     * @param array $input {"count": 10} (for all) and/or {"counts": {"<table>": n}} (individually, takes precedence),
+     *                     optional {"seed": 123} (integer, for reproducible records)
      * @return array{created: array<string,int>, links: array<string,int>, skipped: array<string,string>,
      *                skipped_codes: object, failed: array<string,string>, failed_codes: object, order: string[],
      *                media_empty: array<string,bool>,
@@ -113,6 +121,11 @@ final class TestData
      */
     public function generate(array $input): array
     {
+        // optional {"seed": n}: same seed, same database, same day -> same records (reproducible test runs, e.g. the
+        // schema fuzzer). Without it the generator is seeded at random as before.
+        if (isset($input['seed']) && is_int($input['seed'])) {
+            mt_srand($input['seed']);
+        }
         $counts = $this->counts($input);
         @set_time_limit(300);
 
@@ -248,6 +261,9 @@ final class TestData
         $mediaEmpty = [];
         foreach ($newIds as $t => $rows) {
             foreach ($rows ? $this->model['entities'][$t]['media'] ?? [] : [] as $m) {
+                if (isset($this->mediaFilled["$t.{$m['name']}"])) {
+                    continue;
+                }
                 $mediaEmpty["$t.{$m['name']}"] = $m['required'];
             }
         }
@@ -427,7 +443,47 @@ final class TestData
             }
             $values[$f['name']] = $this->fieldValue($f, $i, $count);
         }
+        foreach ($this->model['entities'][$table]['media'] ?? [] as $m) {
+            $list = $this->metaMedia($m, $i, $count);
+            if ($list !== null) {
+                $values[$m['name']] = $list;
+                $this->mediaFilled["$table.{$m['name']}"] = true;
+            }
+        }
         return $values;
+    }
+
+    /**
+     * Media field with a metadata class: 1-3 media of the library (a required field at least one), each as
+     * {id, meta} with invented metadata. null = leave the field out (no metadata class, empty library, or a required
+     * metadata field with {pattern} but without a usable example value - no invalid data).
+     */
+    private function metaMedia(array $m, int $i, int $count): ?array
+    {
+        $fields = LinkFields::of($m);
+        if (!$fields) {
+            return null;
+        }
+        if ($this->mediaIds === null) {
+            $this->mediaIds = array_map('intval', $this->pdo->query('SELECT "id" FROM "media" ORDER BY "id"')->fetchAll(PDO::FETCH_COLUMN));
+        }
+        if (!$this->mediaIds) {
+            return null;
+        }
+        $list = [];
+        foreach ($this->sample($this->mediaIds, mt_rand(1, 3)) as $n => $mediaId) {
+            $meta = [];
+            foreach ($fields as $f) {
+                $value = $this->fieldValue($f, $i * 3 + $n, $count * 3);
+                if ($value === null && $f['required']) {
+                    return null;
+                }
+                // optional metadata: every fourth stays empty (like a medium without a caption)
+                $meta[$f['name']] = !$f['required'] && mt_rand(0, 3) === 0 ? null : $value;
+            }
+            $list[] = ['id' => $mediaId, 'meta' => $meta];
+        }
+        return $list;
     }
 
     /** Target rows already referenced by a row of $table via the 1:1 column $column (must not be used again) */

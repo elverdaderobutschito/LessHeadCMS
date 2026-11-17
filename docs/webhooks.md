@@ -81,7 +81,7 @@ Per webhook for all or selected entities:
 | Event | Fires on |
 |---|---|
 | `<entity>.created` | `POST /api/{entity}` (also „Speichern und neu“, inline creation in the form) |
-| `<entity>.updated` | `PUT /api/{entity}/{id}`, restoring a version, and a **workflow transition** (it changes the record) |
+| `<entity>.updated` | `PUT /api/{entity}/{id}`, restoring a version, a **workflow transition** (it changes the record) and **moving a record in its manual order** (`POST /api/{entity}/{id}/move`: one call for each of the two swapped records, the payload additionally has `"reorder": true`) |
 | `<entity>.deleted` | `DELETE /api/{entity}/{id}` |
 
 **One call per webhook and event:** if a transition calls a webhook via `action=webhook:` that would also fire globally on
@@ -134,6 +134,7 @@ Body (keys in this order):
 | `version` | number of the version this event has just created ([Record versions](record-versions.md)) – `1` for `created`. **Missing for `deleted`** |
 | `hash` | SHA-256 of the public view of the record, see below. **Missing for `deleted`** |
 | `cascade_deleted` | only for `deleted` with `{cascade}`: `{"<table>": n}` of the rows deleted along |
+| `reorder` | `true`, only for `updated` caused by moving a record in its manual order (field type `sort`) |
 
 **Why `version` and `hash` are missing for `deleted`:** a deletion creates no version (it removes the record together
 with its versions) and there is no record left to hash. An absent key is unambiguous – `null` or `0` could be mistaken
@@ -152,7 +153,8 @@ Form the hash from the public response like this:
 
 1. remove `_min_warnings` (an editorial hint, not content);
 2. in nested objects (the media objects of media fields) remove `url` and `thumbnail_url` – absolute URLs depend on the
-   host name used for the request; `path` and `thumbnail_path` stay;
+   host name used for the request; `path` and `thumbnail_path` stay; **not** inside `meta` of a medium (`media(Klasse)`,
+   its keys are metadata fields – a field called `url` stays; an empty `meta` stays an object `{}`);
 3. sort the keys of every object (byte/code-unit order), keep lists in their order;
 4. serialize as compact JSON without spaces, UTF-8 and `/` unescaped – exactly what `JSON.stringify()` produces;
 5. `sha256` over these bytes, hex, prefixed with `sha256:`.

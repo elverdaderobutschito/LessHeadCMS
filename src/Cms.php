@@ -192,15 +192,23 @@ final class Cms
             // rule, also for models stored before this option, without the key
             'unique_fields' => array_values(array_diff($e['unique_fields'] ?? [], array_keys($denied))),
         ];
+        // manual order (type sort): the field and the FK columns its groups are formed over - only for entities with a sort
+        // field the caller sees. The UI offers the arrows with it and hides the field itself (form, columns).
+        $sort = Sorting::fieldOf($e);
+        if ($sort !== null && !isset($denied[$sort['name']])) {
+            $schema['sort'] = ['field' => $sort['name'], 'by' => array_values(array_diff($sort['sort']['by'], array_keys($denied))),
+                'shared' => count($sort['sort']['tables']) > 1];
+        }
         // media fields (type media, list of media from the media library) - only for entities that have some; the _schema
         // of all others stays unchanged
         $media = array_values(array_filter($e['media'] ?? [], function ($m) use ($denied) {
             return !isset($denied[$m['name']]);
         }));
         if ($media) {
-            $schema['media'] = array_map(function ($m) {
+            $schema['media'] = array_map(function ($m) use ($denied) {
                 return ['name' => $m['name'], 'type' => 'media', 'required' => $m['required']]
-                    + (array_key_exists('section', $m) ? ['section' => $m['section']] : []);
+                    + (array_key_exists('section', $m) ? ['section' => $m['section']] : [])
+                    + $this->describeMeta($m, $denied);
             }, $media);
         }
         // Display order of all fields, media fields and n:n lists as in the diagram (see PumlParser::finishOrder()); for
@@ -231,6 +239,78 @@ final class Cms
             $schema['system_fields'] = RecordMeta::fields($this->user !== null);
         }
         return $schema;
+    }
+
+    /**
+     * Metadata of a media field for _schema (media(Klasse), see PumlParser::parseMetaClass()): 'meta' => field definitions as
+     * for normal fields (name, type, required, primary, foreign_key, enum_values, rules, section), without denied ones;
+     * 'meta_class' (name of the metadata class) and, if it has form sections, 'meta_sections'. Without a metadata class
+     * nothing - the _schema of such a media field stays exactly as before.
+     */
+    private function describeMeta(array $m, array $denied): array
+    {
+        $fields = LinkFields::of($m);
+        if (!$fields) {
+            return [];
+        }
+        $hidden = self::metaHidden($denied, $m['name']);
+        $meta = [];
+        foreach ($fields as $f) {
+            if (isset($hidden[$f['name']])) {
+                continue;
+            }
+            $field = ['name' => $f['name'], 'type' => $f['type'], 'required' => $f['required'], 'primary' => false, 'foreign_key' => null];
+            if ($f['type'] === 'enum') {
+                $field['enum_values'] = $f['enum_values'];
+            }
+            if (array_key_exists('section', $f)) {
+                $field['section'] = $f['section'];
+            }
+            $rules = $this->validation()->describe($f);
+            if ($rules !== null) {
+                $field['rules'] = $rules;
+            }
+            $meta[] = $field;
+        }
+        $sections = array_values(array_filter($m['meta']['sections'] ?? [], function ($title) use ($meta) {
+            return in_array($title, array_column($meta, 'section'), true);
+        }));
+        return ['meta' => $meta, 'meta_class' => $m['meta']['class']] + ($sections ? ['meta_sections' => $sections] : []);
+    }
+
+    /**
+     * Denied metadata fields of the media field $media: field name => true. Permissions denies a metadata field as the
+     * property "<media field>.meta.<field>" (see Permissions::lockedBy()).
+     */
+    public static function metaHidden(array $denied, string $media): array
+    {
+        $out = [];
+        $prefix = $media . '.meta.';
+        foreach ($denied as $key => $true) {
+            if (strpos((string) $key, $prefix) === 0) {
+                $out[substr((string) $key, strlen($prefix))] = true;
+            }
+        }
+        return $out;
+    }
+
+    /** Row without the properties denied for the caller - also denied metadata fields inside the media lists */
+    private function visible(array $e, array $row, array $denied): array
+    {
+        $row = array_diff_key($row, $denied);
+        foreach ($e['media'] ?? [] as $m) {
+            $hidden = self::metaHidden($denied, $m['name']);
+            if (!$hidden || !isset($row[$m['name']])) {
+                continue;
+            }
+            foreach ($row[$m['name']] as &$medium) {
+                if (isset($medium['meta'])) {
+                    $medium['meta'] = (object) array_diff_key((array) $medium['meta'], $hidden);
+                }
+            }
+            unset($medium);
+        }
+        return $row;
     }
 
     /**
@@ -354,9 +434,9 @@ final class Cms
             }
             $task = Workflows::recordTransition($this->pdo, $e['table'], $id, $t, $this->user);
             $row = $this->fetchRow($e, $id);
-            $version = Revisions::record($this->pdo, $e, $id, $row, 'transition', $this->user, ['reason' => $reason, 'transition' => $t['label']]);
+            $version = Revisions::record($this->pdo, $e, $id, $row, 'transition', $this->user, $this->sortPlace($e, $row, ['reason' => $reason, 'transition' => $t['label']]));
             return [[
-                'record'     => array_diff_key($row, $this->denied($e)),
+                'record'     => $this->visible($e, $row, $this->denied($e)),
                 'transition' => ['label' => $t['label'], 'from' => $t['from'], 'to' => $t['to']],
                 'task'       => $task,
             ], $version];
@@ -556,7 +636,7 @@ final class Cms
             if (isset($denied[$m['name']])) {
                 continue;
             }
-            $map = $this->mediaLists($m, null, $ids);
+            $map = $this->mediaLists($m, null, $ids, self::metaHidden($denied, $m['name']));
             foreach ($rows as &$row) {
                 $row[$m['name']] = $map[$row['id']] ?? [];
             }
@@ -580,8 +660,170 @@ final class Cms
             }
             unset($row);
         }
-        return ['data' => $rows, 'total' => $total, 'page' => $q->page, 'per_page' => $q->perPage,
+        $out = ['data' => $rows, 'total' => $total, 'page' => $q->page, 'per_page' => $q->perPage,
             'total_pages' => (int) ceil($total / $q->perPage)];
+        // ?arrange=1 (list view): what the arrows and group headings of the manual order need - only while that order
+        // applies (no sort parameter) and the caller sees the sort field
+        $sort = Sorting::fieldOf($e);
+        if (!empty($query['arrange']) && $sort !== null && !isset($denied[$sort['name']])) {
+            $out['arrange'] = $q->manual ? $this->arrangement($e, $sort, $q, $from, $out['data']) : null;
+        }
+        return $out;
+    }
+
+    /**
+     * Manual order of a list page: marks every row with '_arrange' => ['group' => key, 'up' => bool, 'down' => bool] (is
+     * there a row of the same group before/after it in the current list - also beyond the edge of the page) and returns
+     * ['groups' => [key => path of the parents, see Sorting::groupPaths()], 'continued' => the first row continues the group
+     * of the previous page].
+     */
+    private function arrangement(array $e, array $sort, ListQuery $q, string $from, array &$rows): array
+    {
+        // the rows of the page plus one before and one after it, with their groups
+        $cols = '';
+        foreach ($sort['sort']['by'] as $col) {
+            $cols .= ', e.' . SqlGenerator::q($col);
+        }
+        $before = $q->offset() > 0 ? 1 : 0;
+        $stmt = $this->pdo->prepare("SELECT e.\"id\"$cols$from ORDER BY {$q->orderBy} LIMIT " . ($q->perPage + 1 + $before)
+            . ' OFFSET ' . ($q->offset() - $before));
+        $stmt->execute($q->params);
+        $window = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $window[] = [(int) $r['id'], Sorting::groupOf($sort, $r)];
+        }
+        $index = [];
+        foreach ($window as $i => [$id]) {
+            $index[$id] = $i;
+        }
+        $groups = [];
+        $continued = false;
+        foreach ($rows as $n => &$row) {
+            $i = $index[$row['id']] ?? null;
+            if ($i === null) {
+                $row['_arrange'] = ['group' => '', 'up' => false, 'down' => false];
+                continue;
+            }
+            $group = $window[$i][1];
+            $key = Sorting::key($group);
+            $groups[$key] = $group;
+            $up = isset($window[$i - 1]) && $window[$i - 1][1] === $group;
+            $row['_arrange'] = ['group' => $key, 'up' => $up, 'down' => isset($window[$i + 1]) && $window[$i + 1][1] === $group];
+            if ($n === 0 && $up) {
+                $continued = true;
+            }
+        }
+        unset($row);
+        return ['groups' => (object) Sorting::groupPaths($this->pdo, $e, $sort, array_values($groups)), 'continued' => $continued];
+    }
+
+    /**
+     * POST /api/{entity}/{id}/move {"direction": "up"|"down", ...}: move a record one place in its manual order (sort
+     * field) by swapping the values with its neighbour. The neighbour is determined here, not by the client: the next
+     * record of the same group (and of the same class - with a shared order of several subclasses the records of the other
+     * classes keep their places) in that direction which meets the list filters sent along (filter, eq, q, followup as for
+     * GET /api/{entity}) - so with a filter the record swaps with the next one the list shows.
+     *
+     * A move is a change of both records: tracking metadata, a version each (action reorder; consecutive moves are one
+     * entry, see Revisions) and the webhooks as for saving. 409 at the edge of the group, 404 without a sort field.
+     *
+     * @return array{record:array,swapped_with:int}
+     */
+    public function move(string $table, int $id, array $input): array
+    {
+        $e = $this->entity($table);
+        $sort = Sorting::fieldOf($e);
+        if ($sort === null) {
+            throw ApiException::of(404, 'no_sort', Msg::of('msg_records.no_sort', "'{entity}' has no manual order (no field of the "
+                . 'type sort)', ['entity' => $e['name']]));
+        }
+        $this->requireAction($e, 'update');
+        $denied = $this->denied($e);
+        if (isset($denied[$sort['name']])) {
+            throw ApiException::of(403, 'forbidden', Msg::of('msg_records.update_forbidden', "No permission to edit in '{entity}'", [
+                'entity' => $e['name'],
+            ]), ['action' => 'update']);
+        }
+        $direction = $input['direction'] ?? null;
+        if ($direction !== 'up' && $direction !== 'down') {
+            throw ApiException::of(422, 'validation', Msg::of('msg_records.direction_missing', 'Direction missing'), ApiException::fields([
+                'direction' => Msg::of('msg_records.direction_expected', 'up or down expected'),
+            ]));
+        }
+        $query = array_intersect_key($input, array_flip(['filter', 'eq', 'q', 'followup']));
+        $conditions = [];
+        $followup = Followups::listCondition($this->pdo, $this->user, $e['table'], $query['followup'] ?? null);
+        if ($followup !== null) {
+            $conditions[] = $followup;
+        }
+        $hidden = $this->user === null ? array_fill_keys(RecordMeta::USER_FIELDS, true) : [];
+        $q = new ListQuery($this->model, $e, $denied + $hidden, $query, $conditions, function (string $other): ?array {
+            return $this->access !== null && $this->access->entityDenied($other) ? null : $this->denied($this->model['entities'][$other]);
+        });
+        $current = $this->fetchRow($e, $id);
+        if ($current === null) {
+            throw ApiException::of(404, 'not_found', Msg::of('msg_api.record_not_found', 'Record not found'));
+        }
+        $up = $direction === 'up';
+        $result = $this->transaction(function () use ($e, $sort, $id, $up, $q, $denied) {
+            $name = $sort['name'];
+            $own = $this->rawRow($e, $id);
+            $other = Sorting::neighbour($this->pdo, $e, $sort, $own, $up, $q->where, $q->params);
+            if ($other !== null && $other[1] === (int) $own[$name]) {
+                // equal values (rows written past the CMS): number the group first, then look again
+                Sorting::renumber($this->pdo, $this->model, $sort, Sorting::groupOf($sort, $own));
+                $own = $this->rawRow($e, $id);
+                $other = Sorting::neighbour($this->pdo, $e, $sort, $own, $up, $q->where, $q->params);
+            }
+            if ($other === null) {
+                throw ApiException::of(409, 'edge', $up
+                    ? Msg::of('msg_records.move_first', 'The record is already the first of its group.')
+                    : Msg::of('msg_records.move_last', 'The record is already the last of its group.'));
+            }
+            $versions = [];
+            foreach ([[$id, $other[1]], [$other[0], (int) $own[$name]]] as [$rowId, $value]) {
+                $set = [$name => $value] + (RecordMeta::applies($e) ? RecordMeta::updateValues($this->user) : []);
+                $sql = implode(', ', array_map(function ($c) {
+                    return SqlGenerator::q($c) . ' = ?';
+                }, array_keys($set)));
+                $this->pdo->prepare('UPDATE ' . SqlGenerator::q($e['table']) . " SET $sql WHERE \"id\" = ?")
+                    ->execute(array_merge(array_values($set), [$rowId]));
+            }
+            // versions only after both rows have their new values: the place stored with them counts the group as it is now
+            foreach ([$id, $other[0]] as $rowId) {
+                $row = $this->fetchRow($e, $rowId);
+                $versions[$rowId] = Revisions::record($this->pdo, $e, $rowId, $row, 'reorder', $this->user, $this->sortPlace($e, $row));
+            }
+            return [['record' => $this->visible($e, $this->fetchRow($e, $id), $denied), 'swapped_with' => $other[0]], $versions];
+        });
+        foreach ($result[1] as $rowId => $version) {
+            $this->fireWebhooks($e, (int) $rowId, 'updated', $version, null, ['reorder' => true]);
+        }
+        return $result[0];
+    }
+
+    /** Stored columns of a row as they are (no lists, no presentation); the row exists */
+    /**
+     * $extra of Revisions::record() plus, for an entity with a sort field, the place of the record in its group right now
+     *
+     * @param array $row the record after the change (fetchRow)
+     */
+    private function sortPlace(array $e, array $row, array $extra = []): array
+    {
+        $sort = Sorting::fieldOf($e);
+        return $sort === null ? $extra : $extra + ['sort_place' => Sorting::place($this->pdo, $this->model, $sort, $row)];
+    }
+
+    private function rawRow(array $e, int $id): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM ' . SqlGenerator::q($e['table']) . ' WHERE "id" = ?');
+        $stmt->execute([$id]);
+        $row = $stmt->fetch();
+        $stmt->closeCursor();
+        if ($row === false) {
+            throw ApiException::of(404, 'not_found', Msg::of('msg_api.record_not_found', 'Record not found'));
+        }
+        return $row;
     }
 
     public function find(string $table, int $id): array
@@ -591,7 +833,7 @@ final class Cms
         if ($row === null) {
             throw ApiException::of(404, 'not_found', Msg::of('msg_api.record_not_found', 'Record not found'));
         }
-        return array_diff_key($row, $this->denied($e));
+        return $this->visible($e, $row, $this->denied($e));
     }
 
     // ---------------------------------------------------------------- Writing
@@ -614,8 +856,9 @@ final class Cms
         $errors = [];
         $values = $this->collectValues($e, $input, true, $errors);
         $links = $this->collectLinks($e, $input, $errors);
-        $media = $this->collectMedia($e, $input, !$allowEmptyMedia, $errors);
-        $violations = $this->validation()->violations($e, $values, $errors);
+        $mediaViolations = [];
+        $media = $this->collectMedia($e, $input, !$allowEmptyMedia, $errors, null, $denied, $mediaViolations);
+        $violations = array_merge($this->validation()->violations($e, $values, $errors), $mediaViolations);
         if ($errors || $violations) {
             throw Validation::failure($errors, $violations);
         }
@@ -624,6 +867,11 @@ final class Cms
         [$row, $id, $version] = $this->transaction(function () use ($e, $values, $links, $media, $denied, $reason) {
             // tracking metadata: set by the system only (values sent along are not even read, see collectValues())
             $row = $values + (RecordMeta::applies($e) ? RecordMeta::createValues($this->user) : []);
+            // manual order: a new record (also a duplicate) goes to the end of its group
+            $sort = Sorting::fieldOf($e);
+            if ($sort !== null) {
+                $row[$sort['name']] = Sorting::next($this->pdo, $this->model, $sort, Sorting::groupOf($sort, $values));
+            }
             if ($row) {
                 $cols = implode(', ', array_map([SqlGenerator::class, 'q'], array_keys($row)));
                 $marks = implode(', ', array_fill(0, count($row), '?'));
@@ -636,9 +884,9 @@ final class Cms
             $this->syncLinks($e, $id, $links);
             $this->syncMedia($e, $id, $media);
             $row = $this->fetchRow($e, $id);
-            $version = Revisions::record($this->pdo, $e, $id, $row, 'create', $this->user, ['reason' => $reason]); // version 1
+            $version = Revisions::record($this->pdo, $e, $id, $row, 'create', $this->user, $this->sortPlace($e, $row, ['reason' => $reason])); // version 1
             $this->recordSymmetricPartners($e, $id, null, $row);
-            return [array_diff_key($row, $denied), $id, $version];
+            return [$this->visible($e, $row, $denied), $id, $version];
         }, $e, $values);
         $this->fireWebhooks($e, $id, 'created', $version);
         return $row;
@@ -677,11 +925,12 @@ final class Cms
         }
         $values = $this->collectValues($e, $input, false, $errors);
         $links = $this->collectLinks($e, $input, $errors);
-        $media = $this->collectMedia($e, $input, false, $errors);
+        $mediaViolations = [];
+        $media = $this->collectMedia($e, $input, false, $errors, $id, $denied, $mediaViolations);
         $errors += $this->selfLinkErrors($e, $id, $links);
         $this->rejectCycles($e, $id, $values, $errors);
         // field rules against the complete record (stored state + change), see Validation
-        $violations = $this->validation()->violations($e, $values + $current, $errors + $denied);
+        $violations = array_merge($this->validation()->violations($e, $values + $current, $errors + $denied), $mediaViolations);
         if ($errors || $violations) {
             throw Validation::failure($errors, $violations);
         }
@@ -691,6 +940,14 @@ final class Cms
         $result = $this->transaction(function () use ($e, $id, $values, $links, $media, $denied, $action, $extra, $current) {
             // every save counts as a change (also with only n:n/media or unchanged values): updated_at/by
             $row = $values + (RecordMeta::applies($e) ? RecordMeta::updateValues($this->user) : []);
+            // manual order: a record that changes its group (another parent) goes to the end of the new group
+            $sort = Sorting::fieldOf($e);
+            if ($sort !== null) {
+                $group = Sorting::groupOf($sort, $values + $current);
+                if ($group !== Sorting::groupOf($sort, $current)) {
+                    $row[$sort['name']] = Sorting::next($this->pdo, $this->model, $sort, $group);
+                }
+            }
             if ($row) {
                 $set = implode(', ', array_map(function ($c) {
                     return SqlGenerator::q($c) . ' = ?';
@@ -701,9 +958,9 @@ final class Cms
             $this->syncLinks($e, $id, $links);
             $this->syncMedia($e, $id, $media);
             $row = $this->fetchRow($e, $id);
-            $version = Revisions::record($this->pdo, $e, $id, $row, $action, $this->user, $extra);
+            $version = Revisions::record($this->pdo, $e, $id, $row, $action, $this->user, $this->sortPlace($e, $row, $extra));
             $this->recordSymmetricPartners($e, $id, $current, $row);
-            return [array_diff_key($row, $denied), $version];
+            return [$this->visible($e, $row, $denied), $version];
         }, $e, $values + $current);
         $this->fireWebhooks($e, $id, 'updated', $result[1]); // PUT and restore
         return $result;
@@ -722,7 +979,50 @@ final class Cms
         if ($row === null) {
             throw ApiException::of(404, 'not_found', Msg::of('msg_api.record_not_found', 'Record not found'));
         }
-        return ['violations' => $this->validation()->violations($e, $row, $this->denied($e))];
+        $denied = $this->denied($e);
+        $violations = $this->validation()->violations($e, $row, $denied);
+        foreach ($e['media'] ?? [] as $m) {
+            if (!isset($denied[$m['name']])) {
+                $violations = array_merge($violations, $this->metaViolations($m, $id, $denied)[$id] ?? []);
+            }
+        }
+        return ['violations' => $violations];
+    }
+
+    /**
+     * Rule violations of the stored metadata of a media field (media(Klasse)) - per record, field
+     * "<media field>[<position>].meta.<field>", the message naming the medium. Only fields with rules, without denied ones.
+     *
+     * @param int|null $id only this record; null = all
+     * @return array<int,array[]> record ID => violations (Validation format)
+     */
+    private function metaViolations(array $m, ?int $id, array $denied): array
+    {
+        $hidden = self::metaHidden($denied, $m['name']);
+        $ruled = array_values(array_filter(LinkFields::of($m), function ($f) use ($hidden) {
+            return !empty($f['rules']) && !isset($hidden[$f['name']]);
+        }));
+        if (!$ruled) {
+            return [];
+        }
+        $own = SqlGenerator::q($m['own_column']);
+        $stmt = $this->pdo->prepare("SELECT $own AS own_id, \"media_id\"" . LinkFields::selectList($ruled, 'j') . ' FROM '
+            . SqlGenerator::q($m['junction']) . ' j' . ($id !== null ? " WHERE $own = ?" : '') . " ORDER BY $own, \"position\"");
+        $stmt->execute($id !== null ? [$id] : []);
+        $out = [];
+        $pos = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $rid = (int) $r['own_id'];
+            $p = $pos[$rid] = isset($pos[$rid]) ? $pos[$rid] + 1 : 0;
+            $mediaId = (int) $r['media_id'];
+            $label = function (Msg $error) use ($mediaId): Msg {
+                return Msg::of('msg_records.media_meta_error', 'Medium #{id}: {error}', ['id' => $mediaId, 'error' => $error]);
+            };
+            foreach ($this->validation()->violations(['fields' => $ruled], LinkFields::read($ruled, $r)) as $v) {
+                $out[$rid][] = LinkFields::labelled($v, $m['name'], $p, $label);
+            }
+        }
+        return $out;
     }
 
     /**
@@ -744,7 +1044,16 @@ final class Cms
             $ruled = array_values(array_filter($e['fields'], function ($f) use ($denied) {
                 return !empty($f['rules']) && !isset($denied[$f['name']]);
             }));
-            if (!$ruled) {
+            // metadata of media fields (media(Klasse)): violations per record, reported after its own fields
+            $metaFound = [];
+            foreach ($e['media'] ?? [] as $m) {
+                if (!isset($denied[$m['name']])) {
+                    foreach ($this->metaViolations($m, null, $denied) as $rid => $list) {
+                        $metaFound[$rid] = array_merge($metaFound[$rid] ?? [], $list);
+                    }
+                }
+            }
+            if (!$ruled && !$metaFound) {
                 continue;
             }
             $title = $this->visibleTitle($e);
@@ -755,7 +1064,8 @@ final class Cms
             while (($row = $stmt->fetch()) !== false) {
                 $checked[$table]++;
                 $row = $this->castRow($e, $row);
-                $found = $this->validation()->violations(['fields' => $ruled], $row);
+                $found = array_merge($ruled ? $this->validation()->violations(['fields' => $ruled], $row) : [],
+                    $metaFound[(int) $row['id']] ?? []);
                 $total += count($found);
                 foreach ($found as $v) {
                     if (count($out) >= $limit) {
@@ -790,19 +1100,33 @@ final class Cms
     public function revisions(string $table, int $id): array
     {
         $e = $this->historyEntity($table, $id);
-        return ['versions' => Revisions::all($this->pdo, $e['table'], $id, $this->denied($e))];
+        $denied = $this->denied($e);
+        return ['versions' => array_map(function (array $v) use ($e, $denied) {
+            return $this->hidePlace($e, $v, $denied);
+        }, Revisions::all($this->pdo, $e['table'], $id, $denied))];
+    }
+
+    /** sort_place of a version only for whoever may see the sort field (and only while the entity has one) */
+    private function hidePlace(array $e, array $version, array $denied): array
+    {
+        $sort = Sorting::fieldOf($e);
+        if ($sort === null || isset($denied[$sort['name']])) {
+            $version['sort_place'] = null;
+        }
+        return $version;
     }
 
     /** GET /api/{entity}/{id}/revisions/{version}: one version with its snapshot (rights as revisions()) */
     public function revision(string $table, int $id, int $version): array
     {
         $e = $this->historyEntity($table, $id);
-        $rev = Revisions::one($this->pdo, $e['table'], $id, $version, $this->denied($e));
+        $denied = $this->denied($e);
+        $rev = Revisions::one($this->pdo, $e['table'], $id, $version, $denied);
         if ($rev === null) {
             throw ApiException::of(404, 'revision_not_found', Msg::of('msg_records.revision_not_found', 'Version {version} does not exist '
                 . '(any more)', ['version' => $version]));
         }
-        return $rev;
+        return $this->hidePlace($e, $rev, $denied);
     }
 
     /**
@@ -871,11 +1195,19 @@ final class Cms
             if (!array_key_exists($m['name'], $snapshot) || isset($denied[$m['name']])) {
                 continue;
             }
-            $ids = array_map('intval', (array) $snapshot[$m['name']]);
+            // media(Klasse): the snapshot holds {id, meta} - metadata are taken over for the fields the current metadata class
+            // still has (denied ones are discarded by collectMedia()); a snapshot without metadata keeps the current ones
+            $fields = array_column(LinkFields::of($m), 'name');
+            $items = [];
+            foreach ((array) $snapshot[$m['name']] as $medium) {
+                $mediumId = (int) (is_array($medium) ? ($medium['id'] ?? 0) : $medium);
+                $metaValues = is_array($medium) && is_array($medium['meta'] ?? null) ? $medium['meta'] : null;
+                $items[$mediumId] = $fields && $metaValues !== null
+                    ? ['id' => $mediumId, 'meta' => array_intersect_key($metaValues, array_flip($fields))] : $mediumId;
+            }
+            $ids = array_keys($items);
             $exist = $this->fetchIds('media', 'id', $ids);
-            $data[$m['name']] = array_values(array_filter($ids, function ($v) use ($exist) {
-                return in_array($v, $exist, true);
-            }));
+            $data[$m['name']] = array_values(array_intersect_key($items, array_flip($exist)));
             if ($gone = array_values(array_diff($ids, $exist))) {
                 $skipped[] = ['field' => $m['name']] + Msg::of('msg_records.skip_media_gone', 'Medium {ids} no longer exists.', [
                     'ids' => '#' . implode(', #', $gone),
@@ -887,8 +1219,19 @@ final class Cms
         try {
             [$row, $new] = $this->updateRecord($e, $id, $data, 'restore', $extra);
         } catch (ApiException $ex) {
-            $bad = $ex->status === 422 ? array_intersect_key($ex->payload['errors'] ?? [], $data) : [];
+            $all = $ex->status === 422 ? (array) ($ex->payload['errors'] ?? []) : [];
+            $bad = array_intersect_key($all, $data);
             unset($bad[Revisions::REASON_KEY]);
+            // a metadata value the current schema rejects ("bilder[2].meta.caption"): the media list stays, its metadata
+            // are not taken over (the current ones stay) - reported under that key
+            foreach ($all as $key => $message) {
+                if (preg_match('/^(\w+)\[\d+\]\.meta/', (string) $key, $hit) && isset($data[$hit[1]]) && !isset($bad[$hit[1]])) {
+                    $bad[$key] = $message;
+                    $data[$hit[1]] = array_map(function ($medium) {
+                        return is_array($medium) ? $medium['id'] : $medium;
+                    }, $data[$hit[1]]);
+                }
+            }
             if (!$bad) {
                 throw $ex;
             }
@@ -924,7 +1267,7 @@ final class Cms
         foreach (array_keys($partners) as $partner) {
             $row = $this->fetchRow($e, (int) $partner);
             if ($row !== null) {
-                Revisions::record($this->pdo, $e, (int) $partner, $row, 'link', $this->user, ['linked_from' => $id]);
+                Revisions::record($this->pdo, $e, (int) $partner, $row, 'link', $this->user, $this->sortPlace($e, $row, ['linked_from' => $id]));
             }
         }
     }
@@ -1370,25 +1713,33 @@ final class Cms
      * Linked media of a media field in list order (position), as public media objects (Media::present,
      * among others with url) - a consuming frontend therefore needs no access to the (authenticated) media library API.
      *
+     * media(Klasse): every media object additionally gets 'meta' (values of this link, see LinkFields) - a key of its own
+     * instead of being mixed into the media object, so a metadata field "title" never collides with the global title.
+     *
      * @param int|null $id only this row; null = all
      * @param int[]|null $ids only these rows (list page); null = no restriction
+     * @param array<string,true> $hidden denied metadata fields (see metaHidden())
      * @return array<int,array[]> row ID => media
      */
-    private function mediaLists(array $m, ?int $id, ?array $ids = null): array
+    private function mediaLists(array $m, ?int $id, ?array $ids = null, array $hidden = []): array
     {
         if ($ids === []) {
             return [];
         }
         $own = SqlGenerator::q($m['own_column']);
+        $meta = LinkFields::of($m);
         $stmt = $this->pdo->prepare(
-            "SELECT j.$own AS own_id, md.* FROM " . SqlGenerator::q($m['junction']) . ' j JOIN "media" md ON md."id" = j."media_id"'
+            "SELECT j.$own AS own_id" . LinkFields::selectList($meta, 'j') . ', md.* FROM ' . SqlGenerator::q($m['junction'])
+            . ' j JOIN "media" md ON md."id" = j."media_id"'
             . ($id !== null ? " WHERE j.$own = ?" : ($ids !== null ? " WHERE j.$own IN (" . implode(', ', array_map('intval', $ids)) . ')' : ''))
             . " ORDER BY j.$own, j.\"position\""
         );
         $stmt->execute($id !== null ? [$id] : []);
         $map = [];
         foreach ($stmt->fetchAll() as $r) {
-            $map[(int) $r['own_id']][] = Media::present($r);
+            // uploaded_at: for the admin UI only (preview dialog of the list); the public API stays as it is
+            $map[(int) $r['own_id']][] = Media::present($r) + ($this->user !== null ? ['uploaded_at' => $r['uploaded_at']] : [])
+                + ($meta ? ['meta' => (object) LinkFields::read($meta, $r, $hidden)] : []);
         }
         return $map;
     }
@@ -1535,7 +1886,7 @@ final class Cms
             if (!array_key_exists($name, $row) || $row[$name] === null) {
                 continue;
             }
-            if ($f['type'] === 'int') {
+            if ($f['type'] === 'int' || $f['type'] === 'sort') {
                 $row[$name] = (int) $row[$name];
             } elseif ($f['type'] === 'decimal') {
                 $row[$name] = (float) $row[$name];
@@ -1555,6 +1906,9 @@ final class Cms
                 continue;
             }
             $name = $f['name'];
+            if ($f['type'] === 'sort') {
+                continue; // manual order: set by the system only (create(), move()); a value sent along is not even read
+            }
             if (!array_key_exists($name, $input)) {
                 if ($creating && $f['required'] && $f['type'] === 'visibility') {
                     $values[$name] = 0; // default value: draft
@@ -1611,10 +1965,22 @@ final class Cms
      * IDs count once (first position). Required field (without "?"): at least one medium; when creating it must then
      * be sent along ($requireOnCreate), when editing (PUT, partial) only if the key is in the body.
      *
-     * @return array<string,int[]> field name => media IDs (only those present in the body)
+     * media(Klasse) (metadata per link, see LinkFields): an entry can also be {"id": 7, "meta": {...}}. A pure ID (or an
+     * object without "meta") keeps the stored metadata of a medium already linked to this record ($id) - a newly linked
+     * one starts empty (NULL). With "meta" only the keys sent change. The metadata of the complete list is checked like
+     * record fields (type, required, rules); messages under "<field>[<position>].meta.<metadata field>", naming the medium.
+     * Errors: an object without "id", "meta" that is not an object, unknown metadata fields, "meta" on a media field
+     * without a metadata class. Denied metadata fields ($denied, "<field>.meta.<x>") are discarded silently. For a
+     * duplicate ID the first occurrence counts, its metadata too.
+     *
+     * @param int|null $id record being edited (null = new): whose stored metadata stay
+     * @param array $violations rule violations of the metadata are added (Validation format)
+     * @return array<string,array{ids:int[],meta:array<int,array>}> field name => media IDs and, per ID, the metadata to
+     *         store (only fields present in the body; 'meta' empty without a metadata class)
      */
-    private function collectMedia(array $e, array $input, bool $requireOnCreate, array &$errors): array
-    {
+    private function collectMedia(
+        array $e, array $input, bool $requireOnCreate, array &$errors, ?int $id = null, array $denied = [], array &$violations = []
+    ): array {
         $lists = [];
         foreach ($e['media'] ?? [] as $m) {
             $name = $m['name'];
@@ -1629,14 +1995,51 @@ final class Cms
                 $errors[$name] = Msg::of('msg_records.media_ids_expected', 'List of media IDs expected');
                 continue;
             }
+            $fields = LinkFields::of($m);
             $ids = [];
-            foreach ($items as $item) {
+            $sent = []; // media ID => sent metadata (first occurrence)
+            $positions = []; // media ID => position in the body (for messages)
+            $bad = false;
+            foreach ($items as $pos => $item) {
                 $v = is_array($item) ? ($item['id'] ?? null) : $item;
                 if (!is_int($v) && !(is_string($v) && preg_match('/^\d+$/', $v))) {
-                    $errors[$name] = Msg::of('msg_records.media_ids_expected', 'List of media IDs expected');
+                    if ($fields && is_array($item) && !array_key_exists('id', $item)) {
+                        $errors[$name] = Msg::of('msg_records.media_object_id', "Entry {position} is an object without 'id' (expected: a "
+                            . 'media ID or {"id": 7, "meta": {...}})', ['position' => $pos]);
+                    } else {
+                        $errors[$name] = Msg::of('msg_records.media_ids_expected', 'List of media IDs expected');
+                    }
                     continue 2;
                 }
-                $ids[(int) $v] = true;
+                $v = (int) $v;
+                if (is_array($item) && array_key_exists('meta', $item)) {
+                    if (!$fields) {
+                        $errors[LinkFields::path($name, $pos)] = Msg::of('msg_records.media_no_meta', "The media field '{field}' has no "
+                            . "metadata class - 'meta' is not possible here.", ['field' => $name]);
+                        $bad = true;
+                    } elseif (!is_array($item['meta']) || ($item['meta'] && array_keys($item['meta']) === range(0, count($item['meta']) - 1))) {
+                        $errors[LinkFields::path($name, $pos)] = Msg::of('msg_records.media_meta_object', "Medium #{id}: 'meta' must be an "
+                            . 'object {field: value}.', ['id' => $v]);
+                        $bad = true;
+                    } else {
+                        // the same medium more than once: non-contradictory metadata are merged, the same key with a
+                        // different value is a contradiction (422 at the later entry)
+                        $conflict = isset($sent[$v]) ? self::metaConflict($sent[$v], $item['meta']) : null;
+                        if ($conflict !== null) {
+                            $errors["{$name}[{$pos}]"] = Msg::of('msg_records.media_meta_conflict', 'Medium #{id} occurs more than once '
+                                . "with different metadata ('{field}': entry {first} and {position}). Please send it only once.", [
+                                    'id' => $v, 'field' => $conflict, 'first' => $positions[$v], 'position' => $pos,
+                                ]);
+                            $bad = true;
+                        } else {
+                            $sent[$v] = ($sent[$v] ?? []) + $item['meta'];
+                        }
+                    }
+                }
+                if (!isset($ids[$v])) {
+                    $ids[$v] = true;
+                    $positions[$v] = $pos;
+                }
             }
             $ids = array_keys($ids);
             if (!$ids && $m['required']) {
@@ -1655,12 +2058,67 @@ final class Cms
                     continue;
                 }
             }
-            $lists[$name] = $ids;
+            if ($bad) {
+                continue;
+            }
+            $meta = [];
+            if ($fields) {
+                $stored = $id !== null ? $this->storedMeta($m, $id) : [];
+                $hidden = self::metaHidden($denied, $name);
+                foreach ($ids as $mediaId) {
+                    $label = function (Msg $error) use ($mediaId): Msg {
+                        return Msg::of('msg_records.media_meta_error', 'Medium #{id}: {error}', ['id' => $mediaId, 'error' => $error]);
+                    };
+                    $meta[$mediaId] = LinkFields::apply($fields, $stored[$mediaId] ?? [], $sent[$mediaId] ?? [], $hidden, $name,
+                        $positions[$mediaId], $label, $this->validation(), $errors, $violations);
+                }
+            }
+            $lists[$name] = ['ids' => $ids, 'meta' => $meta];
         }
         return $lists;
     }
 
-    /** Replaces the media list per field sent along (position = order in the body). */
+    /**
+     * First key that two metadata objects sent for the same medium give different values (null = no contradiction).
+     * Compared as sent; numbers by value (7 and 7.0 are the same).
+     */
+    private static function metaConflict(array $a, array $b): ?string
+    {
+        foreach ($b as $key => $value) {
+            if (!array_key_exists($key, $a)) {
+                continue;
+            }
+            $old = $a[$key];
+            $same = (is_int($old) || is_float($old)) && (is_int($value) || is_float($value)) ? (float) $old === (float) $value : $old === $value;
+            if (!$same) {
+                return (string) $key;
+            }
+        }
+        return null;
+    }
+
+    /** Stored metadata of the links of record $id in a media field: media ID => field => value (storage form) */
+    private function storedMeta(array $m, int $id): array
+    {
+        $fields = LinkFields::of($m);
+        $cols = implode(', ', array_map(function ($f) {
+            return SqlGenerator::q($f['name']);
+        }, $fields));
+        $stmt = $this->pdo->prepare("SELECT \"media_id\", $cols FROM " . SqlGenerator::q($m['junction']) . ' WHERE '
+            . SqlGenerator::q($m['own_column']) . ' = ?');
+        $stmt->execute([$id]);
+        $out = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $values = [];
+            foreach ($fields as $f) {
+                $values[$f['name']] = LinkFields::stored($f, LinkFields::cast($f, $r[$f['name']]));
+            }
+            $out[(int) $r['media_id']] = $values;
+        }
+        return $out;
+    }
+
+    /** Replaces the media list per field sent along (position = order in the body), with the metadata of every link. */
     private function syncMedia(array $e, int $id, array $lists): void
     {
         foreach ($e['media'] ?? [] as $m) {
@@ -1669,10 +2127,20 @@ final class Cms
             }
             $junction = SqlGenerator::q($m['junction']);
             $own = SqlGenerator::q($m['own_column']);
+            $fields = LinkFields::of($m);
             $this->pdo->prepare("DELETE FROM $junction WHERE $own = ?")->execute([$id]);
-            $ins = $this->pdo->prepare("INSERT INTO $junction ($own, \"media_id\", \"position\") VALUES (?, ?, ?)");
-            foreach ($lists[$m['name']] as $pos => $mediaId) {
-                $ins->execute([$id, $mediaId, $pos]);
+            $cols = '';
+            foreach ($fields as $f) {
+                $cols .= ', ' . SqlGenerator::q($f['name']);
+            }
+            $ins = $this->pdo->prepare("INSERT INTO $junction ($own, \"media_id\", \"position\"$cols) VALUES (?, ?, ?"
+                . str_repeat(', ?', count($fields)) . ')');
+            foreach ($lists[$m['name']]['ids'] as $pos => $mediaId) {
+                $values = [$id, $mediaId, $pos];
+                foreach ($fields as $f) {
+                    $values[] = $lists[$m['name']]['meta'][$mediaId][$f['name']] ?? null;
+                }
+                $ins->execute($values);
             }
         }
     }
@@ -1739,6 +2207,7 @@ final class Cms
         }
         switch ($f['type']) {
             case 'int':
+            case 'sort': // only the schema migration converts values into a sort field (int -> sort)
                 if (is_int($value) || (is_string($value) && preg_match('/^-?\d+$/', trim($value)))) {
                     return (int) $value;
                 }
