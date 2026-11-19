@@ -1166,6 +1166,25 @@ Flight::route('GET /api/@entity/@id:[0-9]+', function ($entity, $id) {
     });
 });
 
+// Teile einer Komposition (`Seite *-- "n" TextBlock : auf`) in ihrer Reihenfolge, bei einer gemeinsamen Reihenfolge mehrerer
+// Teilklassen gemischt, je Eintrag mit "entity" (Cms::parts()). @name = Name aus _schema.compositions (normalisiertes Label)
+// oder das Label. ?expand=1: vollständige Datensätze inkl. Medien. Lesbarkeit wie bei den einzelnen Entitäten: das Ganze als
+// Entwurf ohne Session -> 404, Teile als Entwurf nur mit ?include_drafts=true und Session.
+Flight::route('GET /api/@entity/@id:[0-9]+/parts/@name', function ($entity, $id, $name) {
+    Http::api(function (Cms $cms, PDO $pdo) use ($entity, $id, $name) {
+        $row = $cms->find($entity, (int) $id);
+        if ($cms->isDraft($entity, $row) && !Auth::canSeeDrafts($pdo)) {
+            throw ApiException::of(404, 'not_found', Msg::of('msg_api.record_not_found', 'Record not found'));
+        }
+        $drafts = false;
+        if (Http::flag('include_drafts')) {
+            Auth::requireSession($pdo);
+            $drafts = true;
+        }
+        return [200, $cms->parts($entity, (int) $id, rawurldecode((string) $name), Http::flag('expand'), $drafts)];
+    });
+});
+
 // PUT und PATCH sind gleich: beide teilweise (nicht mitgeschickte Felder behalten ihren Wert), geprüft wird der zusammengeführte
 // Datensatz (Feldregeln, siehe Validation) - 422 mit errors und violations
 foreach (['PUT', 'PATCH'] as $method) {

@@ -11,22 +11,22 @@ class ComposerStaticInit857cf5dbd548f21ded1bf0f285ece630
     );
 
     public static $prefixLengthsPsr4 = array (
-        'f' => 
+        'f' =>
         array (
             'flight\\' => 7,
         ),
-        'L' => 
+        'L' =>
         array (
             'LessHeadCMS\\' => 12,
         ),
     );
 
     public static $prefixDirsPsr4 = array (
-        'flight\\' => 
+        'flight\\' =>
         array (
             0 => __DIR__ . '/..' . '/mikecao/flight/flight',
         ),
-        'LessHeadCMS\\' => 
+        'LessHeadCMS\\' =>
         array (
             0 => __DIR__ . '/../..' . '/src',
         ),
@@ -43,6 +43,7 @@ class ComposerStaticInit857cf5dbd548f21ded1bf0f285ece630
         'LessHeadCMS\\BuiltinTexts' => __DIR__ . '/../..' . '/src/BuiltinTexts.php',
         'LessHeadCMS\\Cms' => __DIR__ . '/../..' . '/src/Cms.php',
         'LessHeadCMS\\ColumnPrefs' => __DIR__ . '/../..' . '/src/ColumnPrefs.php',
+        'LessHeadCMS\\Compositions' => __DIR__ . '/../..' . '/src/Compositions.php',
         'LessHeadCMS\\Config' => __DIR__ . '/../..' . '/src/Config.php',
         'LessHeadCMS\\DataDir' => __DIR__ . '/../..' . '/src/DataDir.php',
         'LessHeadCMS\\DataDirTestAbort' => __DIR__ . '/../..' . '/src/DataDirTestAbort.php',
@@ -72,6 +73,7 @@ class ComposerStaticInit857cf5dbd548f21ded1bf0f285ece630
         'LessHeadCMS\\SchemaIndexes' => __DIR__ . '/../..' . '/src/SchemaIndexes.php',
         'LessHeadCMS\\SchemaMigration' => __DIR__ . '/../..' . '/src/SchemaMigration.php',
         'LessHeadCMS\\Settings' => __DIR__ . '/../..' . '/src/Settings.php',
+        'LessHeadCMS\\Sorting' => __DIR__ . '/../..' . '/src/Sorting.php',
         'LessHeadCMS\\SqlGenerator' => __DIR__ . '/../..' . '/src/SqlGenerator.php',
         'LessHeadCMS\\TestData' => __DIR__ . '/../..' . '/src/TestData.php',
         'LessHeadCMS\\Thumbnail' => __DIR__ . '/../..' . '/src/Thumbnail.php',

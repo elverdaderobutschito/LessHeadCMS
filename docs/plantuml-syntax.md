@@ -222,6 +222,10 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   * **Schema editing:** a new `sort` field needs no backfill value (existing rows are numbered per group in the order of
     their IDs). `int`/`int?` → `sort` keeps the existing order: per group renumbered without gaps, equal values by ID, empty
     values at the end of their group. A changed `{by: …}` renumbers per new group, the relative order is kept.
+  * **Complete example:** the model template [web CMS base model](../templates/web-cms.md) (`templates/web-cms.puml`) uses `sort` for
+    menu items (`{by: Navigation, Navigationspunkt}`), pages (`{by: "Unterseite von"}` – the label is needed because of
+    the second self-reference „Original von“), all block types of a page in one shared order (`{by: "auf"}` in
+    `abstract class Block`) and FAQ entries and tiles per block (`{by: FaqBlock}`, `{by: KachelBlock}`).
 * `A "n" --> "1" B : label` → foreign key in `a` (`NOT NULL`; optional with `"0..1"`). Whether the FK is required depends only
   on the multiplicity, not on the `?` syntax. `A "1" <-- "n" B` is recognized as well: the FK belongs to the n side.
   On the n side `n`, `0..*`, `*`, `m`, `0..n` are allowed, as well as the **minimum count** `"1..*"`/`"1..n"` (see
@@ -372,6 +376,43 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   Several n:n self-references per class need different labels. Schema errors: `{symmetric}` on anything but
   an n:n self-reference (n:n to another class, n:1, 1:1), `{symmetric}` twice. When a row is deleted,
   its links disappear in both directions (as with every n:n).
+* **Composition (`*--`): parts edited in the form of their whole** (since 2026-11-18). A composition says „a `TextBlock`
+  belongs to exactly one `Seite` and does not exist without it“ – blocks of a page, line items of an invoice, items of
+  a navigation. Notations (all three mean the same):
+  ```
+  Seite *-- "n" TextBlock : auf          ' whole first, the filled diamond is at the whole
+  Seite "1" *-- "n" TextBlock : auf      ' with the (only possible) multiplicity of the whole
+  TextBlock "n" --* "1" Seite : auf      ' part first
+  ```
+  * **Database: exactly like `TextBlock "n" --> "1" Seite : auf {cascade}`** – column `auf_seite_id` in the part,
+    `NOT NULL`, `ON DELETE CASCADE` (deleting the page deletes its blocks, recursively). `{cascade}` is implicit; writing
+    it is allowed but redundant (the exporter leaves it out). Allowed markers: the label, `{unique}`, `{filter_by:…}`,
+    `{renamed_from:…}`. The side of the part needs a multiplicity like the n side of an n:1 relationship (`"n"`, `"*"`,
+    `"0..*"`, `"0..n"`, `"m"`) or the minimum count `"1..*"`/`"1..n"` (soft rule, as for n:1: the ⚠ hint appears in the
+    section of the whole). A `sort` field of the part orders it within its whole as usual (`sort {by: "auf"}` – via the label).
+  * **What it changes:** the editorial UI. The form of the whole shows one section per composition with the parts
+    (add, edit, duplicate, delete, ↑/↓), the part's form shows the whole as a path instead of a select field, and classes
+    that only exist as parts are not in the sidebar for editors (see [Editorial UI](editorial-ui.md#compositions-parts-in-the-form-of-the-whole)).
+    In the API: `_schema.compositions` on the whole, `foreign_key.composition: true` on the part and
+    `GET /api/{whole}/{id}/parts/{name}` (see [REST API](rest-api.md#compositions-parts-of-a-whole)).
+  * **Several part classes in ONE order:** if the parts are subclasses of an abstract class whose `sort` field is grouped
+    by the label of the composition (`abstract class Block { + position: sort {by: "auf"} }`, `Seite *-- "n" HeroBlock : auf`,
+    `Seite *-- "n" TextBlock : auf`), the form of the page shows them in one section with a mixed list, headed with the
+    name of the abstract class, and „+ Block hinzufügen“ offers the block types. Every subclass needs its own line
+    (relationships are not inherited).
+  * **Schema errors** (German/English messages): `"0..1"` on the side of the whole (a part without a whole – use a normal
+    relationship `-->` with `"0..1"`), n:n (`"n"` on the side of the whole), a composition of a class with itself (a tree
+    is a normal self-reference `Punkt "n" --> "0..1" Punkt : Unterpunkt von {cascade}`), a part with two wholes (also twice
+    the same whole; further references to other classes are normal relationships), a cycle of compositions
+    (`A *-- B`, `B *-- A`, also over several classes), a composition with an abstract class (the message names the
+    subclasses to draw it for), a missing multiplicity on the side of the part, `{label}` or `{symmetric}`.
+  * **Migration** (Schema → „Änderungen prüfen“):
+    | Change | Result |
+    |---|---|
+    | `-->` with `{cascade}` → `*--` | only the model, info entry; no table rebuild, the DDL is identical |
+    | `-->` without `{cascade}` (restrict) → `*--` | confirmation: deleting a whole deletes its parts from now on (table rebuilt for `ON DELETE CASCADE`) |
+    | `-->` with `"0..1"` → `*--` | blocker while parts without a whole exist, with the list of these rows – assign a whole or delete them first; without such rows like restrict (confirmation) |
+    | `*--` → `-->` | only the model, info entry; with `{cascade}` the DDL stays the same, without it the entry recommends `{cascade}` to keep the delete behaviour |
 * **Inheritance = field copy mechanism** (not a database concept: no shared table, no polymorphism):
   ```
   abstract class Basisinhalt {

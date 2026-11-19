@@ -1651,6 +1651,9 @@ final class SchemaMigration
                 }
             } elseif ($f0 !== null && isset($f0['workflow']) !== isset($f1['workflow'])) {
                 $p['changes'][] = self::change('field_workflow', 'info', self::workflowFieldChange($label, isset($f1['workflow'])));
+            } elseif ($f0 !== null && $f0['foreign_key'] && $f1['foreign_key']
+                && !empty($f0['foreign_key']['composition']) !== !empty($f1['foreign_key']['composition'])) {
+                $this->compositionChange($t1, $e1, $t0, $e0, $f0, $f1, $label, $c, $p, $idCol);
             } elseif ($f0 !== null && $f0['required'] !== $f1['required']) {
                 $p['changes'][] = self::change('field_required', 'info', $f1['required']
                     ? Msg::of('msg_migration.now_required', '{what}: now required.', ['what' => $label])
@@ -1709,7 +1712,7 @@ final class SchemaMigration
                     $c['auto'] = $p['model']['workflows'][$f1['workflow']]['initial'];
                     $p['changes'][] = self::change('workflow_backfill', 'info', Msg::of('msg_migration.workflow_backfill', '{what}: {count} '
                         . "existing row(s) automatically get the initial state '{state}'.", ['what' => $label, 'count' => $empty, 'state' => $c['auto']]));
-                } elseif ($empty) {
+                } elseif ($empty && empty($c['composition_orphans'])) {
                     $this->requireBackfill($t1, $e1, $f1, $empty, $p, $c);
                 }
             }
@@ -1923,6 +1926,62 @@ final class SchemaMigration
             }
         }
         return $out;
+    }
+
+    /**
+     * A relationship becomes a composition (`-->` -> `*--`) or stops being one. The table only changes where the delete
+     * behaviour changes (restrict <-> cascade); the rest is the model:
+     *  - `-->` with {cascade} -> `*--`: notice only.
+     *  - `-->` without {cascade} (restrict) -> `*--`: confirmation - deleting a whole deletes its parts from now on.
+     *  - optional (`"0..1"`) -> `*--`: blocker as long as parts without a whole exist (with the list), never a backfill value -
+     *    a common whole for all of them would be a guess. ($c['composition_orphans'] keeps the backfill away.)
+     *  - `*--` -> `-->`: notice; without {cascade} it also says that deleting is now refused while parts exist ({cascade}
+     *    recommended to keep everything as it was).
+     */
+    private function compositionChange(string $t1, array $e1, string $t0, array $e0, array $f0, array $f1, Msg $label, array &$c,
+        array &$p, string $idCol): void
+    {
+        $whole = $p['model']['entities'][$f1['foreign_key']['table']]['name'];
+        $params = ['what' => $label, 'part' => $e1['name'], 'whole' => $whole];
+        if (empty($f1['foreign_key']['composition'])) {
+            $p['changes'][] = self::change('composition_removed', 'info', ($f1['foreign_key']['on_delete'] ?? 'restrict') === 'cascade'
+                ? Msg::of('msg_migration.composition_removed', '{what}: no longer a composition - only the model changes ({part} stays '
+                    . 'in its own list; deleting a {whole} still deletes its {part} rows thanks to {cascade}).', $params + ['cascade' => '{cascade}'])
+                : Msg::of('msg_migration.composition_removed_restrict', '{what}: no longer a composition. Without {cascade} a {whole} can '
+                    . 'from now on only be deleted once it has no {part} rows - add {cascade} to the relationship to keep the previous '
+                    . 'behaviour.', $params + ['cascade' => '{cascade}']));
+            return;
+        }
+        if (!$f0['required']) {
+            $empty = (int) $this->pdo->query('SELECT COUNT(*) FROM ' . SqlGenerator::q($t0) . ' WHERE ' . SqlGenerator::q($f0['name'])
+                . ' IS NULL')->fetchColumn();
+            if ($empty) {
+                $c['composition_orphans'] = true;
+                $title = Cms::titleFieldOf($e0)[0];
+                $rows = [];
+                $stmt = $this->pdo->query("SELECT $idCol AS id, " . SqlGenerator::q($title) . ' AS v FROM ' . SqlGenerator::q($t0)
+                    . ' WHERE ' . SqlGenerator::q($f0['name']) . " IS NULL ORDER BY $idCol LIMIT " . self::LIST_LIMIT);
+                foreach ($stmt as $r) {
+                    $rows[] = ['id' => (int) $r['id'], 'values' => [$title => $r['v']]];
+                }
+                $p['blockers'][] = ['key' => "composition:$t1.{$f1['name']}", 'count' => $empty, 'rows' => $rows]
+                    + Msg::of('msg_migration.composition_orphans', '{what} becomes a composition, but {count} row(s) of {part} have no '
+                        . '{whole} - a part cannot exist without its whole. Please assign a {whole} to them or delete them first.',
+                        $params + ['count' => $empty])->fields('text');
+                return;
+            }
+        }
+        if (($f0['foreign_key']['on_delete'] ?? 'restrict') !== 'cascade') {
+            $n = $this->count($t0);
+            $p['changes'][] = self::change('composition_added', 'confirm', Msg::of('msg_migration.composition_added_restrict', '{what} becomes '
+                . 'a composition: deleting a {whole} will from now on delete its {part} rows along with it (until now deleting was refused '
+                . 'while they existed).', $params));
+            $p['confirmations'][] = ['key' => "composition:$t1.{$f1['name']}", 'count' => $n] + Msg::of('msg_migration.confirm_composition',
+                'I confirm that deleting a {whole} deletes its {part} rows from now on.', $params)->fields('text');
+            return;
+        }
+        $p['changes'][] = self::change('composition_added', 'info', Msg::of('msg_migration.composition_added', '{what} becomes a composition '
+            . '- only the model changes: {part} is edited in the form of its {whole} from now on, the table stays the same.', $params));
     }
 
     /** Backfill request, or a blocker if a backfill is not possible */

@@ -30,6 +30,7 @@ ui_text,password.logout,Sign out
 ui_text,password.changed,Password changed. The new password applies from your next sign-in.
 ui_text,sidebar.tables_aria,Data tables
 ui_text,sidebar.other_group,Other
+ui_text,sidebar.parts_group,Parts
 ui_text,sidebar.tasks,My tasks
 ui_text,sidebar.tasks_open,{count} open task(s)
 ui_text,sidebar.system_heading,System
@@ -65,6 +66,8 @@ ui_text,form.save,Save and close
 ui_text,form.save_busy,Saving…
 ui_text,form.save_and_continue,Save and continue
 ui_text,form.save_and_new,Save and new
+ui_text,form.save_and_back,Save and back
+ui_text,form.save_part,Save
 ui_text,form.cancel,Cancel
 ui_text,form.saved_next,Saved: {entity} #{id}. Ready for the next record.
 ui_text,form.saved_stay,Saved: {entity} #{id}.
@@ -73,6 +76,16 @@ ui_text,form.no_create,"No permission to create '{entity}'. You can view the for
 ui_text,form.copy_notice,Copy of {entity} #{id} – not saved yet.
 ui_text,form.copy_one_to_one,“{label}” was cleared (1:1 relation: already assigned to the original).
 ui_text,form.min_warning,⚠ {entity} #{id} has no record in “{child}” yet (at least 1 required).
+ui_text,parts.add,+ Add {entity}
+ui_text,parts.save_first,"Save first, then add {entity}."
+ui_text,parts.empty,No entries yet ({entity}).
+ui_text,parts.min_warning,At least one entry „{entity}“ required.
+ui_text,parts.published,Published
+ui_text,parts.draft,Draft
+ui_text,parts.move_up_aria,Move {entity} #{id} up
+ui_text,parts.move_down_aria,Move {entity} #{id} down
+ui_text,parts.path_aria,Belongs to
+ui_text,parts.path_new,new
 ui_text,form.rule_violations,⚠ {entity} #{id} violates current field rules (marked fields). It can only be saved once all rules are met.
 ui_text,form.workflow_heading,Workflow
 ui_text,form.workflow_status,Status
@@ -115,6 +128,8 @@ ui_text,list.move_down_aria,Move #{id} down
 ui_text,list.group_top,Top level
 ui_text,list.group_without,without {entity}
 ui_text,list.group_continued,{title} (continued)
+ui_text,list.moved_past_up,"#{id} now comes before {entity} #{other} – not visible in this list, the shared order has changed."
+ui_text,list.moved_past_down,"#{id} now comes after {entity} #{other} – not visible in this list, the shared order has changed."
 ui_text,list.followup_filter,Only with an open follow-up
 ui_text,list.columns,Columns ({visible}/{total})
 ui_text,list.columns_aria,Visible columns
@@ -821,9 +836,13 @@ ui_text,schema_panel.unique_disabled_title,Not for media fields
 ui_text,schema_panel.no_entities,There is no (non-abstract) entity yet.
 ui_text,schema_panel.from,Source
 ui_text,schema_panel.to,Target
+ui_text,schema_panel.part,Part
+ui_text,schema_panel.whole,Whole
+ui_text,schema_panel.kind_composition,Composition (part of)
 ui_text,schema_panel.swap,⇄ Swap direction
 ui_text,schema_panel.kind,Type
 ui_text,schema_panel.hint_n1,Each row of {from} refers to one row of the target (column in {from}).
+ui_text,schema_panel.hint_composition,Each row of {from} is part of exactly one row of the whole: it is edited in its form and deleted with it (column in {from}).
 ui_text,schema_panel.hint_one_to_one,"Like n:1, but each row of the target at most once (column in {from})."
 ui_text,schema_panel.hint_nn,Any number on both sides (separate junction table).
 ui_text,schema_panel.from_fallback,the source
@@ -880,6 +899,8 @@ ui_text,schema_check.label_braces,The label must not contain { }.
 ui_text,schema_check.nn_self_label,An n:n self-reference needs a label.
 ui_text,schema_check.label_needed,{label} needs a label.
 ui_text,schema_check.one_self_optional,A 1:1 self-reference is only possible as optional (0..1).
+ui_text,schema_check.composition_self,A part cannot be its own whole.
+ui_text,schema_check.composition_two_owners,{name} is already part of another whole – a part belongs to exactly one.
 ui_text,schema_diff.title,Changes to the text
 ui_text,schema_diff.summary,{added} / {removed} line(s). This is how the text field looks after “Accept”; the database only changes via “Check changes” → “Apply”.
 ui_text,schema_diff.kept,"Only the changed places are adjusted; comments, notes, decorative statements, blank lines and indentation of the text are kept."
@@ -1481,6 +1502,14 @@ ui_text,msg_schema.relation_unknown_class,Relation references unknown class '{cl
 ui_text,msg_schema.nn_minimum_label,A minimum count on n:n relationships is currently not supported (only '0..*'/'n'). Please define '{label}' between '{a}' and '{b}' without a minimum.
 ui_text,msg_schema.nn_minimum,A minimum count on n:n relationships is currently not supported (only '0..*'/'n'). Please define the relationship between '{a}' and '{b}' without a minimum.
 ui_text,msg_schema.nn_cascade,"{cascade} is only possible on n:1 relations, not on the n:n relation '{a}' -- '{b}' (links in the link table are always deleted along anyway)."
+ui_text,msg_schema.composition_abstract,"Composition with the abstract class '{class}' not possible - an abstract class has no table of its own, and relationships are not inherited. Please draw the composition for every subclass ({subclasses}), e.g. {example}: {source}"
+ui_text,msg_schema.composition_self,"Composition of '{whole}' with itself is not possible - a part cannot be its own whole. For a tree please use a normal self-reference ({whole} ""n"" --> ""0..1"" {whole} : Unterpunkt von {cascade}): {source}"
+ui_text,msg_schema.composition_nn,"Composition between '{whole}' and '{part}' as n:n is not possible - a part belongs to exactly one whole. On the side of the whole only ""1"" is allowed (or nothing): {source}"
+ui_text,msg_schema.composition_optional,"Composition '{whole}' - '{part}' with ""0..1"" on the side of the whole is not possible: a part without a whole contradicts the composition. For an optional assignment please use a normal relationship ({part} ""n"" --> ""0..1"" {whole}): {source}"
+ui_text,msg_schema.composition_part,"Composition '{whole}' - '{part}': the side of the part needs a multiplicity like the n side of an n:1 relationship (""n"", ""*"", ""0..*"" or the minimum count ""1..*""), e.g. {whole} *-- ""n"" {part}: {source}"
+ui_text,msg_schema.composition_marker,"Marker {marker} is not possible on a composition (allowed: label, {unique}, {filter_by:…}, {renamed_from:…}): {source}"
+ui_text,msg_schema.composition_two_owners,"Class '{part}' is already part of '{first}' - a part belongs to exactly one whole, a second composition (with '{second}') is not possible. For a further reference please draw a normal relationship (-->): {source}"
+ui_text,msg_schema.composition_cycle,Compositions form a cycle ({cycle}) - every row would need a whole that itself needs a row of the first class. Please make one of them a normal relationship (-->).
 ui_text,msg_schema.nn_label_empty,"{label} on the n:n relation '{a}' -- '{b}' needs a label before it (e.g. {a} ""n"" -- ""n"" {b} : interessiert an {label}). Without a label the table name is shown anyway."
 ui_text,msg_schema.nn_unique,"{unique} is only possible on fields and n:1 relations, not on the n:n relation '{a}' -- '{b}'."
 ui_text,msg_schema.nn_self_label,"n:n self-reference '{a}' needs a label (e.g. {a} ""n"" -- ""n"" {a} : folgt, or {a} ""n"" -- ""n"" {a} : befreundet mit {symmetric}); the columns of the link table are named after it."
@@ -1600,6 +1629,12 @@ ui_text,msg_migration.convert_blocked,{what}: {count} existing value(s) do not f
 ui_text,msg_migration.now_required,{what}: now required.
 ui_text,msg_migration.now_optional,{what}: now optional.
 ui_text,msg_migration.fk_changed,{what}: delete behaviour/1:1 changed ({old} -> {new}).
+ui_text,msg_migration.composition_removed,"{what}: no longer a composition - only the model changes ({part} stays in its own list; deleting a {whole} still deletes its {part} rows thanks to {cascade})."
+ui_text,msg_migration.composition_removed_restrict,{what}: no longer a composition. Without {cascade} a {whole} can from now on only be deleted once it has no {part} rows - add {cascade} to the relationship to keep the previous behaviour.
+ui_text,msg_migration.composition_orphans,"{what} becomes a composition, but {count} row(s) of {part} have no {whole} - a part cannot exist without its whole. Please assign a {whole} to them or delete them first."
+ui_text,msg_migration.composition_added_restrict,{what} becomes a composition: deleting a {whole} will from now on delete its {part} rows along with it (until now deleting was refused while they existed).
+ui_text,msg_migration.confirm_composition,I confirm that deleting a {whole} deletes its {part} rows from now on.
+ui_text,msg_migration.composition_added,"{what} becomes a composition - only the model changes: {part} is edited in the form of its {whole} from now on, the table stays the same."
 ui_text,msg_migration.min_added,"{what}: minimum count wanted (every row in {parent} should have at least one row in {class}) - existing rows without one are only marked, nothing is changed."
 ui_text,msg_migration.min_removed,{what}: minimum count dropped.
 ui_text,msg_migration.new_relation_denied,"New required relationship {field} points to the entity {target}, which is denied"
@@ -1682,6 +1717,7 @@ ui_text,msg_export.media_object,{where}: media field expected as an object.
 ui_text,msg_export.media_meta,Metadata class {n}
 ui_text,msg_export.relation,Relationship {n}
 ui_text,msg_export.kind_invalid,"{where}: 'kind' must be n1, one_to_one or nn."
+ui_text,msg_export.composition_kind,{where}: a composition must have the kind n1.
 ui_text,msg_layout.positions_expected,"Object {id: {x, y}} expected"
 ui_text,msg_layout.draft_id,provisional ID (element not applied yet) - position is not saved
 ui_text,msg_layout.unknown_id,unknown ID (no entity/enum/metadata class of the active schema)
@@ -1762,6 +1798,8 @@ ui_text,msg_records.direction_missing,Direction missing
 ui_text,msg_records.direction_expected,up or down expected
 ui_text,msg_records.move_first,The record is already the first of its group.
 ui_text,msg_records.move_last,The record is already the last of its group.
+ui_text,msg_records.move_neighbour_forbidden,"Cannot move: the neighbouring record is a '{neighbour}', and you have no permission to edit in '{neighbour}'."
+ui_text,msg_records.no_composition,'{entity}' has no composition '{name}'
 ui_text,msg_records.transition_unknown,The transition '{transition}' does not exist in the workflow {workflow}
 ui_text,msg_records.unknown,unknown
 ui_text,msg_records.transition_state,The transition '{transition}' is not possible in the state '{state}' (only from '{from}')

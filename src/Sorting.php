@@ -33,6 +33,7 @@ use PDO;
  *
  *  - next():      value for a new record or one that changed its group - the end of the group
  *  - neighbour(): the record a move swaps with (Cms::move() - the caller passes the conditions of the list filter)
+ *  - sharedNeighbour(): the same for an order shared by several classes - the next record of the group, whatever its class
  *  - renumber():  1, 2, 3, ... per group in the existing order (value, id, table) - schema migration (new sort field, int
  *                 -> sort, changed groups) and the repair of equal values (rows written past the CMS)
  *  - groupPaths(): what the list view needs for the group headings
@@ -158,6 +159,53 @@ final class Sorting
         $hit = $stmt->fetch(PDO::FETCH_NUM);
         $stmt->closeCursor();
         return $hit === false ? null : [(int) $hit[0], (int) $hit[1]];
+    }
+
+    /**
+     * The record a move swaps with in an order SHARED by several classes (sort field of an abstract class, 'tables' > 1): the
+     * next record of the group before (up) or after (down) $row, whichever class it belongs to - the order of renumber()
+     * (value, then id, then table in the order of 'tables'). Returns [table, id, value] or null at the edge of the group.
+     * List filters do not apply here: they belong to one class, the order to all of them.
+     *
+     * @param string $table the table of $row
+     * @return array{0:string,1:int,2:int}|null
+     */
+    public static function sharedNeighbour(PDO $pdo, array $model, array $field, string $table, array $row, bool $up): ?array
+    {
+        $value = (int) $row[$field['name']];
+        $id = (int) $row['id'];
+        $tables = self::perTable($model, $field, self::groupOf($field, $row));
+        $index = array_flip(array_map('strval', array_keys($tables)));
+        $own = $index[$table] ?? 0;
+        $best = null;
+        foreach ($tables as $t => [$f, $g]) {
+            $t = (string) $t;
+            $col = SqlGenerator::q($f['name']);
+            $i = $index[$t];
+            $op = $up ? '<' : '>';
+            // equal value: by id, equal id (other table) by the position of the table
+            $tie = "\"id\" $op $id" . ($i === $own ? '' : ' OR "id" = ' . $id . ' AND ' . ($up ? ($i < $own ? '1' : '0') : ($i > $own ? '1' : '0')));
+            $dir = $up ? 'DESC' : 'ASC';
+            $hit = $pdo->query('SELECT "id", ' . $col . ' FROM ' . SqlGenerator::q($t) . ' WHERE ' . self::groupCondition($f, $g)
+                . " AND $col < " . self::UNSET . " AND ($col $op $value OR ($col = $value AND ($tie))) ORDER BY $col $dir, \"id\" $dir LIMIT 1")
+                ->fetch(PDO::FETCH_NUM);
+            if ($hit === false) {
+                continue;
+            }
+            $cand = [(int) $hit[1], (int) $hit[0], $i, $t];
+            $better = $best === null || ($up ? [$cand[0], $cand[1], $cand[2]] > [$best[0], $best[1], $best[2]]
+                : [$cand[0], $cand[1], $cand[2]] < [$best[0], $best[1], $best[2]]);
+            if ($better) {
+                $best = $cand;
+            }
+        }
+        return $best === null ? null : [$best[3], $best[1], $best[0]];
+    }
+
+    /** true if the order of $field is shared by several classes (sort field of an abstract class with several subclasses) */
+    public static function shared(array $field): bool
+    {
+        return count($field['sort']['tables']) > 1;
     }
 
     /**

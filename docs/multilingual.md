@@ -377,3 +377,9 @@ It narrows down the selection in the form only; the API does not check it.
 
 **Reading via the API:** all translations of article 1 with `GET /api/artikel?eq[original_von_artikel_id]=1`, a single
 language additionally with `&eq[sprache]=EN` (see "Lists: paging, sorting, filtering" in the [REST API](rest-api.md)).
+
+**Complete example:** the model template [web CMS base model](../templates/web-cms.md) (`templates/web-cms.puml`)
+applies the pattern (variant 2, `{cascade}`) to pages, posts, events, services, categories and text snippets and uses
+`{filter_by:sprache}` for the category of a post. It also shows two neighbouring cases: `Navigation` has a language but no
+original (`{unique}` on place and language: one main navigation per language), and the blocks of a page have no language
+of their own – they belong to the language version of their page.

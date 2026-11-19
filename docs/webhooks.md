@@ -81,7 +81,7 @@ Per webhook for all or selected entities:
 | Event | Fires on |
 |---|---|
 | `<entity>.created` | `POST /api/{entity}` (also „Speichern und neu“, inline creation in the form) |
-| `<entity>.updated` | `PUT /api/{entity}/{id}`, restoring a version, a **workflow transition** (it changes the record) and **moving a record in its manual order** (`POST /api/{entity}/{id}/move`: one call for each of the two swapped records, the payload additionally has `"reorder": true`) |
+| `<entity>.updated` | `PUT /api/{entity}/{id}`, restoring a version, a **workflow transition** (it changes the record) and **moving a record in its manual order** (`POST /api/{entity}/{id}/move`: one call for each of the two swapped records, the payload additionally has `"reorder": true`; in an order shared by several classes – e.g. the blocks of a page, see Compositions – the two records can be of different classes: each call carries the entity of its own record, `heroblock.updated` and `textblock.updated`, and a filter on `entities` applies per record) |
 | `<entity>.deleted` | `DELETE /api/{entity}/{id}` |
 
 **One call per webhook and event:** if a transition calls a webhook via `action=webhook:` that would also fire globally on

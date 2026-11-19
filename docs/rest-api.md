@@ -356,7 +356,7 @@ order is shared with other subclasses of an abstract class). The value is read-o
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/api/{entity}/{id}/move` | body `{"direction": "up" \| "down"}` plus optionally the list filters (`filter`, `eq`, `q` as objects/strings like the query parameters) → `200 {"record": {…}, "swapped_with": <id>}`. Swaps the record with its neighbour **in the same group and the same table** – with filters: the next one that matches them, rows hidden by the filter keep their places. Needs the right to update the entity (`401`/`403` like `PUT`). `409 {"error": "edge"}` if there is no neighbour in that direction, `404 {"error": "no_sort"}` for an entity without a `sort` field, `422` for a missing or unknown `direction` or an invalid filter. |
+| POST | `/api/{entity}/{id}/move` | body `{"direction": "up" \| "down"}` plus optionally the list filters (`filter`, `eq`, `q` as objects/strings like the query parameters) → `200 {"record": {…}, "swapped_with": <id>, "swapped_entity": "<table>"}`. Swaps the record with its neighbour **in the same group** – with filters: the next one that matches them, rows hidden by the filter keep their places. For an order shared by several subclasses (`"shared": true`) the neighbour is the next record of the group in **any** of these tables, and the filters do not apply (see "Compositions: parts of a whole"). Needs the right to update the entity (`401`/`403` like `PUT`). `409 {"error": "edge"}` if there is no neighbour in that direction, `404 {"error": "no_sort"}` for an entity without a `sort` field, `422` for a missing or unknown `direction` or an invalid filter. |
 
 The client only says "up" or "down" – the server determines the neighbour and the values, so two editors moving at the
 same time cannot produce equal values. A move counts as a change of **both** records: `updated_at`/`updated_by` are set,
@@ -369,6 +369,35 @@ and to the response `"arrange": {"groups": {"<key>": [{"table", "id", "self"}, �
 every group for the heading, for a tree the whole path; `continued`: the first group began on the previous page).
 With another sorting `"arrange": null`.
 
+
+## Compositions: parts of a whole
+
+For a composition (`Seite *-- "n" TextBlock : auf`, see the PlantUML rules) the database is the same as for an n:1
+relationship with `{cascade}`; all endpoints of the part (`GET`/`POST`/`PUT`/`DELETE /api/textblock…`) work unchanged.
+Additionally:
+
+* `_schema` of the **part**: the FK column has `"foreign_key": {…, "on_delete": "cascade", "composition": true}`.
+* `_schema` of the **whole**: `"compositions": [{"name": "auf", "label": "auf", "title": "Block", "part_entities":
+  ["heroblock", "textblock"], "fk_column": "auf_seite_id", "fk_columns": {"heroblock": "auf_seite_id", …}, "min_count": 0,
+  "min_entities": [], "shared_sort": true, "sort_field": "position"}]` – one entry per section of the form: `name` is the
+  key for `/parts/` (the normalized label; without a label the table of the part or of the abstract class), `title` the
+  abstract class of a shared order (else `null`), `fk_column` the column if it is the same for all parts (else `null`,
+  see `fk_columns`), `min_count` 1 if at least one part class has the minimum count `"1..*"` (`min_entities`: which),
+  `shared_sort` whether the part classes share **one** order (sort field of an abstract class grouped by this
+  composition), `sort_field` the sort field of the parts or `null` (no order: parts by `id`). Part classes the caller
+  may not read are left out; the key is missing for entities without compositions.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/{whole}/{id}/parts/{name}` | public (like `GET /api/{entity}/{id}`): the parts of the record in their order → `{"data": [{"entity": "heroblock", "id": 4, "title": "Willkommen", "visibility": true, "state": null}, …], "name": "auf", "shared_sort": true}`. For a shared order **one mixed list over all part classes** – exactly the order of the page, no merging by `position` in the frontend. With a session each entry additionally has `"move": {"up": bool, "down": bool}` (a move is possible and allowed). `?expand=1`: the complete records as `GET /api/{entity}/{id}` delivers them, each with `"entity"`. Visibility as for single records: drafts (and the parts of a draft whole) only with `?include_drafts=true` and a session, classes without read access are missing. Parts whose order has further groups (navigation items per parent item) come per group; `"groups": {"<key>": "Leistungen"}` names them and each entry carries `"group"`. `404` for an unknown whole, record or composition name. |
+
+**Moving in a shared order:** `POST /api/{entity}/{id}/move` of a part (or of any entity whose `sort` field is shared by
+several subclasses) swaps with the next record of the group **of any class** – `Text, Hero` ↓ on the text gives
+`Hero, Text`. List filters do not apply to the neighbour here. Both rows are written in one transaction across both
+tables, each gets its version (`action: "reorder"`) and its `<entity>.updated` webhook with `"reorder": true` and its own
+entity. The response names the neighbour: `{"record": {…}, "swapped_with": 4, "swapped_entity": "heroblock"}`. `403
+{"error": "forbidden"}` (message names the class) if the caller may not edit the neighbour's class; `_arrange.up/down`
+and `move.up/down` are `false` then.
 ## Privacy defaults: no usernames
 
 The username is the login. Outside the user management the API therefore **never** delivers it – every other user

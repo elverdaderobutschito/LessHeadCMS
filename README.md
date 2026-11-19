@@ -42,6 +42,16 @@ a REST API and an editorial UI, ready to use.
 - [API users and API keys](docs/api-users.md)
 - [Model templates (example diagrams to read or copy into `schema/`)](templates/README.md)
 
+### Example: web CMS base model
+
+`templates/web-cms.puml` shows how to model an arbitrary website (description: `templates/web-cms.md`). It works in
+layers: **website** (global settings, navigation) → **page** (tree, one record per language) → **block** (in an area
+such as `HAUPTINHALT` or `SEITENLEISTE` – a role, not a position; the layout is up to the frontend) → **content**
+(channel-neutral posts, events, services, text snippets). The core – `Website`, `Navigation`, `Navigationspunkt`,
+`Seite` and `abstract class Block` – stays; per project or design you adapt the enums `Template` and `Bereich`, the block
+types and the content types. It is also a complete example of the `sort` field type, of compositions (`Seite *-- "n" TextBlock`:
+the blocks are edited in the form of their page) and of the multilingual pattern.
+
 ## License
 
 LessHeadCMS is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General

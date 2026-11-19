@@ -130,6 +130,10 @@ final class Cms
                 if (!empty($f['foreign_key']['min_required'])) {
                     $fk['min_required'] = true;
                 }
+                // composition (`Ganzes *-- "n" Teil`): this record is a part of the target row - likewise only then
+                if (!empty($f['foreign_key']['composition'])) {
+                    $fk['composition'] = true;
+                }
                 // {filter_by}: filtered selection in the form (field = field of this entity, target_field = field of the
                 // target rows) - likewise only if given in the diagram
                 if (!empty($f['foreign_key']['filter_by']) && $this->filterVisible($e, $target, $f['foreign_key']['filter_by'])) {
@@ -233,12 +237,230 @@ final class Cms
                 ];
             }, $min);
         }
+        // Compositions of this whole (sections in its form, GET /api/{entity}/{id}/parts/{name}) - only for entities that are
+        // the whole of a composition, and only with the parts the caller may read
+        $compositions = $this->describeCompositions($e);
+        if ($compositions) {
+            $schema['compositions'] = $compositions;
+        }
         // tracking metadata (RecordMeta): always present, never editable, outside the field permissions like the id;
         // without a session without created_by/updated_by (usernames are not published)
         if (RecordMeta::applies($e)) {
             $schema['system_fields'] = RecordMeta::fields($this->user !== null);
         }
         return $schema;
+    }
+
+    /**
+     * _schema 'compositions' of a whole: per group of Compositions::of() {name, label, title (abstract class of a shared
+     * order or null), part_entities, fk_column (the same in all parts, else null), fk_columns {table: column}, min_count
+     * (1 = a part class has the minimum count "1..*"), min_entities, shared_sort, sort_field (the same in all parts, else
+     * null)}. Parts the caller may not read (entity denied, or the FK column denied) are left out, a group without parts too.
+     */
+    private function describeCompositions(array $e): array
+    {
+        $out = [];
+        foreach (Compositions::of($this->model, $e['table']) as $g) {
+            $parts = [];
+            foreach ($g['parts'] as $t => $col) {
+                if ($this->access !== null && $this->access->entityDenied($t)) {
+                    continue;
+                }
+                if (isset($this->denied($this->model['entities'][$t])[$col])) {
+                    continue;
+                }
+                $parts[$t] = $col;
+            }
+            if (!$parts) {
+                continue;
+            }
+            $columns = array_values(array_unique($parts));
+            $sorts = array_values(array_unique(array_intersect_key($g['sort'], $parts)));
+            $min = array_values(array_intersect($g['min'], array_keys($parts)));
+            $out[] = [
+                'name' => $g['name'], 'label' => $g['label'], 'title' => $g['abstract'],
+                'part_entities' => array_keys($parts), 'fk_column' => count($columns) === 1 ? $columns[0] : null, 'fk_columns' => $parts,
+                'min_count' => $min ? 1 : 0, 'min_entities' => $min, 'shared_sort' => $g['shared'],
+                'sort_field' => count($sorts) === 1 && count(array_intersect_key($g['sort'], $parts)) === count($parts) ? $sorts[0] : null,
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * GET /api/{whole}/{id}/parts/{name}: the parts of a composition of the record $id in their order - for a shared order
+     * (several part classes, see Compositions) one mixed list over all classes, otherwise the order of the class (sort field
+     * grouped by the whole) or the ids. Every entry carries 'entity' (table). Without $expand a short entry {entity, id,
+     * title (display text of the {title} fields), visibility (true/false, null without a visibility field), state (workflow
+     * state or null)}, with a session also 'move' => {up, down} (is a move possible and allowed - the neighbour of a shared
+     * order can be of another class, see move()); with $expand the complete records as GET /api/{entity}/{id} delivers them
+     * (media, n:n lists) plus 'entity'. Readability as for the single entities: parts of denied classes are missing, drafts
+     * only with $includeDrafts (session, checked by the caller). 404 for an unknown composition.
+     *
+     * @return array{data:array[],name:string,shared_sort:bool}
+     */
+    public function parts(string $table, int $id, string $name, bool $expand, bool $includeDrafts): array
+    {
+        $e = $this->entity($table);
+        if ($this->fetchRow($e, $id) === null) {
+            throw ApiException::of(404, 'not_found', Msg::of('msg_api.record_not_found', 'Record not found'));
+        }
+        $group = Compositions::find($this->model, $e['table'], $name);
+        if ($group === null) {
+            throw ApiException::of(404, 'no_composition', Msg::of('msg_records.no_composition', "'{entity}' has no composition '{name}'", [
+                'entity' => $e['name'], 'name' => $name,
+            ]));
+        }
+        $order = array_flip(array_keys($group['parts']));
+        $entries = [];
+        foreach ($group['parts'] as $t => $col) {
+            $part = $this->model['entities'][$t];
+            if (($this->access !== null && $this->access->entityDenied($t)) || isset($this->denied($part)[$col])) {
+                continue;
+            }
+            $sortName = $group['sort'][$t] ?? null;
+            $groupBy = $group['group_by'][$t] ?? [];
+            // the order values (and subgroups) straight from the table (the sort field itself may be denied for the caller)
+            $values = [];
+            if ($sortName !== null) {
+                $cols = implode('', array_map(function ($c) {
+                    return ', ' . SqlGenerator::q($c);
+                }, array_merge([$sortName], $groupBy)));
+                foreach ($this->pdo->query('SELECT "id"' . $cols . ' FROM ' . SqlGenerator::q($t) . ' WHERE ' . SqlGenerator::q($col) . ' = ' . $id)
+                    ->fetchAll(PDO::FETCH_NUM) as $v) {
+                    $values[(int) $v[0]] = [(int) ($v[1] ?? Sorting::UNSET), array_map(function ($x) {
+                        return $x === null ? null : (int) $x;
+                    }, array_combine($groupBy, array_slice($v, 2)) ?: [])];
+                }
+            }
+            $page = 1;
+            do {
+                $result = $this->page($t, ['eq' => [$col => (string) $id], 'per_page' => (string) Settings::get($this->pdo, Settings::LIST_MAX_PER_PAGE),
+                    'page' => (string) $page, 'sort' => 'id'], $includeDrafts);
+                foreach ($result['data'] as $row) {
+                    [$value, $sub] = $values[(int) $row['id']] ?? [Sorting::UNSET, []];
+                    // subgroup key: nulls (top level) first
+                    $subKey = array_map(function ($x) {
+                        return $x === null ? -1 : $x;
+                    }, array_values($sub));
+                    $entries[] = [$value, (int) $row['id'], $order[$t], $t, $row, $subKey, $sub];
+                }
+                $page++;
+            } while ($page <= $result['total_pages']);
+        }
+        // the order of renumber(): value, id, table (for parts without an order of their own: by id); subgroups first
+        usort($entries, function ($a, $b) use ($group) {
+            return $group['shared'] ? [$a[0], $a[1], $a[2]] <=> [$b[0], $b[1], $b[2]]
+                : [$a[2], $a[5], $a[0], $a[1]] <=> [$b[2], $b[5], $b[0], $b[1]];
+        });
+        // headings of subgroups (e.g. "Leistungen" for the sub-items of that navigation item): the titles of the parents
+        $groups = [];
+        foreach ($entries as $en) {
+            if (!$en[6] || isset($groups[Sorting::key($en[6])])) {
+                continue;
+            }
+            $titles = [];
+            foreach ($en[6] as $c => $v) {
+                $target = null;
+                foreach ($this->model['entities'][$en[3]]['fields'] as $f) {
+                    if ($f['name'] === $c && $f['foreign_key']) {
+                        $target = $this->model['entities'][$f['foreign_key']['table']];
+                    }
+                }
+                if ($v !== null && $target !== null && $this->readable($target)) {
+                    $titles[] = $this->titleText($target, (int) $v);
+                }
+            }
+            $groups[Sorting::key($en[6])] = implode(' › ', array_filter($titles, 'strlen'));
+        }
+        $data = [];
+        foreach ($entries as [, $rowId, , $t, $row, , $sub]) {
+            $part = $this->model['entities'][$t];
+            if ($expand) {
+                $data[] = ['entity' => $t] + $row;
+                continue;
+            }
+            $visibility = $this->visibilityField($t);
+            $workflow = Workflows::fieldOf($part);
+            $entry = [
+                'entity' => $t, 'id' => $rowId, 'title' => self::titleOfRow($this->visibleTitle($part), $row),
+                'visibility' => $visibility !== null && array_key_exists($visibility, $row) ? (bool) $row[$visibility] : null,
+                'state' => $workflow !== null ? ($row[$workflow['name']] ?? null) : null,
+            ];
+            if ($sub) {
+                $entry['group'] = Sorting::key($sub);
+            }
+            if ($this->user !== null) {
+                $entry['move'] = ['up' => $this->canMove($part, $rowId, true), 'down' => $this->canMove($part, $rowId, false)];
+            }
+            $data[] = $entry;
+        }
+        return ['data' => $data, 'name' => $group['name'], 'shared_sort' => $group['shared']] + ($groups ? ['groups' => $groups] : []);
+    }
+
+    /** Display text of a row: the values of the {title} fields, comma-separated, empty ones left out */
+    private static function titleOfRow(array $fields, array $row): string
+    {
+        $titles = [];
+        foreach ($fields as $field) {
+            $v = $row[$field] ?? null;
+            if ($v !== null && $v !== '') {
+                $titles[] = is_bool($v) ? ($v ? '1' : '0') : (string) $v;
+            }
+        }
+        return implode(', ', $titles);
+    }
+
+    /** Display text of the row $id of $e (its visible {title} fields), '' if it does not exist */
+    private function titleText(array $e, int $id): string
+    {
+        $fields = $this->visibleTitle($e);
+        $stmt = $this->pdo->prepare('SELECT ' . implode(', ', array_map([SqlGenerator::class, 'q'], $fields)) . ' FROM '
+            . SqlGenerator::q($e['table']) . ' WHERE "id" = ?');
+        $stmt->execute([$id]);
+        $row = $stmt->fetch();
+        $stmt->closeCursor();
+        return $row === false ? '' : self::titleOfRow($fields, $row);
+    }
+
+    /**
+     * Would move() of the record succeed (neighbour present, the caller may edit both classes and their sort fields)? For the
+     * arrows of the parts section and of the list of a shared order; checks no list filter.
+     */
+    private function canMove(array $e, int $id, bool $up): bool
+    {
+        $sort = Sorting::fieldOf($e);
+        if ($sort === null || !$this->mayReorder($e, $sort)) {
+            return false;
+        }
+        $row = $this->rawRow($e, $id);
+        if (Sorting::shared($sort)) {
+            $other = Sorting::sharedNeighbour($this->pdo, $this->model, $sort, $e['table'], $row, $up);
+            if ($other === null) {
+                return false;
+            }
+            $ne = $this->model['entities'][$other[0]];
+            return $other[0] === $e['table'] || ($this->readable($ne) && $this->mayReorder($ne, Sorting::fieldOf($ne)));
+        }
+        return Sorting::neighbour($this->pdo, $e, $sort, $row, $up, '', []) !== null;
+    }
+
+    /** May the caller change the order of $e (action "update" and the sort field not denied)? */
+    private function mayReorder(array $e, ?array $sort): bool
+    {
+        if ($sort === null) {
+            return false;
+        }
+        if ($this->access !== null && ($this->access->entityDenied($e['table']) || $this->access->actionDenied($e['table'], 'update'))) {
+            return false;
+        }
+        return !isset($this->denied($e)[$sort['name']]);
+    }
+
+    /** May the caller read the entity at all? */
+    private function readable(array $e): bool
+    {
+        return $this->access === null || !$this->access->entityDenied($e['table']);
     }
 
     /**
@@ -709,6 +931,12 @@ final class Cms
             $groups[$key] = $group;
             $up = isset($window[$i - 1]) && $window[$i - 1][1] === $group;
             $row['_arrange'] = ['group' => $key, 'up' => $up, 'down' => isset($window[$i + 1]) && $window[$i + 1][1] === $group];
+            if (Sorting::shared($sort)) {
+                // shared order: the arrows follow the whole group over all classes (move() swaps with the next record of any of
+                // them) - also where this list shows no neighbour; off if the neighbour's class may not be edited
+                $row['_arrange']['up'] = $this->canMove($e, (int) $row['id'], true);
+                $row['_arrange']['down'] = $this->canMove($e, (int) $row['id'], false);
+            }
             if ($n === 0 && $up) {
                 $continued = true;
             }
@@ -720,14 +948,15 @@ final class Cms
     /**
      * POST /api/{entity}/{id}/move {"direction": "up"|"down", ...}: move a record one place in its manual order (sort
      * field) by swapping the values with its neighbour. The neighbour is determined here, not by the client: the next
-     * record of the same group (and of the same class - with a shared order of several subclasses the records of the other
-     * classes keep their places) in that direction which meets the list filters sent along (filter, eq, q, followup as for
-     * GET /api/{entity}) - so with a filter the record swaps with the next one the list shows.
+     * record of the same group in that direction which meets the list filters sent along (filter, eq, q, followup as for
+     * GET /api/{entity}) - so with a filter the record swaps with the next one the list shows. In an order shared by several
+     * classes (sort field of an abstract class) the neighbour is the next record of the group of ANY of these classes,
+     * without list filters (see moveShared(); until 2026-11 only one of the same class).
      *
      * A move is a change of both records: tracking metadata, a version each (action reorder; consecutive moves are one
      * entry, see Revisions) and the webhooks as for saving. 409 at the edge of the group, 404 without a sort field.
      *
-     * @return array{record:array,swapped_with:int}
+     * @return array{record:array,swapped_with:int,swapped_entity:string}
      */
     public function move(string $table, int $id, array $input): array
     {
@@ -765,6 +994,9 @@ final class Cms
             throw ApiException::of(404, 'not_found', Msg::of('msg_api.record_not_found', 'Record not found'));
         }
         $up = $direction === 'up';
+        if (Sorting::shared($sort)) {
+            return $this->moveShared($e, $sort, $id, $up, $denied);
+        }
         $result = $this->transaction(function () use ($e, $sort, $id, $up, $q, $denied) {
             $name = $sort['name'];
             $own = $this->rawRow($e, $id);
@@ -794,10 +1026,69 @@ final class Cms
                 $row = $this->fetchRow($e, $rowId);
                 $versions[$rowId] = Revisions::record($this->pdo, $e, $rowId, $row, 'reorder', $this->user, $this->sortPlace($e, $row));
             }
-            return [['record' => $this->visible($e, $this->fetchRow($e, $id), $denied), 'swapped_with' => $other[0]], $versions];
+            return [['record' => $this->visible($e, $this->fetchRow($e, $id), $denied), 'swapped_with' => $other[0], 'swapped_entity' => $e['table']], $versions];
         });
         foreach ($result[1] as $rowId => $version) {
             $this->fireWebhooks($e, (int) $rowId, 'updated', $version, null, ['reorder' => true]);
+        }
+        return $result[0];
+    }
+
+    /**
+     * move() in an order SHARED by several classes (sort field of an abstract class, e.g. all block types of a page): the
+     * neighbour is the next record of the group, whatever its class (Sorting::sharedNeighbour()) - list filters do not apply,
+     * they belong to one class. Both records are written in one transaction, also across two tables; each gets its version
+     * and its webhook (updated, "reorder": true) with its own entity. The caller needs the right to edit the class of the
+     * neighbour too (and its sort field), otherwise 403 and nothing is swapped. The answer names the class of the neighbour
+     * ('swapped_entity') - in the list of one class a swap with another class does not change the visible order.
+     *
+     * @return array{record:array,swapped_with:int,swapped_entity:string}
+     */
+    private function moveShared(array $e, array $sort, int $id, bool $up, array $denied): array
+    {
+        $result = $this->transaction(function () use ($e, $sort, $id, $up, $denied) {
+            $own = $this->rawRow($e, $id);
+            $other = Sorting::sharedNeighbour($this->pdo, $this->model, $sort, $e['table'], $own, $up);
+            if ($other !== null && $other[2] === (int) $own[$sort['name']]) {
+                // equal values (rows written past the CMS): number the group first, then look again
+                Sorting::renumber($this->pdo, $this->model, $sort, Sorting::groupOf($sort, $own));
+                $own = $this->rawRow($e, $id);
+                $other = Sorting::sharedNeighbour($this->pdo, $this->model, $sort, $e['table'], $own, $up);
+            }
+            if ($other === null) {
+                throw ApiException::of(409, 'edge', $up
+                    ? Msg::of('msg_records.move_first', 'The record is already the first of its group.')
+                    : Msg::of('msg_records.move_last', 'The record is already the last of its group.'));
+            }
+            $ne = $this->model['entities'][$other[0]];
+            $nsort = Sorting::fieldOf($ne);
+            if ($other[0] !== $e['table'] && !($this->readable($ne) && $this->mayReorder($ne, $nsort))) {
+                throw ApiException::of(403, 'forbidden', Msg::of('msg_records.move_neighbour_forbidden', "Cannot move: the neighbouring record "
+                    . "is a '{neighbour}', and you have no permission to edit in '{neighbour}'.", ['neighbour' => $ne['name']]), [
+                        'action' => 'update', 'entity' => $other[0],
+                    ]);
+            }
+            $writes = [[$e, $sort, $id, $other[2]], [$ne, $nsort, $other[1], (int) $own[$sort['name']]]];
+            foreach ($writes as [$we, $wf, $rowId, $value]) {
+                $set = [$wf['name'] => $value] + (RecordMeta::applies($we) ? RecordMeta::updateValues($this->user) : []);
+                $sql = implode(', ', array_map(function ($c) {
+                    return SqlGenerator::q($c) . ' = ?';
+                }, array_keys($set)));
+                $this->pdo->prepare('UPDATE ' . SqlGenerator::q($we['table']) . " SET $sql WHERE \"id\" = ?")
+                    ->execute(array_merge(array_values($set), [$rowId]));
+            }
+            // versions only after both rows have their new values: the place stored with them counts the group as it is now
+            $versions = [];
+            foreach ($writes as [$we, , $rowId]) {
+                $row = $this->fetchRow($we, $rowId);
+                $versions[] = [$we, $rowId, Revisions::record($this->pdo, $we, $rowId, $row, 'reorder', $this->user, $this->sortPlace($we, $row))];
+            }
+            return [[
+                'record' => $this->visible($e, $this->fetchRow($e, $id), $denied), 'swapped_with' => $other[1], 'swapped_entity' => $other[0],
+            ], $versions];
+        });
+        foreach ($result[1] as [$we, $rowId, $version]) {
+            $this->fireWebhooks($we, (int) $rowId, 'updated', $version, null, ['reorder' => true]);
         }
         return $result[0];
     }

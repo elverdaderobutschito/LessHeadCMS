@@ -948,7 +948,8 @@ final class PumlPatcher
     {
         $re = '/^(\s*)(\S+)\s+"([^"]*)"\s+(\S+)\s+"([^"]*)"\s+([^\s{]+)\s*(?::\s*(.*?))?\s*((?:\{(?:\w*|(?i:renamed_from|filter_by):[^{}]*)\}\s*)*)$/';
         $indent = self::indentOf($line);
-        if (!preg_match($re, $line, $m)) {
+        // composition before or after: the line is written anew (whole first, `*--`) - its arrow and sides cannot be kept
+        if (!empty($o['composition']) || !empty($r['composition']) || !preg_match($re, $line, $m)) {
             return $indent . PumlExporter::relationText($r);
         }
         $tail = ($r['label'] !== '' ? ' : ' . $r['label'] : '') . PumlExporter::relationMarkers($r);

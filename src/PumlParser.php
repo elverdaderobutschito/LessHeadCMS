@@ -46,6 +46,17 @@ namespace LessHeadCMS;
  * column name stays the same as without it. On n:n it is a schema error (links in the
  * link table are always deleted along anyway), as is any other `{...}` marker on a relation.
  *
+ * Composition (`Seite *-- "n" TextBlock : auf`, also `Seite "1" *-- "n" TextBlock` or `TextBlock "n" --* "1" Seite`; the diamond
+ * "*" stands at the whole): "is part of". In the database exactly `Teil "n" --> "1" Ganzes : label {cascade}` - FK column in
+ * the part (name by the usual rules), required, cascade implicit ({cascade} written along is allowed, not an error); the
+ * FK gets foreign_key.composition = true, the model JSON relation 'composition' => true (kind n1, from_entity = the part).
+ * Switching between `-->` + {cascade} and `*--` therefore changes no table. The part side takes the multiplicities of an n
+ * side (also the minimum count "1..*"), the side of the whole only "1" or nothing. Markers: label, {unique}, {filter_by:…},
+ * {renamed_from:…}. Schema errors: "0..1" or "n" on the side of the whole, "1"/"0..1"/none on the part side, a
+ * self-composition, a part with a second composition (a part has exactly one whole), cycles, an abstract class on either
+ * side (the message names the subclasses), {label}/{symmetric}. Cms uses it for the parts section in the form of the
+ * whole, GET /api/{whole}/{id}/parts/{name} and the move over the classes of a shared order.
+ *
  * Minimum count on the n side of an n:1 relation (`Position "1..*" --> "1" Rechnung`, likewise `1..n`): "every invoice
  * has at least one line item". This is a soft rule - the tables are the same as with `n` (cannot be enforced on
  * creation: the invoice always exists before its line items). The model contains foreign_key.min_required = true; Cms
@@ -226,6 +237,9 @@ final class PumlParser
         // sort (manual order of the records, see class comment): an integer the CMS assigns itself
         'sort' => 'INTEGER',
     ];
+
+    /** Arrows of a composition (`Ganzes *-- "n" Teil`, `Teil "n" --* "1" Ganzes`): the "*" is the diamond at the whole */
+    public const COMPOSITION_ARROWS = ['*--', '--*'];
 
     /** Field type for the manual order of the records (see class comment) */
     public const SORT_TYPE = 'sort';
@@ -421,7 +435,7 @@ final class PumlParser
                 'unique' => $r['unique'], 'symmetric' => $r['symmetric'],
                 'own_column' => $r['kind'] === 'nn' ? null : $r['column'], 'junction' => $junction,
                 'renamed_from' => $r['renamed_from'], 'filter_by' => $r['filter_by'],
-            ];
+            ] + (!empty($r['composition']) ? ['composition' => true] : []); // only then: other relations stay exactly as before
         }
         $enums = [];
         foreach ($model['enums'] as $name => $values) {
@@ -721,6 +735,7 @@ final class PumlParser
         $noteAliases = []; // note "..." as N1 -> connecting lines "N1 .. Class" are likewise just decoration
         $blockRecords = []; // parallel to $blocks: index into $positions['blocks'] (sourceMap())
         $openDecor = null; // index into $positions['decor'] of the multi-line decorative block being skipped
+        $owners = []; // compositions: table of the part => table of its whole (a part has exactly one, see checkComposition())
         foreach (explode("\n", $rest) as $index => $line) {
             if (preg_match_all('/\x01([^\x01]*)\x01/', $line, $placeholders)) {
                 foreach ($placeholders[1] as $table) {
@@ -771,11 +786,20 @@ final class PumlParser
             // optional markers at the end of the line, with or without a label before them: "... B : label {cascade}" /
             // "... B {cascade}" / "... B : label {cascade} {unique}"
             // {renamed_from:Altes Label} (schema editing) may contain spaces/umlauts/hyphens like a label
-            $relPattern = '/^(\S+)\s+"([^"]*)"\s+(\S+)\s+"([^"]*)"\s+([^\s{]+)\s*(?::\s*(.*?))?\s*'
+            // The multiplicities are optional in the pattern only for a composition (`Ganzes *-- "n" Teil`, the side of the
+            // whole may go without one); every other relation line without both still is no relation (see below).
+            $relPattern = '/^(\S+)\s+(?:"([^"]*)"\s+)?(\S+)\s+(?:"([^"]*)"\s+)?([^\s{]+)\s*(?::\s*(.*?))?\s*'
                 . '((?:\{(?:\w*|(?i:renamed_from|filter_by):[^{}]*)\}\s*)*)$/';
             // remove a colour in the arrow ("-[#red]->", purely decorative)
-            $arrow = preg_match($relPattern, $line, $r) ? (string) preg_replace('/\[#\w+(?:[,;]#?\w+)*\]/', '', $r[3]) : '';
-            $isRelation = $r && preg_match('/[-.]{2}/', $arrow);
+            $matched = preg_match($relPattern, $line, $r, PREG_UNMATCHED_AS_NULL) === 1;
+            $arrow = $matched ? (string) preg_replace('/\[#\w+(?:[,;]#?\w+)*\]/', '', $r[3]) : '';
+            // Composition (UML: filled diamond at the whole): `Ganzes *-- "n" Teil` or `Teil "n" --* "1" Ganzes`
+            $composition = $matched && in_array($arrow, self::COMPOSITION_ARROWS, true);
+            if ($matched && !$composition && ($r[2] === null || $r[4] === null)) {
+                $matched = false; // as before: a line without both multiplicities is no relation
+                $arrow = '';
+            }
+            $isRelation = $matched && preg_match('/[-.]{2}/', $arrow);
             // Purely decorative PlantUML statements: without meaning for the schema, they are lost in the model JSON -> warning.
             // Only if the line is not a relation (a class may e.g. be called "Title")
             $decor = $isRelation ? null : self::decoration($line, $noteAliases);
@@ -840,6 +864,15 @@ final class PumlParser
                 if (preg_match('/\{\w*(?::[^{}]*)?\}/', $label)) {
                     throw new SchemaException($multi);
                 }
+                if ($composition) {
+                    // which side is the whole: the diamond stands at it
+                    $wholeFirst = substr($arrow, 0, 1) === '*';
+                    $comp = $wholeFirst
+                        ? ['whole' => $r[1], 'whole_card' => $r[2], 'part' => $r[5], 'part_card' => $r[4]]
+                        : ['whole' => $r[5], 'whole_card' => $r[4], 'part' => $r[1], 'part_card' => $r[2]];
+                    self::checkComposition($comp, $line, $abstract, $classes, $marker, $flags['symmetric']);
+                    $marker = 'cascade'; // implicit: the parts are deleted with their whole ({cascade} written along is allowed)
+                }
                 foreach ([$r[1], $r[5]] as $side) {
                     if (isset($metaClasses[strtolower($side)])) {
                         throw new SchemaException(Msg::of('msg_schema.meta_relation', "Relationship from or to the metadata class '{class}' "
@@ -853,6 +886,37 @@ final class PumlParser
                             . 'possible - abstract classes have no table of their own (relationships are not inherited; please draw '
                             . 'one per subclass): {source}', ['class' => $abstract[strtolower($side)], 'source' => $line]));
                     }
+                }
+                if ($composition) {
+                    // the part carries the column, exactly as for `Teil "n" --> "1" Ganzes : label {cascade}`
+                    $applied = self::applyRelation(
+                        $entities, $junctions, $comp['part'], $comp['part_card'], '1', $comp['whole'], $label, $marker, $flags['unique'],
+                        '-->', false, $renamedFrom, $filterBy
+                    );
+                    $owner = strtolower($comp['part']);
+                    if (isset($owners[$owner])) {
+                        throw new SchemaException(Msg::of('msg_schema.composition_two_owners', "Class '{part}' is already part of '{first}' - "
+                            . "a part belongs to exactly one whole, a second composition (with '{second}') is not possible. For a further "
+                            . 'reference please draw a normal relationship (-->): {source}', [
+                                'part' => $entities[$owner]['name'], 'first' => $entities[$owners[$owner]]['name'],
+                                'second' => $entities[strtolower($comp['whole'])]['name'], 'source' => $line,
+                            ]));
+                    }
+                    $owners[$owner] = strtolower($comp['whole']);
+                    foreach ($entities[$owner]['fields'] as &$f) {
+                        if ($f['name'] === $applied['column']) {
+                            $f['foreign_key']['composition'] = true;
+                        }
+                    }
+                    unset($f);
+                    $positions['relations'][] = $orig($index);
+                    $relations[] = $applied + [
+                        'from_multiplicity' => trim($comp['part_card']), 'to_multiplicity' => trim($comp['whole_card'] ?? '1'),
+                        // the {cascade} of a composition is implicit: in the model JSON it is not a marker of its own
+                        'label' => $label, 'show_label' => false, 'cascade' => false, 'composition' => true,
+                        'unique' => $flags['unique'], 'symmetric' => false, 'renamed_from' => $renamedFrom,
+                    ];
+                    continue;
                 }
                 $applied = self::applyRelation(
                     $entities, $junctions, $r[1], $r[2], $r[4], $r[5], $label, $marker, $flags['unique'], $arrow,
@@ -878,6 +942,7 @@ final class PumlParser
                 ]));
             }
         }
+        self::rejectCompositionCycles($owners, $entities);
         $open = self::currentPackage($blocks);
         if ($open !== null) {
             throw new SchemaException(Msg::of('msg_schema.package_unclosed', 'package "{package}" is not closed with "}".', ['package' => $open]));
@@ -2211,6 +2276,98 @@ final class PumlParser
         return ['state' => 'none', 'labels' => array_map(function ($f) {
             return $f['foreign_key']['label'];
         }, $fks)];
+    }
+
+    /**
+     * Schema errors of a composition line that the general relation rules do not catch (see class comment): the side of the
+     * whole only "1" or nothing ("0..1" = a part without a whole, "n" = n:n), the part side like the n side of an n:1, no
+     * self-composition, no abstract class, no {label}/{symmetric}.
+     *
+     * @param array{whole:string,whole_card:?string,part:string,part_card:?string} $c
+     */
+    private static function checkComposition(array $c, string $line, array $abstract, array $classes, ?string $marker, bool $symmetric): void
+    {
+        $params = ['whole' => $c['whole'], 'part' => $c['part'], 'source' => $line];
+        foreach (['whole', 'part'] as $side) {
+            $key = strtolower($c[$side]);
+            if (!isset($abstract[$key])) {
+                continue;
+            }
+            // the concrete classes below the abstract one (also over several levels): each needs its own composition
+            $subs = [];
+            foreach ($classes as $t => $cl) {
+                for ($base = $cl['extends']; $base !== null && !$cl['abstract']; $base = $classes[strtolower($base)]['extends'] ?? null) {
+                    if (strtolower($base) === $key) {
+                        $subs[] = $cl['name'];
+                        break;
+                    }
+                }
+            }
+            $example = $side === 'part'
+                ? $c['whole'] . ' *-- "' . ($c['part_card'] ?? 'n') . '" ' . ($subs[0] ?? 'Unterklasse')
+                : ($subs[0] ?? 'Unterklasse') . ' *-- "' . ($c['part_card'] ?? 'n') . '" ' . $c['part'];
+            throw new SchemaException(Msg::of('msg_schema.composition_abstract', "Composition with the abstract class '{class}' not "
+                . 'possible - an abstract class has no table of its own, and relationships are not inherited. Please draw the composition '
+                . 'for every subclass ({subclasses}), e.g. {example}: {source}', [
+                    'class' => $abstract[$key], 'subclasses' => $subs ? implode(', ', $subs) : '-', 'example' => $example, 'source' => $line,
+                ]));
+        }
+        if (strtolower($c['whole']) === strtolower($c['part'])) {
+            throw new SchemaException(Msg::of('msg_schema.composition_self', "Composition of '{whole}' with itself is not possible - a part "
+                . "cannot be its own whole. For a tree please use a normal self-reference ({whole} \"n\" --> \"0..1\" {whole} : Unterpunkt "
+                . 'von {cascade}): {source}', $params + ['cascade' => '{cascade}']));
+        }
+        $whole = $c['whole_card'] === null ? 'one' : self::cardinality($c['whole_card']);
+        $part = $c['part_card'] === null ? null : self::cardinality($c['part_card']);
+        if ($whole === 'many') {
+            throw new SchemaException(Msg::of('msg_schema.composition_nn', "Composition between '{whole}' and '{part}' as n:n is not "
+                . 'possible - a part belongs to exactly one whole. On the side of the whole only "1" is allowed (or nothing): {source}', $params));
+        }
+        if ($whole === 'optional') {
+            throw new SchemaException(Msg::of('msg_schema.composition_optional', "Composition '{whole}' - '{part}' with \"0..1\" on the "
+                . "side of the whole is not possible: a part without a whole contradicts the composition. For an optional assignment "
+                . 'please use a normal relationship ({part} "n" --> "0..1" {whole}): {source}', $params));
+        }
+        if ($part !== 'many') {
+            throw new SchemaException(Msg::of('msg_schema.composition_part', "Composition '{whole}' - '{part}': the side of the part needs "
+                . 'a multiplicity like the n side of an n:1 relationship ("n", "*", "0..*" or the minimum count "1..*"), e.g. {whole} *-- '
+                . '"n" {part}: {source}', $params));
+        }
+        if ($marker === 'label' || $symmetric) {
+            throw new SchemaException(Msg::of('msg_schema.composition_marker', "Marker {marker} is not possible on a composition (allowed: "
+                . 'label, {unique}, {filter_by:…}, {renamed_from:…}): {source}', [
+                    'marker' => $marker === 'label' ? '{label}' : '{symmetric}', 'source' => $line,
+                ]));
+        }
+    }
+
+    /**
+     * Compositions must not form a cycle (`A *-- B`, `B *-- A`, also over several classes): every row would need a whole that
+     * itself needs a whole of the first class - not even the first row could ever be created, and deleting would cascade
+     * in a circle.
+     *
+     * @param array<string,string> $owners table of the part => table of its whole
+     */
+    private static function rejectCompositionCycles(array $owners, array $entities): void
+    {
+        foreach (array_keys($owners) as $start) {
+            $path = [$start];
+            for ($t = $owners[$start] ?? null; $t !== null; $t = $owners[$t] ?? null) {
+                if ($t === $start) {
+                    $names = array_map(function ($x) use ($entities) {
+                        return $entities[$x]['name'];
+                    }, array_reverse($path));
+                    throw new SchemaException(Msg::of('msg_schema.composition_cycle', 'Compositions form a cycle ({cycle}) - every row would '
+                        . 'need a whole that itself needs a row of the first class. Please make one of them a normal relationship (-->).', [
+                            'cycle' => implode(' *-- ', array_merge([$entities[$start]['name']], $names)),
+                        ]));
+                }
+                if (in_array($t, $path, true)) {
+                    break; // a cycle further up - it is reported from one of its own classes
+                }
+                $path[] = $t;
+            }
+        }
     }
 
     private static function cardinality(string $raw): string

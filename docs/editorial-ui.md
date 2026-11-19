@@ -227,3 +227,39 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   and an edit dialog; „Neuer Nutzer“ additionally has an unmasked password field with a generator button (16 characters,
   cryptographic randomness via `crypto.getRandomValues`, with upper/lower-case letters, digits and special characters) – the admin
   can overwrite the suggestion. After creation a notice with the password stays visible so that it can be passed on.
+
+## Compositions: parts in the form of the whole
+
+For a composition (`Seite *-- "n" TextBlock : auf`, see [PlantUML rules](plantuml-syntax.md)) the parts are edited from
+the form of their whole – a page with its blocks is one task, not a jump between two lists.
+
+* **Form of the whole:** below its own fields and before „Verknüpfungen“ there is one section per composition (in a
+  form with sections: between the last section and the block „Verknüpfungen“). Parts with a **shared order** (subclasses
+  of an abstract class with `sort {by: "<label>"}`, e.g. all block types of a page) form **one** section with a mixed list
+  in that order, headed with the name of the abstract class („Block“); every other part class has a section of its own,
+  headed with its class name. Per row: type, title, publication state (published/draft) and workflow state, plus
+  „Bearbeiten“, „Duplizieren“, „Löschen“ and – if the part has a `sort` field – ↑/↓. The arrows swap with the neighbour in
+  the order of the whole, in a shared order also with a block of **another type** (Hero, Text → Text, Hero).
+  Parts with a further group in their order (navigation items: per parent item) are listed per group with the path of the
+  parent as a subheading. **„+ Hinzufügen“** is a button for a single part class („+ Kachel hinzufügen“) and a menu with
+  the part classes for a shared order („+ Block hinzufügen“ → HeroBlock, TextBlock, …); the new part has the whole
+  already set and lands at the end of the order. A **new, unsaved whole** shows „Erst speichern, dann Block hinzufügen.“
+  instead of the list. The soft minimum count (`"1..*"`) appears as ⚠ hint **in the section** instead of above the form.
+* **Rights per part class:** creating, deleting, moving follow the action rights of the respective part class (a type
+  without the right to create is shown disabled in the menu, with the reason as a tooltip). An arrow whose neighbour is
+  of a class the user may not edit is disabled (the server answers `403` as well).
+* **Form of a part:** the select field of the whole is not shown; instead a **path** above the form links back:
+  „Seite: Start › TextBlock: Einleitung“, for nested compositions completely (Seite › KachelBlock › Kachel). The
+  buttons: **„Speichern“** stays in the part (a new part gets its address), **„Speichern und zurück“** and „Abbrechen“
+  lead to the form of the whole, scrolled to the section. Nesting works the same way: the form of a `KachelBlock` (itself
+  a part of the page) shows its section „Kachel“.
+* **Sidebar:** classes that only exist as parts are **not in the sidebar for editors**. Admins see them in a collapsed
+  group **„Teile“** at the end (maintenance, search across all pages). The list of a part stays reachable via its address
+  (`#/textblock`), with the column and the filter of the whole as for every relationship.
+* **Lists of a part class with a shared order:** the arrows there also swap with the neighbour in the shared order,
+  whatever its type. If that neighbour is of another class, nothing visibly changes in this list – a hint says so
+  („#7 steht jetzt hinter FaqBlock #3 – in dieser Liste nicht sichtbar, die gemeinsame Reihenfolge hat sich geändert.“).
+* **Diagram editor:** a composition is drawn with a filled diamond at the whole and without `{cascade}`; in the
+  properties it has the kind „Komposition (Teil von)“ with the fields „Teil“ and „Ganzes“ (the whole always „1“,
+  no `{cascade}` checkbox – it is implicit). Switching to n:1 keeps the multiplicity and sets `{cascade}`, so the
+  delete behaviour stays.

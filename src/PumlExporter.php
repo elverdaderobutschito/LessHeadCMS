@@ -34,7 +34,8 @@ namespace LessHeadCMS;
  * Order: enums, then the classes in model order (consecutive classes of the same package in one
  * shared package block - several blocks of the same name result in one group anyway), then the relationships in
  * model order. The order of classes, fields and relationships determines the column and table order, so it
- * is kept. Relationships are always written forwards (from_entity first, for n:1/1:1 with "-->").
+ * is kept. Relationships are always written forwards (from_entity first, for n:1/1:1 with "-->"); a composition with the
+ * whole first (`Ganzes *-- "n" Teil`).
  *
  * Class body: fields and media fields in the order of field_order (media fields at their position), grouped by form
  * section - every section as `-- <title> --` in front of its first field; a section without fields is left out (see
@@ -249,6 +250,13 @@ final class PumlExporter
             foreach (['show_label', 'cascade', 'unique', 'symmetric'] as $k) {
                 $flag($r, $k, $where);
             }
+            // composition (`Ganzes *-- "n" Teil`): optional key, missing = false; only an n:1 can be one
+            if (array_key_exists('composition', $r)) {
+                $flag($r, 'composition', $where);
+                if (!empty($r['composition']) && ($r['kind'] ?? null) !== 'n1') {
+                    $errors[] = Msg::of('msg_export.composition_kind', "{where}: a composition must have the kind n1.", ['where' => $where]);
+                }
+            }
             // {filter_by}: "field" or "sourcefield=targetfield"; missing in model JSON from before this option (= no filter)
             if (($r['filter_by'] ?? null) !== null && $r['filter_by'] !== '') {
                 $text($r, 'filter_by', $where, '/^\w+(=\w+)?$/');
@@ -459,16 +467,17 @@ final class PumlExporter
     public static function relationMarkers(array $r): string
     {
         $markers = [];
-        if ($r['show_label']) {
+        $composition = !empty($r['composition']); // its {cascade} is implicit; {label}/{symmetric} are not possible there
+        if ($r['show_label'] && !$composition) {
             $markers[] = '{label}';
         }
-        if ($r['cascade']) {
+        if ($r['cascade'] && !$composition) {
             $markers[] = '{cascade}';
         }
         if ($r['unique']) {
             $markers[] = '{unique}';
         }
-        if ($r['symmetric']) {
+        if ($r['symmetric'] && !$composition) {
             $markers[] = '{symmetric}';
         }
         if (($r['filter_by'] ?? null) !== null && $r['filter_by'] !== '') {
@@ -482,12 +491,24 @@ final class PumlExporter
 
     public static function relationArrow(array $r): string
     {
+        if (!empty($r['composition'])) {
+            return '*--';
+        }
         return $r['kind'] === 'nn' ? '--' : '-->';
     }
 
-    /** Relationship line, always forwards: `A "n" --> "1" B : label {markers}` */
+    /**
+     * Relationship line, always forwards: `A "n" --> "1" B : label {markers}`; a composition with the whole first and without
+     * its multiplicity: `Ganzes *-- "n" Teil : label {markers}`
+     */
     public static function relationText(array $r): string
     {
+        if (!empty($r['composition'])) {
+            // the multiplicity of the whole only if it is not the usual "1" (e.g. "1..1" as written)
+            $whole = ($r['to_multiplicity'] ?? '1') !== '1' ? " \"{$r['to_multiplicity']}\"" : '';
+            $line = "{$r['to_entity']}$whole *-- \"{$r['from_multiplicity']}\" {$r['from_entity']}";
+            return $line . ($r['label'] !== '' ? ' : ' . $r['label'] : '') . self::relationMarkers($r);
+        }
         $line = "{$r['from_entity']} \"{$r['from_multiplicity']}\" " . self::relationArrow($r) . " \"{$r['to_multiplicity']}\" {$r['to_entity']}";
         if ($r['label'] !== '') {
             $line .= ' : ' . $r['label'];
