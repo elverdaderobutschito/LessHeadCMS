@@ -3,7 +3,7 @@
         'name' => 'lessheadcms/backend',
         'pretty_version' => 'dev-main',
         'version' => 'dev-main',
-        'reference' => 'ca89575b0efef288feecc65494231aa3c665d0b6',
+        'reference' => '30c2263fd5eef50dcaa94f32769b97e1f5ce01ae',
         'type' => 'project',
         'install_path' => __DIR__ . '/../../',
         'aliases' => array(),
@@ -13,7 +13,7 @@
         'lessheadcms/backend' => array(
             'pretty_version' => 'dev-main',
             'version' => 'dev-main',
-            'reference' => 'ca89575b0efef288feecc65494231aa3c665d0b6',
+            'reference' => '30c2263fd5eef50dcaa94f32769b97e1f5ce01ae',
             'type' => 'project',
             'install_path' => __DIR__ . '/../../',
             'aliases' => array(),

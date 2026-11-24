@@ -193,11 +193,13 @@ final class TestData
                                 $this->lacking[$column] = array_values(array_intersect($parents, $newIds[$target] ?? []));
                             }
                         }
-                        $row = $this->createUnique($t, $i, max($counts[$t], $i + 1));
+                        $row = $this->createUnique($t, $i, max($counts[$t], $i + 1), $clash);
                         if ($row === null) {
-                            $failed[$t] = self::aborted(count($newIds[$t]), Msg::of('msg_testdata.no_unique', 'no further free '
-                                . 'combination found for the {unique} fields ({fields}).', [
-                                    'unique' => '{unique}', 'fields' => implode(', ', $this->model['entities'][$t]['unique_fields']),
+                            $failed[$t] = self::aborted(count($newIds[$t]), ($clash['group'] ?? null) !== null
+                                ? Msg::of('msg_testdata.no_unique_group', 'no further free combination found for the group {group} '
+                                    . '({fields}).', ['group' => '{unique: ' . $clash['group'] . '}', 'fields' => implode(', ', $clash['fields'] ?? [])])
+                                : Msg::of('msg_testdata.no_unique', 'no further free combination found for the {unique} fields ({fields}).', [
+                                    'unique' => '{unique}', 'fields' => implode(', ', $clash['fields'] ?? $this->model['entities'][$t]['unique_fields']),
                                 ]));
                             break;
                         }
@@ -287,13 +289,15 @@ final class TestData
     }
 
     /**
-     * Create a row via Cms::create(). If the entity has a {unique} group, a random combination may already be
-     * taken (409 duplicate) - then try again with new random values.
+     * Create a row via Cms::create(). If the entity has {unique} groups (the unnamed one, named ones {unique: name}), a
+     * random combination may already be taken in any of them (409 duplicate) - then try again with new random values.
      *
+     * @param array|null $clash out: the 409 payload of the last collision (group, fields), for the abort message
      * @return array|null the new row; null = no free combination found after several attempts
      */
-    private function createUnique(string $table, int $i, int $count): ?array
+    private function createUnique(string $table, int $i, int $count, ?array &$clash = null): ?array
     {
+        $clash = null;
         for ($attempt = 0; $attempt < 50; $attempt++) {
             try {
                 return $this->cms->create($table, $this->values($table, $i, $count), true);
@@ -301,6 +305,7 @@ final class TestData
                 if (($e->payload['error'] ?? null) !== 'duplicate') {
                     throw $e;
                 }
+                $clash = $e->payload;
             }
         }
         return null;

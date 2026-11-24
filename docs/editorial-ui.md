@@ -245,6 +245,13 @@ the form of their whole – a page with its blocks is one task, not a jump betwe
   the part classes for a shared order („+ Block hinzufügen“ → HeroBlock, TextBlock, …); the new part has the whole
   already set and lands at the end of the order. A **new, unsaved whole** shows „Erst speichern, dann Block hinzufügen.“
   instead of the list. The soft minimum count (`"1..*"`) appears as ⚠ hint **in the section** instead of above the form.
+* **„Alle veröffentlichen“ / „Alle zurückziehen“** next to „+ Hinzufügen“ – only if a part class of the section (or of
+  a composition nested below it) has a `visibility` field. It switches the visibility of **all** parts of the section,
+  recursively (also the tiles of a KachelBlock), after a confirmation with the count („12 Teile veröffentlichen?“).
+  Only parts the user may edit count; parts of a class without the right and parts with a **workflow** are skipped – the
+  notice names the class and the number („2 × Kachel übersprungen: keine Berechtigung zum Bearbeiten.“, „… hat einen
+  Workflow – bitte über die Freigabe veröffentlichen.“), so approvals are not bypassed. Each changed part gets a version
+  and its webhook. Main use: after „Übersetzung anlegen“, where all copied parts start as drafts.
 * **Rights per part class:** creating, deleting, moving follow the action rights of the respective part class (a type
   without the right to create is shown disabled in the menu, with the reason as a tooltip). An arrow whose neighbour is
   of a class the user may not edit is disabled (the server answers `403` as well).
@@ -263,3 +270,21 @@ the form of their whole – a page with its blocks is one task, not a jump betwe
   properties it has the kind „Komposition (Teil von)“ with the fields „Teil“ and „Ganzes“ (the whole always „1“,
   no `{cascade}` checkbox – it is implicit). Switching to n:1 keeps the multiplicity and sets `{cascade}`, so the
   delete behaviour stays.
+
+## Language versions: „Übersetzung anlegen“
+
+Only for classes whose „Original von“ self-reference carries `{translations}` (see
+[Create translation](multilingual.md#create-translation)); every other class shows nothing of this.
+
+* **Language bar** in the head of the edit form, next to „Verlauf“: the versions of the group, e.g. `DE · EN`. Every
+  existing version is a link to its form, the current one is highlighted. The values are the enum values, shown and
+  translated like every enum.
+* **„Übersetzung anlegen ▸“** opens a menu of the languages that do not exist in the group yet. Disabled with the tooltip
+  „Alle Sprachen vorhanden“ when every value exists, and with a tooltip naming the class when the user may not create in
+  the class or in one of its part classes (the copy creates the parts as well).
+* Choosing a language creates the copy (record, all parts over all levels, media links with their metadata, n:n links) as a
+  **draft** and opens it – the parts with a `visibility` field are drafts too („Übersetzung angelegt: Seite und 5 Teile in
+  EN als Entwurf – noch nicht veröffentlicht.“), the sections mark them „Entwurf“; „Alle veröffentlichen“ in a section
+  publishes them in one step. A notice above the form lists the parts copied per class, the number of references pointed at
+  existing translations, the targets that are not translated yet („Noch nicht übersetzt: Seite #4 – Impressum“), links that
+  were not taken over and unique values that got a suffix. The notice stays until the form is left.

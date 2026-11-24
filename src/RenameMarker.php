@@ -88,7 +88,7 @@ final class RenameMarker
         $found = [];
         foreach ($this->lines as $i => $line) {
             if (isset($this->skip[$i]) || !preg_match('/^\s*(\S+)\s+"[^"]*"\s+(\S+)\s+"[^"]*"\s+([^\s{]+)\s*(?::\s*(.*?))?\s*'
-                . '((?:\{(?:\w*|(?i:renamed_from|filter_by):[^{}]*)\}\s*)*)$/', $line, $r) || !preg_match('/[-.]{2}/', $r[2])) {
+                . '((?:\{(?:\w*|(?i:renamed_from|filter_by|unique):[^{}]*)\}\s*)*)$/', $line, $r) || !preg_match('/[-.]{2}/', $r[2])) {
                 continue;
             }
             $ends = [strtolower($r[1]), strtolower($r[3])];

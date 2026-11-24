@@ -63,6 +63,14 @@ namespace LessHeadCMS;
  * uses it to protect the last remaining line item from deletion (409) and reports invoices without a line item
  * (`_min_warnings`). On n:n a minimum count remains a schema error.
  *
+ * `{translations}` on a self-reference (`Seite "n" --> "0..1" Seite : Original von {translations} {unique}`): the rows of the
+ * class are language versions of one original ("Übersetzung anlegen", see Translations). Purely structural - nothing
+ * depends on names: the language field is the one enum field in the {unique} group of the class. Valid only as an n:1
+ * self-reference with "0..1" on the target side, with {unique}, with exactly one required enum field in the {unique} group
+ * and nothing else in it besides this relationship, at most once per class, never on an abstract class (see
+ * checkTranslations()). The FK gets foreign_key.translations = true, the model JSON relation 'translations' => true; no
+ * table changes.
+ *
  * `{filter_by:field}` or `{filter_by:sourcefield=targetfield}` on an n:1, 1:1 or n:n relation
  * (`Artikel "n" -- "n" Tag : hat {filter_by:sprache}`): filtered selection in the form, see resolveFilter(). The model
  * contains foreign_key.filter_by or many_to_many[].filter_by = ['field', 'target_field'] - only with the marker.
@@ -418,7 +426,7 @@ final class PumlParser
                 'media' => $media,
                 // order of the own body entries (fields and media fields interleaved) and the own section titles
                 'field_order' => array_column($own, 'name'), 'sections' => $c['sections'],
-            ];
+            ] + (!empty($c['unique_groups']) ? ['unique_groups' => $c['unique_groups']] : []); // {unique: name}: only then
         }
         $relations = [];
         foreach ($a['relations'] as $r) {
@@ -435,7 +443,9 @@ final class PumlParser
                 'unique' => $r['unique'], 'symmetric' => $r['symmetric'],
                 'own_column' => $r['kind'] === 'nn' ? null : $r['column'], 'junction' => $junction,
                 'renamed_from' => $r['renamed_from'], 'filter_by' => $r['filter_by'],
-            ] + (!empty($r['composition']) ? ['composition' => true] : []); // only then: other relations stay exactly as before
+            ] + (!empty($r['unique_groups']) ? ['unique_groups' => $r['unique_groups']] : []) // {unique: name}: only then
+                + (!empty($r['composition']) ? ['composition' => true] : []) // only then: other relations stay exactly as before
+                + (!empty($r['translations']) ? ['translations' => true] : []); // {translations}: likewise only then
         }
         $enums = [];
         foreach ($model['enums'] as $name => $values) {
@@ -470,13 +480,17 @@ final class PumlParser
     /** Field of a class (or metadata class) in the model JSON, see modelJson() */
     private static function fieldJson(string $id, string $rulePrefix, array $f, array $c): array
     {
+        $groups = array_keys(array_filter($c['unique_groups'] ?? [], function (array $cols) use ($f) {
+            return in_array($f['name'], $cols, true);
+        }));
         return [
             'id' => $id, 'name' => $f['name'], 'type' => $f['type'], 'enum_name' => $f['enum'] ?? null,
             'sql_type' => $f['sql_type'], 'required' => $f['required'], 'primary' => $f['primary'],
             'title' => in_array($f['name'], $c['title_fields'], true),
             'unique' => in_array($f['name'], $c['unique_fields'], true),
             'renamed_from' => $f['renamed_from'] ?? null, 'section' => $f['section'] ?? null,
-        ] + (isset($f['workflow']) ? ['workflow' => true] : []) // workflow field: enum_name = name of the workflow
+        ] + ($groups ? ['unique_groups' => $groups] : []) // {unique: name} groups of the field, in the order of the class
+            + (isset($f['workflow']) ? ['workflow' => true] : []) // workflow field: enum_name = name of the workflow
             + (isset($f['sort']) ? ['sort_by' => $f['sort']['spec']] : []) // sort: {by: …} as written, [] = none
             + (isset($f['rules']) ? ['rules' => self::rulesJson($rulePrefix, $f['rules'])] : []);
     }
@@ -736,6 +750,7 @@ final class PumlParser
         $blockRecords = []; // parallel to $blocks: index into $positions['blocks'] (sourceMap())
         $openDecor = null; // index into $positions['decor'] of the multi-line decorative block being skipped
         $owners = []; // compositions: table of the part => table of its whole (a part has exactly one, see checkComposition())
+        $translationLines = []; // {translations}: index into $relations => source line (checked after all relations, see checkTranslations())
         foreach (explode("\n", $rest) as $index => $line) {
             if (preg_match_all('/\x01([^\x01]*)\x01/', $line, $placeholders)) {
                 foreach ($placeholders[1] as $table) {
@@ -789,7 +804,7 @@ final class PumlParser
             // The multiplicities are optional in the pattern only for a composition (`Ganzes *-- "n" Teil`, the side of the
             // whole may go without one); every other relation line without both still is no relation (see below).
             $relPattern = '/^(\S+)\s+(?:"([^"]*)"\s+)?(\S+)\s+(?:"([^"]*)"\s+)?([^\s{]+)\s*(?::\s*(.*?))?\s*'
-                . '((?:\{(?:\w*|(?i:renamed_from|filter_by):[^{}]*)\}\s*)*)$/';
+                . '((?:\{(?:\w*|(?i:renamed_from|filter_by|unique):[^{}]*)\}\s*)*)$/';
             // remove a colour in the arrow ("-[#red]->", purely decorative)
             $matched = preg_match($relPattern, $line, $r, PREG_UNMATCHED_AS_NULL) === 1;
             $arrow = $matched ? (string) preg_replace('/\[#\w+(?:[,;]#?\w+)*\]/', '', $r[3]) : '';
@@ -820,14 +835,19 @@ final class PumlParser
                     $warn($index, Msg::of('msg_schema.warn_arrow_color', "Colour in the arrow '{arrow}' is not taken over", ['arrow' => $r[3]]));
                 }
                 $marker = null; // {cascade} or {label}; null = none
-                $flags = ['unique' => false, 'symmetric' => false];
+                $flags = ['unique' => false, 'symmetric' => false, 'translations' => false];
                 $renamedFrom = null; // {renamed_from:Altes Label}: only for SchemaMigration, without meaning at the first bootstrap
                 $filterBy = null; // {filter_by:field} or {filter_by:sourcefield=targetfield}: filtered selection, see resolveFilter()
+                $groups = []; // {unique: name}: named uniqueness groups the FK column joins, in the order written
                 $multi = Msg::of('msg_schema.relation_markers', 'Only one marker per relation possible ({cascade} or {label}, in addition '
-                    . 'at most once {unique}, {symmetric}, {filter_by:…} or {renamed_from:…}): {source}', ['source' => $line]);
+                    . 'at most once {unique}, {symmetric}, {translations}, {filter_by:…} or {renamed_from:…}): {source}', ['source' => $line]);
                 preg_match_all('/\{(\w*)(?::([^{}]*))?\}/', $r[7] ?? '', $markers);
                 foreach ($markers[1] as $i => $raw) {
                     $m = strtolower($raw);
+                    if ($m === 'unique' && strpos($markers[0][$i], ':') !== false) {
+                        $groups[] = self::uniqueGroupName($markers[2][$i], $markers[0][$i], $line, $groups);
+                        continue;
+                    }
                     if ($m === 'renamed_from') {
                         if ($renamedFrom !== null) {
                             throw new SchemaException($multi);
@@ -842,9 +862,9 @@ final class PumlParser
                         $filterBy = trim($markers[2][$i]);
                         continue;
                     }
-                    if (!in_array($m, ['cascade', 'label', 'unique', 'symmetric'], true)) {
+                    if (!in_array($m, ['cascade', 'label', 'unique', 'symmetric', 'translations'], true)) {
                         throw new SchemaException(Msg::of('msg_schema.relation_marker_unknown', "Unknown marker '{marker}' on relation "
-                            . '(allowed: {cascade}, {label}, {unique}, {symmetric}, {renamed_from:Old label}, {filter_by:field}): {source}', [
+                            . '(allowed: {cascade}, {label}, {unique}, {symmetric}, {translations}, {renamed_from:Old label}, {filter_by:field}): {source}', [
                                 'marker' => '{' . $raw . '}', 'source' => $line,
                             ]));
                     }
@@ -881,6 +901,15 @@ final class PumlParser
                                 'class' => $metaClasses[strtolower($side)]['name'], 'media_meta' => self::META_STEREOTYPE, 'source' => $line,
                             ]));
                     }
+                    if (isset($abstract[strtolower($side)]) && $flags['translations']) {
+                        $subs = self::subclassesOf($classes, strtolower($side));
+                        throw new SchemaException(Msg::of('msg_schema.translations_abstract', "{translations} on the abstract class '{class}' "
+                            . 'not possible - relationships are not inherited. Please draw the self-reference with {translations} for every '
+                            . 'subclass ({subclasses}): {source}', [
+                                'class' => $abstract[strtolower($side)], 'subclasses' => $subs ? implode(', ', $subs) : '-',
+                                'translations' => '{translations}', 'source' => $line,
+                            ]));
+                    }
                     if (isset($abstract[strtolower($side)])) {
                         throw new SchemaException(Msg::of('msg_schema.relation_abstract', "Relationship to abstract class '{class}' not "
                             . 'possible - abstract classes have no table of their own (relationships are not inherited; please draw '
@@ -891,7 +920,7 @@ final class PumlParser
                     // the part carries the column, exactly as for `Teil "n" --> "1" Ganzes : label {cascade}`
                     $applied = self::applyRelation(
                         $entities, $junctions, $comp['part'], $comp['part_card'], '1', $comp['whole'], $label, $marker, $flags['unique'],
-                        '-->', false, $renamedFrom, $filterBy
+                        '-->', false, $renamedFrom, $filterBy, $groups
                     );
                     $owner = strtolower($comp['part']);
                     if (isset($owners[$owner])) {
@@ -910,24 +939,32 @@ final class PumlParser
                     }
                     unset($f);
                     $positions['relations'][] = $orig($index);
+                    if ($flags['translations']) {
+                        $translationLines[count($relations)] = $line;
+                    }
                     $relations[] = $applied + [
                         'from_multiplicity' => trim($comp['part_card']), 'to_multiplicity' => trim($comp['whole_card'] ?? '1'),
                         // the {cascade} of a composition is implicit: in the model JSON it is not a marker of its own
                         'label' => $label, 'show_label' => false, 'cascade' => false, 'composition' => true,
                         'unique' => $flags['unique'], 'symmetric' => false, 'renamed_from' => $renamedFrom,
+                        'translations' => $flags['translations'], 'unique_groups' => $groups,
                     ];
                     continue;
                 }
                 $applied = self::applyRelation(
                     $entities, $junctions, $r[1], $r[2], $r[4], $r[5], $label, $marker, $flags['unique'], $arrow,
-                    $flags['symmetric'], $renamedFrom, $filterBy
+                    $flags['symmetric'], $renamedFrom, $filterBy, $groups
                 );
                 $first = $applied['first']; // does the class named first carry the column or the n:n list?
                 $positions['relations'][] = $orig($index);
+                if ($flags['translations']) {
+                    $translationLines[count($relations)] = $line;
+                }
                 $relations[] = $applied + [
                     'from_multiplicity' => trim($first ? $r[2] : $r[4]), 'to_multiplicity' => trim($first ? $r[4] : $r[2]),
                     'label' => $label, 'show_label' => $marker === 'label', 'cascade' => $marker === 'cascade',
                     'unique' => $flags['unique'], 'symmetric' => $flags['symmetric'], 'renamed_from' => $renamedFrom,
+                    'translations' => $flags['translations'], 'unique_groups' => $groups,
                 ];
             } elseif (preg_match('/^package\s/i', $line)) {
                 throw new SchemaException(Msg::of('msg_schema.package_line', 'package line not understood (expected: package "Name" '
@@ -943,6 +980,8 @@ final class PumlParser
             }
         }
         self::rejectCompositionCycles($owners, $entities);
+        self::checkUniqueGroups($entities);
+        self::checkTranslations($entities, $relations, $translationLines);
         $open = self::currentPackage($blocks);
         if ($open !== null) {
             throw new SchemaException(Msg::of('msg_schema.package_unclosed', 'package "{package}" is not closed with "}".', ['package' => $open]));
@@ -1036,6 +1075,12 @@ final class PumlParser
             }
         }
 
+        foreach ($entities as &$e) {
+            if (empty($e['unique_groups'])) {
+                unset($e['unique_groups']); // only then in the model: diagrams without named groups yield exactly the previous model
+            }
+        }
+        unset($e);
         return [
             'model' => [
                 'entities' => $entities, 'junctions' => array_values($junctions), 'enums' => $enums,
@@ -1365,6 +1410,10 @@ final class PumlParser
             foreach ($c['fields'] as $f) {
                 $c['origin'][strtolower($f['name'])] = $c['name'];
             }
+            $c['group_origin'] = []; // named {unique} group => class it is declared in (likewise)
+            foreach (array_keys($c['unique_groups']) as $g) {
+                $c['group_origin'][$g] = $c['name'];
+            }
             $c['section_origin'] = []; // section title in lower case => class it comes from (likewise)
             foreach ($c['sections'] as $title) {
                 $c['section_origin'][mb_strtolower($title, 'UTF-8')] = $c['name'];
@@ -1429,6 +1478,18 @@ final class PumlParser
                 $c['fields'] = array_merge($base['fields'], $own); // the id of the base is already at the front there
                 $c['title_fields'] = array_merge($base['title_fields'], $c['title_fields']);
                 $c['unique_fields'] = array_merge($base['unique_fields'], $c['unique_fields']);
+                // named groups of the base first; the same name in a subclass would merge two declarations unnoticed
+                foreach (array_keys($c['unique_groups']) as $g) {
+                    if (isset($base['unique_groups'][$g])) {
+                        throw new SchemaException(Msg::of('msg_schema.unique_group_inherited', "Class '{class}': the group {group} is "
+                            . "already defined in the base class '{base}' - fields of a subclass cannot join it. Please choose another "
+                            . 'group name (a relationship of the subclass may join the inherited group).', [
+                                'class' => $c['name'], 'group' => '{unique: ' . $g . '}', 'base' => $base['group_origin'][$g],
+                            ]));
+                    }
+                }
+                $c['group_origin'] = $base['group_origin'] + $c['group_origin'];
+                $c['unique_groups'] = $base['unique_groups'] + $c['unique_groups'];
                 $c['origin'] += $base['origin'];
                 $visibility = array_filter($c['fields'], function ($f) {
                     return $f['type'] === 'visibility';
@@ -1451,7 +1512,7 @@ final class PumlParser
         foreach (array_keys($classes) as $table) {
             $c = $resolve($table, []);
             if (!$c['abstract']) {
-                unset($c['origin'], $c['section_origin'], $c['abstract']);
+                unset($c['origin'], $c['section_origin'], $c['group_origin'], $c['abstract']);
                 $entities[$table] = $c;
             }
         }
@@ -1641,6 +1702,7 @@ final class PumlParser
         $seen = [];
         $titleFields = []; // order = diagram order, see {title} marker below
         $uniqueFields = []; // {unique} fields; FK columns with {unique} are added by applyRelation()
+        $uniqueGroups = []; // named groups {unique: name} => their fields in diagram order (FK columns: applyRelation())
         $sections = []; // titles of the separator lines with a title, in diagram order (see sectionTitle())
         $section = null; // current section; null = head area before the first separator line with a title
         $sectionFields = 0; // fields of the current section so far (a section without fields is a schema error)
@@ -1714,10 +1776,13 @@ final class PumlParser
             // moves into this field; without meaning at the first bootstrap
             $renamedFrom = null;
             $sortBy = null; // {by: Klasse, "Label"}: groups of a sort field, resolved in analyze() once the relations are known
+            $groups = []; // {unique: name}: named uniqueness groups of this field, in the order written
             foreach ($markers[1] as $raw) {
                 $m = trim($raw);
                 if (preg_match('/^(title|unique)$/i', $m)) {
                     $markerNames[] = strtolower($m);
+                } elseif (preg_match('/^unique\s*:(.*)$/is', $m, $um)) {
+                    $groups[] = self::uniqueGroupName($um[1], '{' . $m . '}', $shown, $groups);
                 } elseif (preg_match('/^by\s*:(.*)$/is', $m, $bm)) {
                     $markerNames[] = 'by';
                     $sortBy = self::parseSortBy($bm[1]);
@@ -1759,7 +1824,8 @@ final class PumlParser
                 ]));
             }
             $isTitle = in_array('title', $markerNames, true);
-            $isUnique = in_array('unique', $markerNames, true);
+            // a named group counts like {unique} for the rules of the field (not on id, media, sort, workflow, metadata classes)
+            $isUnique = in_array('unique', $markerNames, true) || $groups;
             if ($renamedFrom !== null && strtolower($field) === 'id') {
                 throw new SchemaException(Msg::of('msg_schema.id_renamed', "Field 'id' in class '{class}' cannot be marked with "
                     . '{renamed_from:…}.', ['class' => $name]));
@@ -1889,8 +1955,11 @@ final class PumlParser
             if ($isTitle) {
                 $titleFields[] = $field;
             }
-            if ($isUnique) {
+            if (in_array('unique', $markerNames, true)) {
                 $uniqueFields[] = $field;
+            }
+            foreach ($groups as $g) {
+                $uniqueGroups[$g][] = $field;
             }
 
             if (strtolower($field) === 'id') {
@@ -1974,6 +2043,8 @@ final class PumlParser
         return [
             'name' => $name, 'table' => $table, 'fields' => $fields, 'many_to_many' => [], 'title_fields' => $titleFields,
             'unique_fields' => $uniqueFields,
+            // {unique: name}: only then in the model - diagrams without named groups yield exactly the previous model
+            'unique_groups' => $uniqueGroups,
             'package' => null, // is set in parse() if the class is inside a package block
             'sections' => $sections,
         ];
@@ -2294,15 +2365,7 @@ final class PumlParser
                 continue;
             }
             // the concrete classes below the abstract one (also over several levels): each needs its own composition
-            $subs = [];
-            foreach ($classes as $t => $cl) {
-                for ($base = $cl['extends']; $base !== null && !$cl['abstract']; $base = $classes[strtolower($base)]['extends'] ?? null) {
-                    if (strtolower($base) === $key) {
-                        $subs[] = $cl['name'];
-                        break;
-                    }
-                }
-            }
+            $subs = self::subclassesOf($classes, $key);
             $example = $side === 'part'
                 ? $c['whole'] . ' *-- "' . ($c['part_card'] ?? 'n') . '" ' . ($subs[0] ?? 'Unterklasse')
                 : ($subs[0] ?? 'Unterklasse') . ' *-- "' . ($c['part_card'] ?? 'n') . '" ' . $c['part'];
@@ -2338,6 +2401,190 @@ final class PumlParser
                 . 'label, {unique}, {filter_by:…}, {renamed_from:…}): {source}', [
                     'marker' => $marker === 'label' ? '{label}' : '{symmetric}', 'source' => $line,
                 ]));
+        }
+    }
+
+    /** Names of the concrete classes below the abstract class $key (also over several levels), in diagram order */
+    private static function subclassesOf(array $classes, string $key): array
+    {
+        $subs = [];
+        foreach ($classes as $cl) {
+            for ($base = $cl['extends']; $base !== null && !$cl['abstract']; $base = $classes[strtolower($base)]['extends'] ?? null) {
+                if (strtolower($base) === $key) {
+                    $subs[] = $cl['name'];
+                    break;
+                }
+            }
+        }
+        return $subs;
+    }
+
+    /**
+     * Name of a named uniqueness group from `{unique: name}` ($name = the part after the colon, $marker = the marker as
+     * written): [a-z][a-z0-9_]*, at most once per line ($taken = the groups of the line so far).
+     */
+    private static function uniqueGroupName(string $name, string $marker, string $source, array $taken): string
+    {
+        $name = trim($name);
+        if (!preg_match('/^[a-z][a-z0-9_]*$/', $name)) {
+            throw new SchemaException(Msg::of('msg_schema.unique_group_name', 'Invalid group name in {marker} - a group name starts '
+                . 'with a lowercase letter and contains only lowercase letters, digits and _ (e.g. {example}): {source}', [
+                    'marker' => $marker, 'example' => '{unique: slug_per_site}', 'source' => $source,
+                ]));
+        }
+        if (in_array($name, $taken, true)) {
+            throw new SchemaException(Msg::of('msg_schema.unique_group_twice', '{marker} given twice on the same line: {source}', [
+                'marker' => '{unique: ' . $name . '}', 'source' => $source,
+            ]));
+        }
+        return $name;
+    }
+
+    /**
+     * Named {unique} groups of the concrete classes once all relations are applied: no two groups (the unnamed one
+     * included) with the same set of columns, no group that consists only of a 1:1 column (unique anyway).
+     */
+    private static function checkUniqueGroups(array $entities): void
+    {
+        foreach ($entities as $e) {
+            if (empty($e['unique_groups'])) {
+                continue;
+            }
+            $seen = []; // sorted column list => marker of the group
+            if ($e['unique_fields']) {
+                $key = $e['unique_fields'];
+                sort($key);
+                $seen[implode(',', $key)] = '{unique}';
+            }
+            foreach ($e['unique_groups'] as $g => $cols) {
+                $marker = '{unique: ' . $g . '}';
+                $key = $cols;
+                sort($key);
+                $key = implode(',', $key);
+                if (isset($seen[$key])) {
+                    throw new SchemaException(Msg::of('msg_schema.unique_group_same', "Class '{class}': the groups {first} and {second} "
+                        . 'consist of the same columns ({columns}) - one of them is enough.', [
+                            'class' => $e['name'], 'first' => $seen[$key], 'second' => $marker, 'columns' => implode(', ', $cols),
+                        ]));
+                }
+                $seen[$key] = $marker;
+                if (count($cols) === 1) {
+                    foreach ($e['fields'] as $f) {
+                        if ($f['name'] === $cols[0] && !empty($f['foreign_key']['one_to_one'])) {
+                            throw new SchemaException(Msg::of('msg_schema.unique_group_one_to_one', "Class '{class}': the group {group} "
+                                . "consists only of the 1:1 column '{column}', which is unique anyway. Please remove the marker or "
+                                . 'add further fields to the group.', ['class' => $e['name'], 'group' => $marker, 'column' => $cols[0]]));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * {translations} (see class comment): the structure it needs, purely structural - no names are looked at. Marks the FK
+     * column with foreign_key.translations = true.
+     *
+     * @param array<int,string> $lines index into $relations => source line of the relations with {translations}
+     */
+    private static function checkTranslations(array &$entities, array $relations, array $lines): void
+    {
+        $seen = []; // table => true once it has a {translations} - checked first, so the other rules talk about a single one
+        foreach ($lines as $i => $line) {
+            $from = $relations[$i]['from'];
+            if (isset($seen[$from])) {
+                throw new SchemaException(Msg::of('msg_schema.translations_twice', "Class '{a}' has more than one relationship with "
+                    . '{translations} - at most one per class is possible: {source}', [
+                        'a' => $entities[$from]['name'], 'translations' => '{translations}', 'source' => $line,
+                    ]));
+            }
+            $seen[$from] = true;
+        }
+        foreach ($lines as $i => $line) {
+            $r = $relations[$i];
+            $e = $entities[$r['from']];
+            $target = $entities[$r['to']];
+            $params = ['a' => $e['name'], 'b' => $target['name'], 'translations' => '{translations}', 'unique' => '{unique}', 'source' => $line];
+            if ($r['from'] !== $r['to'] || !empty($r['composition'])) {
+                throw new SchemaException(Msg::of('msg_schema.translations_self', "{translations} on '{a}' → '{b}' is only possible on a "
+                    . 'self-reference - the language versions are rows of the same class (e.g. {a} "n" --> "0..1" {a} : Original von '
+                    . '{translations} {unique}): {source}', $params));
+            }
+            if ($r['kind'] !== 'n1') {
+                throw new SchemaException(Msg::of('msg_schema.translations_kind', "{translations} on '{a}' → '{b}' needs an n:1 "
+                    . 'self-reference ("n" --> "0..1"), not {kind}: {source}', $params + ['kind' => $r['kind'] === 'nn' ? 'n:n' : '1:1']));
+            }
+            $fk = null;
+            foreach ($e['fields'] as $f) {
+                if ($f['name'] === $r['column']) {
+                    $fk = $f;
+                }
+            }
+            if ($fk['required']) {
+                throw new SchemaException(Msg::of('msg_schema.translations_required', "{translations} on '{a}' → '{b}' needs \"0..1\" on "
+                    . 'the target side - the original itself has no original, a required target "1" is not possible: {source}', $params));
+            }
+            // the group the marked relationship stands in: the unnamed one or a named one - the rules apply to it alone
+            $inGroups = [];
+            if (in_array($r['column'], $e['unique_fields'], true)) {
+                $inGroups['{unique}'] = $e['unique_fields'];
+            }
+            foreach ($e['unique_groups'] as $g => $cols) {
+                if (in_array($r['column'], $cols, true)) {
+                    $inGroups['{unique: ' . $g . '}'] = $cols;
+                }
+            }
+            if (count($inGroups) > 1) {
+                throw new SchemaException(Msg::of('msg_schema.translations_groups', "{translations} on '{a}' → '{b}': the relationship "
+                    . 'stands in several uniqueness groups ({groups}) - please put it in exactly one; that group defines the language '
+                    . 'versions: {source}', $params + ['groups' => implode(', ', array_keys($inGroups))]));
+            }
+            $group = $inGroups ? reset($inGroups) : [];
+            if (!$inGroups) {
+                throw new SchemaException(Msg::of('msg_schema.translations_unique', "{translations} on '{a}' → '{b}' needs {unique} "
+                    . 'as well - together with the language field it makes sure every language exists only once per original: {source}',
+                    $params));
+            }
+            $enums = [];
+            $others = [];
+            foreach ($group as $name) {
+                if ($name === $r['column']) {
+                    continue;
+                }
+                $field = null;
+                foreach ($e['fields'] as $f) {
+                    if ($f['name'] === $name) {
+                        $field = $f;
+                    }
+                }
+                if ($field !== null && $field['type'] === 'enum' && !isset($field['workflow']) && $field['foreign_key'] === null) {
+                    $enums[] = $field;
+                } else {
+                    $others[] = $name;
+                }
+            }
+            if (count($enums) !== 1) {
+                throw new SchemaException(Msg::of('msg_schema.translations_enum', "{translations} on '{a}' → '{b}' needs exactly one enum "
+                    . 'field in the {unique} group of the class (found: {found}).', $params + [
+                        'found' => $enums ? implode(', ', array_column($enums, 'name')) : Msg::of('msg_schema.translations_none', 'none'),
+                    ]));
+            }
+            if (!$enums[0]['required']) {
+                throw new SchemaException(Msg::of('msg_schema.translations_enum_optional', "{translations} on '{a}' → '{b}': the language "
+                    . "field '{field}' must be required (without \"?\") - a version without a language could not be told apart.",
+                    $params + ['field' => $enums[0]['name']]));
+            }
+            if ($others) {
+                throw new SchemaException(Msg::of('msg_schema.translations_group', "{translations} on '{a}' → '{b}': the {unique} group of "
+                    . "the class may only contain this relationship and the language field '{field}' (also in it: {others}) - otherwise it "
+                    . 'is not clear what makes a language version.', $params + ['field' => $enums[0]['name'], 'others' => implode(', ', $others)]));
+            }
+            foreach ($entities[$r['from']]['fields'] as &$f) {
+                if ($f['name'] === $r['column']) {
+                    $f['foreign_key']['translations'] = true;
+                }
+            }
+            unset($f);
         }
     }
 
@@ -2398,7 +2645,8 @@ final class PumlParser
         string $arrow = '--',
         bool $symmetric = false,
         ?string $renamedFrom = null,
-        ?string $filterBy = null
+        ?string $filterBy = null,
+        array $groups = []
     ): array {
         $onDelete = $marker === 'cascade' ? 'cascade' : 'restrict';
         $ta = strtolower($a);
@@ -2441,7 +2689,7 @@ final class PumlParser
                         'a' => $a, 'b' => $b, 'label' => '{label}',
                     ]));
             }
-            if ($unique) {
+            if ($unique || $groups) {
                 throw new SchemaException(Msg::of('msg_schema.nn_unique', "{unique} is only possible on fields and n:1 relations, not on "
                     . "the n:n relation '{a}' -- '{b}'.", ['a' => $a, 'b' => $b, 'unique' => '{unique}']));
             }
@@ -2556,6 +2804,9 @@ final class PumlParser
         }
         if ($unique) {
             $entities[$owner]['unique_fields'][] = $column; // belongs to the {unique} group of the class with the FK column
+        }
+        foreach ($groups as $g) {
+            $entities[$owner]['unique_groups'][$g][] = $column; // joins the named group (also one inherited from the base)
         }
         return [
             'kind' => $oneToOne ? 'one_to_one' : 'n1', 'from' => $owner, 'to' => $target, 'first' => $first, 'column' => $column,

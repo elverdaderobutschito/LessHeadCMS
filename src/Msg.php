@@ -154,6 +154,15 @@ final class Msg implements \JsonSerializable
         return ['type' => 'number', 'value' => $value, 'decimals' => $decimals];
     }
 
+    /**
+     * Field parameter: English text the label from the diagram ($label) - the UI shows the label of the field in the display
+     * language (translation under Lokalisierung, otherwise the same). JSON {type: 'field', table, name, label}.
+     */
+    public static function field(string $table, string $name, string $label): array
+    {
+        return ['type' => 'field', 'table' => $table, 'name' => $name, 'label' => $label];
+    }
+
     /** Message from its JSON form {code, params, message} (e.g. error_codes + errors of a caught ApiException) */
     public static function fromArray(array $data): self
     {
@@ -179,6 +188,9 @@ final class Msg implements \JsonSerializable
         }
         if (is_array($value) && ($value['type'] ?? null) === 'number') {
             return number_format((float) $value['value'], (int) $value['decimals'], '.', ',');
+        }
+        if (is_array($value) && ($value['type'] ?? null) === 'field') {
+            return (string) $value['label'];
         }
         return is_scalar($value) || $value === null ? (string) $value : (string) json_encode($value, JSON_UNESCAPED_UNICODE);
     }

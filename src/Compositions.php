@@ -31,7 +31,8 @@ namespace LessHeadCMS;
  *
  * Group: [
  *   'name'     => key in /api/{whole}/{id}/parts/{name}: the normalized label (as for FK column names); without a label the
- *                 table of the part (shared: of the abstract class); on a collision with "_<table>" appended,
+ *                 table of the part (shared: of the abstract class); if several compositions of the whole have the same
+ *                 label, every one of them with "_<table>" appended (website: belongs_to_navigation, belongs_to_page),
  *   'label'    => label as written ('' = none),
  *   'abstract' => name of the abstract class of a shared order (heading of the section) or null,
  *   'parts'    => [table => FK column] in model order,
@@ -76,19 +77,39 @@ final class Compositions
                 }
             }
         }
-        $out = [];
-        $used = [];
-        foreach ($groups as $g) {
-            $first = (string) array_key_first($g['parts']);
+        // key: the normalized label; if several groups of this whole have the same one, ALL of them get the table of
+        // their part appended (shared order: of the abstract class) - as with several n:n relationships between the same
+        // pair, so the key does not depend on which composition comes first. A unique label keeps its short key.
+        $base = [];
+        $count = [];
+        foreach ($groups as $k => $g) {
+            $own = $g['abstract'] !== null ? strtolower($g['abstract']) : (string) array_key_first($g['parts']);
             $name = PumlParser::normalizeLabel($g['label']);
-            if ($name === '') {
-                $name = $g['abstract'] !== null ? strtolower($g['abstract']) : $first;
+            $base[$k] = [$name === '' ? $own : $name, $name === '' ? '' : $own];
+            $count[$base[$k][0]] = ($count[$base[$k][0]] ?? 0) + 1;
+        }
+        // unique keys first, so that a key written as a label always wins over a suffixed one that happens to be equal
+        $names = [];
+        foreach ($groups as $k => $g) {
+            if ($count[$base[$k][0]] === 1 || $base[$k][1] === '') {
+                $names[$k] = $base[$k][0];
             }
-            if (isset($used[$name])) {
-                $name .= '_' . $first;
+        }
+        $used = array_flip($names);
+        foreach ($groups as $k => $g) {
+            if (isset($names[$k])) {
+                continue;
             }
-            $used[$name] = true;
-            $out[] = ['name' => $name] + $g;
+            $name = $base[$k][0] . '_' . $base[$k][1];
+            for ($n = 2, $try = $name; isset($used[$try]); $n++) {
+                $try = "{$name}_$n"; // only if the suffixed key meets another label (e.g. "belongs to page")
+            }
+            $used[$try] = true;
+            $names[$k] = $try;
+        }
+        $out = [];
+        foreach ($groups as $k => $g) {
+            $out[] = ['name' => $names[$k]] + $g;
         }
         return $out;
     }
@@ -102,13 +123,12 @@ final class Compositions
                 return $g;
             }
         }
+        // by label only if it is unambiguous (with the same label on several compositions only the suffixed keys work)
         $wanted = PumlParser::normalizeLabel($name);
-        foreach ($groups as $g) {
-            if ($wanted !== '' && PumlParser::normalizeLabel($g['label']) === $wanted) {
-                return $g;
-            }
-        }
-        return null;
+        $hits = array_values(array_filter($groups, function ($g) use ($wanted) {
+            return $wanted !== '' && PumlParser::normalizeLabel($g['label']) === $wanted;
+        }));
+        return count($hits) === 1 ? $hits[0] : null;
     }
 
     /**

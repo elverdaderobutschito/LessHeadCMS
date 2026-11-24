@@ -8,7 +8,7 @@ _Part of the [LessHeadCMS documentation](../README.md)._
 | Method  | Path                    | Access        | Description                                             |
 |---------|-------------------------|---------------|---------------------------------------------------------|
 | GET     | `/api`                  | public        | list of the entities                                    |
-| GET     | `/api/{entity}/_schema` | public        | `package` (name of the `package` block or `null`), field name, type (for `enum` additionally `enum_values`, for fields with [field rules](validation.md) `rules`), `required`, `foreign_key` (target table, `title_field`, `label`, `on_delete`, `one_to_one`), `many_to_many` (`name`, target table, `title_field`, `label`, `show_label`, `symmetric`), `unique_fields` (`{unique}` group), only for media fields additionally `media` (`name`, `type: "media"`, `required`; with a metadata class also `meta`, `meta_class`, `meta_sections` – see "Metadata per medium" below), `field_order` (display order, see below), only for classes with form sections `sections` and `section` per entry, `system_fields` (record metadata `created_at`/`created_by`/`updated_at`/`updated_by`, see [Record metadata](record-metadata.md); public without the two user fields) |
+| GET     | `/api/{entity}/_schema` | public        | `package` (name of the `package` block or `null`), field name, type (for `enum` additionally `enum_values`, for fields with [field rules](validation.md) `rules`), `required`, `foreign_key` (target table, `title_field`, `label`, `on_delete`, `one_to_one`), `many_to_many` (`name`, target table, `title_field`, `label`, `show_label`, `symmetric`), `unique_fields` (`{unique}` group), `unique_groups` (named groups `{unique: name}`, only if there are any), only for media fields additionally `media` (`name`, `type: "media"`, `required`; with a metadata class also `meta`, `meta_class`, `meta_sections` – see "Metadata per medium" below), `field_order` (display order, see below), only for classes with form sections `sections` and `section` per entry, `system_fields` (record metadata `created_at`/`created_by`/`updated_at`/`updated_by`, see [Record metadata](record-metadata.md); public without the two user fields) |
 | GET     | `/api/{entity}`         | public        | records, **always paginated** (default: page 1 with 50 rows) – see "Lists: paging, sorting, filtering" |
 | GET     | `/api/{entity}/{id}`    | public        | one record                                              |
 | POST    | `/api/{entity}`         | **session**   | create (JSON body) → 201                                |
@@ -262,7 +262,20 @@ without a rule. A `POST`/`PUT` that would create an existing combination gets `4
 is already taken (Gutschein #4).“ / „Already taken“). The form of the editorial UI shows the message in the display
 language and marks the fields involved. A `PUT` is partial: missing columns of the
 group count with their stored value; the own row never counts as a duplicate. If a parallel duplicate gets ahead of the
-check, the database constraint kicks in (also `409`, then `existing_id: null`).
+check, the database constraint kicks in (also `409`, then `existing_id: null`). Every `409 duplicate` also carries
+`group` (name of the violated named group, `null` for the unnamed `{unique}` group and for 1:1) and `fields` (its columns
+the caller may see, the same as `unique_fields` of the response).
+
+**`unique_groups` in `_schema`** (at the top level, only for entities with named groups `{unique: name}`): `[{"name":
+"slug_per_site", "fields": ["slug", "language", "belongs_to_website_id"]}]` in the order of the diagram – every group is a
+rule of its own, next to `unique_fields`. Like `unique_fields` without the fields denied for the caller (a group without a
+visible field is left out). A `409` for a named group names the **labels** of its fields, in the display language of the UI:
+`{"error": "duplicate", "message": "The combination of Slug, Language and Belongs to is already taken (Page #4).", "code":
+"msg_records.group_taken_at", "params": {"fields": {…}, "entity": "Page", "id": 4, "group": "slug_per_site"}, "group":
+"slug_per_site", "fields": ["slug", "language", "belongs_to_website_id"], "unique_fields": […], "existing_id": 4, "errors":
+{…}}` – each field in `params.fields` is a parameter `{"type": "field", "table", "name", "label"}` the UI shows with the
+label of the field (translation under Lokalisierung → Übersetzungen, otherwise as in the diagram); a single-column group:
+„Slug is already taken (Page #4).“. The group name itself is a technical key and is not translated.
 
 **1:1 (`foreign_key.one_to_one: true`):** The same `409 duplicate` response if a target row is already assigned to another
 row, with `unique_fields: ["nutzer_id"]` and the message „Nutzer #3 is already assigned to Profil #1
@@ -380,16 +393,25 @@ Additionally:
 * `_schema` of the **whole**: `"compositions": [{"name": "auf", "label": "auf", "title": "Block", "part_entities":
   ["heroblock", "textblock"], "fk_column": "auf_seite_id", "fk_columns": {"heroblock": "auf_seite_id", …}, "min_count": 0,
   "min_entities": [], "shared_sort": true, "sort_field": "position"}]` – one entry per section of the form: `name` is the
-  key for `/parts/` (the normalized label; without a label the table of the part or of the abstract class), `title` the
+  key for `/parts/` (the normalized label; without a label the table of the part or of the abstract class; see
+  [same label](#same-label) below), `title` the
   abstract class of a shared order (else `null`), `fk_column` the column if it is the same for all parts (else `null`,
   see `fk_columns`), `min_count` 1 if at least one part class has the minimum count `"1..*"` (`min_entities`: which),
   `shared_sort` whether the part classes share **one** order (sort field of an abstract class grouped by this
   composition), `sort_field` the sort field of the parts or `null` (no order: parts by `id`). Part classes the caller
   may not read are left out; the key is missing for entities without compositions.
+* <a id="same-label"></a>**Same label on several compositions** of one whole: then **every one** of them gets the table
+  of its part appended (for a shared order: of the abstract class) – as with several n:n relationships between the same
+  pair. With `Website *-- "n" Navigation : belongs to` and `Website *-- "n" Page : belongs to` the keys are
+  `belongs_to_navigation` and `belongs_to_page` (`GET /api/website/1/parts/belongs_to_page`); `…/parts/belongs_to` alone
+  is `404`, because it would be ambiguous. A label used by only one composition keeps its short key (`auf`,
+  `belongs_to`), whatever other compositions the whole has. Should a suffixed key meet another label (a composition
+  labelled „belongs to page“ next to the two above), the label keeps its key and the suffixed one gets `_2`.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/{whole}/{id}/parts/{name}` | public (like `GET /api/{entity}/{id}`): the parts of the record in their order → `{"data": [{"entity": "heroblock", "id": 4, "title": "Willkommen", "visibility": true, "state": null}, …], "name": "auf", "shared_sort": true}`. For a shared order **one mixed list over all part classes** – exactly the order of the page, no merging by `position` in the frontend. With a session each entry additionally has `"move": {"up": bool, "down": bool}` (a move is possible and allowed). `?expand=1`: the complete records as `GET /api/{entity}/{id}` delivers them, each with `"entity"`. Visibility as for single records: drafts (and the parts of a draft whole) only with `?include_drafts=true` and a session, classes without read access are missing. Parts whose order has further groups (navigation items per parent item) come per group; `"groups": {"<key>": "Leistungen"}` names them and each entry carries `"group"`. `404` for an unknown whole, record or composition name. |
+| GET | `/api/{whole}/{id}/parts/{name}` | public (like `GET /api/{entity}/{id}`): the parts of the record in their order → `{"data": [{"entity": "heroblock", "id": 4, "title": "Willkommen", "visibility": true, "state": null}, …], "name": "auf", "shared_sort": true}`. For a shared order **one mixed list over all part classes** – exactly the order of the page, no merging by `position` in the frontend. With a session each entry additionally has `"move": {"up": bool, "down": bool}` (a move is possible and allowed). `?expand=1`: the complete records as `GET /api/{entity}/{id}` delivers them, each with `"entity"`. `?expand=2`: in addition every part carries its own compositions, also as complete records – `"parts": {"gehoert_zu": [{"entity": "kachel", "id": 3, …}, …]}` (the tiles of a tile block in their order; `{}` for a class without compositions; a composition whose part classes the caller may not read is missing). At most two levels (`expand=3` → `422`); visibility, drafts and rights as for `expand=1` on both levels (public: draft tiles are left out). Visibility as for single records: drafts (and the parts of a draft whole) only with `?include_drafts=true` and a session, classes without read access are missing. Parts whose order has further groups (navigation items per parent item) come per group; `"groups": {"<key>": "Leistungen"}` names them and each entry carries `"group"`. `404` for an unknown whole, record or composition name. |
+| POST | `/api/{whole}/{id}/parts/{name}/visibility` | „Alle veröffentlichen“ / „Alle zurückziehen“, body `{"visible": true \| false}` (optional `"dry_run": true`: only count, nothing is written; optional `_reason`): sets the `visibility` field of **every part of the composition**, recursively over nested compositions (the tiles of a tile block; parts of classes without a `visibility` field are passed through, their own parts count), in **one transaction** → `200 {"visible": true, "dry_run": false, "changed": 5, "unchanged": 1, "skipped": 1, "classes": [{"table": "kachel", "entity": "Kachel", "changed": [3, 4], "unchanged": [], "skipped": [{"id": 7, "reason": "forbidden"}]}, …]}`. Every changed row gets a version (`update`) and its `<entity>.updated` webhook. **Skipped**, with `reason`: `forbidden` (class not readable, no right to update it, or its `visibility` field denied) and `workflow` (the class has a workflow – its approval is not bypassed, publish those via their transition). Rows that already have the value are `unchanged`. Session required (`401`), `404` for an unknown whole, record or composition name, `422` (`errors.visible`) if `visible` is not a boolean. |
 
 **Moving in a shared order:** `POST /api/{entity}/{id}/move` of a part (or of any entity whose `sort` field is shared by
 several subclasses) swaps with the next record of the group **of any class** – `Text, Hero` ↓ on the text gives
@@ -398,6 +420,21 @@ tables, each gets its version (`action: "reorder"`) and its `<entity>.updated` w
 entity. The response names the neighbour: `{"record": {…}, "swapped_with": 4, "swapped_entity": "heroblock"}`. `403
 {"error": "forbidden"}` (message names the class) if the caller may not edit the neighbour's class; `_arrange.up/down`
 and `move.up/down` are `false` then.
+
+## Language versions (`{translations}`)
+
+For a class whose „Original von“ self-reference carries `{translations}` (see
+[Create translation](multilingual.md#create-translation)):
+
+* `_schema`: `"translations": {"relation": "original_von_seite_id", "language_field": "sprache", "enum": "Sprache",
+  "values": ["DE", "EN"]}` and `"translations": true` in the `foreign_key` of the relation – missing for other classes (and if
+  the caller may not see the relation or the language field).
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/{entity}/{id}/translations` | public (like `GET /api/{entity}/{id}`, a draft without a session → `404`): the translation group of the record → `{"original": {"id": 1, "language": "DE", "title": "Start"}, "versions": [{"id": 1, "language": "DE", "title": "Start", "original": true, "current": true}, {"id": 7, "language": "EN", …}], "missing": ["FR"], "language_field": "sprache", "relation": "original_von_seite_id", "values": ["DE", "EN", "FR"], "can_translate": true, "denied_entity": null}`. Drafts in the group only with a session; a language with a hidden draft is not listed as missing. `can_translate` (session only): the caller may create in the class and in **all** its part classes, otherwise `denied_entity` names the class that is missing. `404 no_translations` for a class without the marker. |
+| POST | `/api/{entity}/{id}/translate` | „Übersetzung anlegen“, body `{"language": "EN"}` (optional `_reason` for the versions): deep copy in one transaction (rules in [Create translation](multilingual.md#create-translation)) → `201 {"id": 9, "entity": "seite", "language": "EN", "original": 1, "record": {…}, "summary": {"parts": {"textblock": 2, "kachel": 3}, "redirected": [{"entity": "textblock", "field": "link_ziel_seite_id", "target": "seite", "target_entity": "Seite", "from": 4, "to": 5, "title": "Kontakt"}], "untranslated": […], "dropped": […], "renamed": [{"entity": "kachel", "field": "kennung", "from": "k1", "to": "k1-en"}], "draft": true, "draft_parts": 5, "visible_parts": 0}}`. `draft`: the record got `visibility` false; `draft_parts`: copied parts with a `visibility` field, all set to `false`; `visible_parts`: copied parts of classes without one. From a translation, the new version is attached to the **original** (flat group). `409 translation_exists` with `existing_id` if the language exists in the group, `409 duplicate` if a `{unique}` value of a part cannot be given a suffix (nothing is created; a suffix of a named group `{unique: name}` lists the group in `renamed[].group`), `422` (`errors.language`) for an unknown value, `403` (message names the class) without the right to create in the class or one of its part classes. Every copied row gets version 1 (`create`) and its `<entity>.created` webhook. |
+
 ## Privacy defaults: no usernames
 
 The username is the login. Outside the user management the API therefore **never** delivers it – every other user

@@ -11,22 +11,22 @@ class ComposerStaticInit857cf5dbd548f21ded1bf0f285ece630
     );
 
     public static $prefixLengthsPsr4 = array (
-        'f' =>
+        'f' => 
         array (
             'flight\\' => 7,
         ),
-        'L' =>
+        'L' => 
         array (
             'LessHeadCMS\\' => 12,
         ),
     );
 
     public static $prefixDirsPsr4 = array (
-        'flight\\' =>
+        'flight\\' => 
         array (
             0 => __DIR__ . '/..' . '/mikecao/flight/flight',
         ),
-        'LessHeadCMS\\' =>
+        'LessHeadCMS\\' => 
         array (
             0 => __DIR__ . '/../..' . '/src',
         ),
@@ -64,6 +64,7 @@ class ComposerStaticInit857cf5dbd548f21ded1bf0f285ece630
         'LessHeadCMS\\PumlExporter' => __DIR__ . '/../..' . '/src/PumlExporter.php',
         'LessHeadCMS\\PumlParser' => __DIR__ . '/../..' . '/src/PumlParser.php',
         'LessHeadCMS\\PumlPatcher' => __DIR__ . '/../..' . '/src/PumlPatcher.php',
+        'LessHeadCMS\\RecordCopy' => __DIR__ . '/../..' . '/src/RecordCopy.php',
         'LessHeadCMS\\RecordMeta' => __DIR__ . '/../..' . '/src/RecordMeta.php',
         'LessHeadCMS\\RenameMarker' => __DIR__ . '/../..' . '/src/RenameMarker.php',
         'LessHeadCMS\\Revisions' => __DIR__ . '/../..' . '/src/Revisions.php',
@@ -78,6 +79,7 @@ class ComposerStaticInit857cf5dbd548f21ded1bf0f285ece630
         'LessHeadCMS\\TestData' => __DIR__ . '/../..' . '/src/TestData.php',
         'LessHeadCMS\\Thumbnail' => __DIR__ . '/../..' . '/src/Thumbnail.php',
         'LessHeadCMS\\TranslationCsv' => __DIR__ . '/../..' . '/src/TranslationCsv.php',
+        'LessHeadCMS\\Translations' => __DIR__ . '/../..' . '/src/Translations.php',
         'LessHeadCMS\\Users' => __DIR__ . '/../..' . '/src/Users.php',
         'LessHeadCMS\\Validation' => __DIR__ . '/../..' . '/src/Validation.php',
         'LessHeadCMS\\ValueException' => __DIR__ . '/../..' . '/src/ValueException.php',

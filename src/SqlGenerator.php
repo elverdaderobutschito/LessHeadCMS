@@ -133,24 +133,51 @@ final class SqlGenerator
     }
 
     /**
-     * Uniqueness rules of an entity: the {unique} group (PumlParser: unique_fields, composite) and, per
-     * 1:1 relationship, its FK column alone (foreign_key.one_to_one). A 1:1 column that already forms the {unique} group
-     * on its own does not appear twice.
+     * Uniqueness rules of an entity: the {unique} group (PumlParser: unique_fields, composite), per 1:1 relationship
+     * its FK column alone (foreign_key.one_to_one), then the named groups {unique: name} (unique_groups, in the order of
+     * the model). A 1:1 column that already forms the {unique} group on its own does not appear twice; the parser rejects
+     * named groups with the same columns as another group.
      *
      * @return string[][] list of column lists
      */
     public static function uniqueGroups(array $entity): array
     {
-        $groups = [];
+        return array_column(self::uniqueRules($entity), 'columns');
+    }
+
+    /**
+     * The rules of uniqueGroups() with their kind: ['name' => group name or null (unnamed {unique} group and 1:1),
+     * 'columns' => [...], 'one_to_one' => bool]
+     *
+     * @return array<int,array{name:?string,columns:string[],one_to_one:bool}>
+     */
+    public static function uniqueRules(array $entity): array
+    {
+        $rules = [];
         if (!empty($entity['unique_fields'])) {
-            $groups[] = $entity['unique_fields'];
+            $rules[] = ['name' => null, 'columns' => $entity['unique_fields'], 'one_to_one' => false];
         }
         foreach ($entity['fields'] as $f) {
-            if (!empty($f['foreign_key']['one_to_one']) && !in_array([$f['name']], $groups, true)) {
-                $groups[] = [$f['name']];
+            if (!empty($f['foreign_key']['one_to_one']) && ($entity['unique_fields'] ?? []) !== [$f['name']]) {
+                $rules[] = ['name' => null, 'columns' => [$f['name']], 'one_to_one' => true];
             }
         }
-        return $groups;
+        foreach ($entity['unique_groups'] ?? [] as $name => $columns) {
+            $rules[] = ['name' => (string) $name, 'columns' => $columns, 'one_to_one' => false];
+        }
+        return $rules;
+    }
+
+    /**
+     * The rule a column belongs to for {translations} etc.: the rules of uniqueRules() (without 1:1) that contain $column
+     *
+     * @return array<int,array{name:?string,columns:string[],one_to_one:bool}>
+     */
+    public static function rulesWith(array $entity, string $column): array
+    {
+        return array_values(array_filter(self::uniqueRules($entity), function (array $r) use ($column) {
+            return !$r['one_to_one'] && in_array($column, $r['columns'], true);
+        }));
     }
 
     /** Quote an identifier (names are already restricted to [A-Za-z0-9_] by the parser). */

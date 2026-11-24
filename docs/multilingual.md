@@ -299,9 +299,10 @@ translations that should live in the database – schema elements, pattern messa
 
 Everything above translates **labels**: the data itself is stored once and looks the same for every user. If the **content**
 is to exist in several languages – an article in German and in English – this is modelled in the diagram, with means that
-exist anyway: an `enum` for the language, a self-reference to the original and `{unique}`. It is a pattern, not a
-function: no code of its own, no setting, nothing the UI or the API treat specially. Every language version is a
-record of its own with its own `id`.
+exist anyway: an `enum` for the language, a self-reference to the original and `{unique}`. The pattern itself needs no code
+of its own and no setting. Every language version is a record of its own with its own `id`. The marker `{translations}`
+on the self-reference is optional: with it the form shows the language bar and **„Übersetzung anlegen“** (a deep copy into
+another language, see [Create translation](#create-translation)) and the API offers `/translations` and `/translate`.
 
 The pattern is independent of System → Lokalisierung: the values of `Sprache` are data, not the display languages set up
 there (the two lists are not connected; the enum values can be translated like those of any other enum).
@@ -342,6 +343,12 @@ class Artikel {
 Artikel "n" --> "0..1" Artikel : Original von {cascade} {unique}
 ```
 
+**With „Übersetzung anlegen“** – either variant plus `{translations}` (any order of the markers):
+
+```plantuml
+Artikel "n" --> "0..1" Artikel : Original von {translations} {cascade} {unique}
+```
+
 How it works (the rules themselves are in the [PlantUML rules](plantuml-syntax.md): "Self-reference", "`{unique}` marker",
 "Delete behaviour, `{cascade}` marker"):
 
@@ -380,6 +387,105 @@ language additionally with `&eq[sprache]=EN` (see "Lists: paging, sorting, filte
 
 **Complete example:** the model template [web CMS base model](../templates/web-cms.md) (`templates/web-cms.puml`)
 applies the pattern (variant 2, `{cascade}`) to pages, posts, events, services, categories and text snippets and uses
-`{filter_by:sprache}` for the category of a post. It also shows two neighbouring cases: `Navigation` has a language but no
-original (`{unique}` on place and language: one main navigation per language), and the blocks of a page have no language
+`{filter_by:language}` for the category of a post. It also shows two neighbouring cases: `Navigation` has a language but no
+original (`{unique}` on location and language: one main navigation per language), and the blocks of a page have no language
 of their own – they belong to the language version of their page.
+
+## Create translation
+
+`{translations}` on the self-reference of the pattern turns a translation group into something the CMS knows about. It is
+**purely structural**: the parser and the CMS never look at names such as „Sprache“, „Language“, „Original“ or
+„Übersetzung“. What counts is the marker and the structure it requires – the language field is the one enum field in the
+uniqueness group the relationship stands in (the unnamed `{unique}` group, or a named `{unique: name}`), whatever the
+field, the enum, its values or the label are called:
+
+```plantuml
+enum Variante {
+  A
+  B
+}
+class Ding {
+  + name: string {title}
+  + kennung: Variante {unique}
+}
+Ding "n" --> "0..1" Ding : basiert auf {translations} {unique}
+```
+
+**Schema errors** (each message names the class, the relationship and the fields; German/English):
+
+1. The relationship must be an **n:1 self-reference with `"0..1"` on the target side** – not n:n, not 1:1, not to another
+   class, not a composition, no required target `"1"`.
+2. It must carry **`{unique}`** or a named group **`{unique: name}`** – exactly one of them: that group is *the* group of
+   the translations.
+3. This group contains **exactly one enum field** (own or inherited) – the language field. It must be **required** (without
+   `?`).
+4. This group contains **nothing else** than this relationship and the language field. **Other groups** of the class are
+   free – e.g. a named group `slug_per_site` (slug + language + website) next to the translation group:
+
+   ```plantuml
+   class Page {
+     + slug: string {pattern: slug} {unique: slug_per_site}
+     + language: Language {unique} {unique: slug_per_site}
+   }
+   Page "n" --> "0..1" Page : translation of {translations} {cascade} {unique}
+   Website *-- "n" Page : belongs to {unique: slug_per_site}
+   ```
+
+   The translation group may also be a named one: `+ language: Language {unique: versions}` with
+   `… : translation of {translations} {unique: versions}`.
+5. **At most one** `{translations}` relationship per class.
+6. Not on an **abstract class** (relationships are not inherited; the message names the subclasses).
+
+Setting or removing the marker only changes the model (an `info` entry in „Änderungen prüfen“), no table.
+
+**In the form** of a saved record of such a class (next to „Verlauf“):
+
+* the **language bar** of the group, e.g. `DE · EN` – every existing version is a link to it, the current one is highlighted
+  (the enum values are shown as every enum shows them, i.e. translatable);
+* **„Übersetzung anlegen ▸“** with a menu of the missing languages. Disabled with the tooltip „Alle Sprachen vorhanden“
+  when every value exists, and with a tooltip naming the class when the user may not create in the class or in one of its
+  part classes (roles and permissions; the API checks the same and answers `403`).
+* After creating, the new version opens; a notice lists what was copied (parts per class), how many references were
+  pointed at existing translations, which targets are not translated yet, what was not taken over and which unique values
+  got a suffix.
+
+**What is copied** – everything in **one transaction**; if a step fails, nothing is created:
+
+1. **The record itself** with all its own fields. Then the language field is set to the target language, the
+   `{translations}` relationship to the **original** of the group (also when starting from a translation – the group stays
+   flat), a `visibility` field to `false` (the copy starts as a draft) and a workflow to its initial state.
+2. **Parts of compositions** (`*--`), recursively over all levels (e.g. Seite → KachelBlock → Kachel): all fields, the same
+   order (`sort` values). Parts have no language of their own – they belong to the new language version of their whole.
+   **Every copied part with a `visibility` field is a draft as well** (`false`), on every level – an API or frontend that
+   reads parts directly (`/parts`, the list of a part class, `GET /api/{part}`) would otherwise deliver blocks that still
+   carry the text of the source language. Part classes without a `visibility` field are copied unchanged (visible at once;
+   the summary says how many). A part with a workflow starts in its initial state, like the record itself. To publish the
+   parts after translating: „Alle veröffentlichen“ in the section of the composition (see
+   [Editorial UI](editorial-ui.md#compositions-parts-in-the-form-of-the-whole)) or
+   `POST /api/{whole}/{id}/parts/{name}/visibility`.
+3. **Media fields:** the media are **linked, not copied as files**, in the same order; the values of `<<media_meta>>`
+   (e.g. a caption) are copied so that they can be translated.
+4. **n:n relationships** are taken over. If the relationship has `{filter_by:<language field>}` and the target class has
+   `{translations}` itself, every link is mapped to the version in the target language; without one it is dropped and
+   listed in the summary.
+5. **n:1 and 1:1 references** (in the record and in its parts, e.g. Kachel → Seite, a link target): if the target class has
+   `{translations}` and there is a version in the target language, the reference points at it; otherwise it stays on the
+   source version and is listed as „noch nicht übersetzt“. References to classes without `{translations}` stay unchanged.
+   References to a row that is copied in the same run (e.g. a tile linking to the page being translated, the parent item of
+   a navigation item) point at its copy.
+6. **`{unique}` values:** for every uniqueness group (the unnamed one and every named `{unique: name}`) whose combination is
+   taken for a copied row, the first text field of **that** group gets `-<target language in lower case>` (`kennung` `k1` →
+   `k1-en`, then `k1-en-2`, …), listed in the summary (with `group` for a named group). A group without a text field cannot
+   be resolved → `409`, nothing is created. The translation group itself never needs a suffix – the new language makes it
+   free; the same holds for every group that contains the language field (e.g. `slug_per_site` with slug + language +
+   website). A real conflict concerns other groups of the record (e.g. `{unique: code}` on a field without the language)
+   and its parts; 1:1 references that are taken are left empty if optional, otherwise `409`.
+7. **Not copied:** system fields (`created_*`/`updated_*` are set anew), versions (every copied row starts with version 1
+   „Angelegt“), follow-ups, other language versions and records that only reference the original without being its parts.
+
+**API:** `_schema.translations` = `{relation, language_field, enum, values}`; `GET /api/{entity}/{id}/translations` (the
+group) and `POST /api/{entity}/{id}/translate` with `{"language": "EN"}` (`201` with `id` and `summary`, `409` if the
+language exists, `422` for an unknown value) – see "Language versions" in the [REST API](rest-api.md).
+
+**Not included:** machine translation, a "duplicate with parts" without changing the language (the copy mechanism
+`RecordCopy` is generic and can serve it later), carrying later changes of the original over into its translations.

@@ -600,6 +600,16 @@ final class Languages
         if ($packages) {
             $out['packages'] = (object) $packages;
         }
+        // abstract classes shown as a section heading (shared order of parts), by class name - only those with a text
+        $abstracts = [];
+        foreach ($model['entities'] as $e) {
+            if ($e['abstract'] && ($text = $t('entity', $e['id'])) !== null) {
+                $abstracts[$e['name']] = $text;
+            }
+        }
+        if ($abstracts) {
+            $out['abstracts'] = (object) $abstracts;
+        }
         // metadata classes (<<media_meta>>), by class name: name of the class (dialog title), fields, enum values - only
         // when there is something, so the answer stays as before for diagrams without one
         $meta = [];
@@ -693,6 +703,26 @@ final class Languages
                 $del->execute([$row['id']]);
             }
         }
+    }
+
+    /**
+     * Abstract classes shown as a heading: the base of a shared order of parts (Compositions, e.g. "Block" in the form of
+     * "Seite"). Class name => names of the wholes, in model order.
+     *
+     * @return array<string,string[]>
+     */
+    private static function headingClasses(PDO $pdo): array
+    {
+        $stored = Database::loadModel($pdo);
+        $out = [];
+        foreach ($stored['entities'] ?? [] as $table => $e) {
+            foreach (Compositions::of($stored, (string) $table) as $g) {
+                if ($g['abstract'] !== null) {
+                    $out[$g['abstract']][] = $e['name'] ?? (string) $table;
+                }
+            }
+        }
+        return $out;
     }
 
     /**
@@ -864,10 +894,16 @@ final class Languages
             return ['kind' => $kind, 'ref_id' => $ids[$key], 'value' => $value, 'original' => $original, 'type' => $type->text(),
                 'type_code' => $type->codeOnly(), 'ref' => $n > 1 ? "$ref#$n" : $ref];
         };
+        $headings = self::headingClasses($pdo);
         foreach ($model['entities'] as $e) {
             $items = [];
             if (!$e['abstract']) {
                 $items[] = $item('entity', $e['id'], $e['name'], $e['name'], Msg::of('msg_i18n.type_entity', 'Entity'));
+            } elseif (isset($headings[$e['name']])) {
+                // an abstract class whose name is the heading of a shared order in the form of the whole (and of its menu
+                // „+ … hinzufügen“) - only then: other abstract classes are never shown under their own name
+                $items[] = $item('entity', $e['id'], $e['name'], $e['name'], Msg::of('msg_i18n.type_abstract_heading',
+                    'Abstract class (heading of the section in {wholes})', ['wholes' => implode(', ', $headings[$e['name']])]));
             }
             foreach ($e['fields'] as $f) {
                 if (!$f['primary']) {

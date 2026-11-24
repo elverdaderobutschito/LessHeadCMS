@@ -45,6 +45,9 @@ final class PumlExporter
 {
     private const IDENT = '/^[A-Za-z_][A-Za-z0-9_]*$/';
 
+    /** Name of a named uniqueness group {unique: name} (as PumlParser::uniqueGroupName()) */
+    private const GROUP = '/^[a-z][a-z0-9_]*$/';
+
     /**
      * Checks a model JSON coming from outside (diagram editor) for its form and for every value ending up in the generated
      * text exactly where it belongs: names, types and enum values as identifiers, everything else single-line, package
@@ -132,6 +135,19 @@ final class PumlExporter
                     if (!is_string($n)) {
                         $errors[] = Msg::of('msg_export.no_name', "{where}: '{key}' contains no name.", ['where' => $where, 'key' => $k]);
                     }
+                }
+            }
+            // named groups {unique: name}: optional, {name: [field names]} (missing = none)
+            if (!$isMeta && array_key_exists('unique_groups', $e)) {
+                $groups = $e['unique_groups'];
+                $ok = is_array($groups);
+                foreach ($ok ? $groups : [] as $g => $members) {
+                    $ok = $ok && is_string($g) && preg_match(self::GROUP, $g) && is_array($members) && array_values($members) === $members
+                        && count(array_filter($members, 'is_string')) === count($members);
+                }
+                if (!$ok) {
+                    $errors[] = Msg::of('msg_export.unique_groups', "{where}: 'unique_groups' must map group names (lowercase letters, digits, "
+                        . '_) to lists of field names.', ['where' => $where]);
                 }
             }
             // sections and field_order: missing in model JSON from before 2026-10-21 (= no sections, fields then media)
@@ -255,6 +271,27 @@ final class PumlExporter
                 $flag($r, 'composition', $where);
                 if (!empty($r['composition']) && ($r['kind'] ?? null) !== 'n1') {
                     $errors[] = Msg::of('msg_export.composition_kind', "{where}: a composition must have the kind n1.", ['where' => $where]);
+                }
+            }
+            // {translations}: optional key, missing = false; only an n:1 can carry it (the parser checks the rest)
+            if (array_key_exists('translations', $r)) {
+                $flag($r, 'translations', $where);
+                if (!empty($r['translations']) && ($r['kind'] ?? null) !== 'n1') {
+                    $errors[] = Msg::of('msg_export.translations_kind', "{where}: {translations} needs the kind n1.", [
+                        'where' => $where, 'translations' => '{translations}',
+                    ]);
+                }
+            }
+            // named groups {unique: name} the relationship joins: optional list of group names (missing = none)
+            if (array_key_exists('unique_groups', $r)) {
+                $groups = $r['unique_groups'];
+                $ok = is_array($groups) && array_values($groups) === $groups;
+                foreach ($ok ? $groups : [] as $g) {
+                    $ok = $ok && is_string($g) && preg_match(self::GROUP, $g);
+                }
+                if (!$ok) {
+                    $errors[] = Msg::of('msg_export.relation_unique_groups', "{where}: 'unique_groups' must be a list of group names "
+                        . '(lowercase letters, digits, _).', ['where' => $where]);
                 }
             }
             // {filter_by}: "field" or "sourcefield=targetfield"; missing in model JSON from before this option (= no filter)
@@ -418,7 +455,7 @@ final class PumlExporter
         return "-- $title --";
     }
 
-    /** Field line without indentation: `+ name: type? {title} {unique} {renamed_from:x} {maxLength: 80}` */
+    /** Field line without indentation: `+ name: type? {title} {unique} {unique: group} {renamed_from:x} {maxLength: 80}` */
     public static function fieldText(array $f, array $e): string
     {
         return '+ ' . self::fieldCore($f, $e);
@@ -434,6 +471,11 @@ final class PumlExporter
         }
         if (in_array($f['name'], $e['unique_fields'] ?? [], true)) {
             $markers .= ' {unique}';
+        }
+        foreach ($e['unique_groups'] ?? [] as $g => $members) {
+            if (in_array($f['name'], (array) $members, true)) {
+                $markers .= ' {unique: ' . $g . '}';
+            }
         }
         if (!empty($f['sort_by']) && $f['type'] === PumlParser::SORT_TYPE) {
             $markers .= ' {by: ' . implode(', ', array_map(function (array $by): string {
@@ -468,6 +510,9 @@ final class PumlExporter
     {
         $markers = [];
         $composition = !empty($r['composition']); // its {cascade} is implicit; {label}/{symmetric} are not possible there
+        if (!empty($r['translations'])) {
+            $markers[] = '{translations}'; // language versions (see PumlParser), first as in the documented pattern
+        }
         if ($r['show_label'] && !$composition) {
             $markers[] = '{label}';
         }
@@ -476,6 +521,9 @@ final class PumlExporter
         }
         if ($r['unique']) {
             $markers[] = '{unique}';
+        }
+        foreach ($r['unique_groups'] ?? [] as $g) {
+            $markers[] = '{unique: ' . $g . '}';
         }
         if ($r['symmetric'] && !$composition) {
             $markers[] = '{symmetric}';

@@ -825,7 +825,11 @@ final class PumlPatcher
                 throw new PatchUnsafe(Msg::of('msg_patch.section', "Class '{class}': a field moved to another section cannot be written "
                     . 'into the existing text.', ['class' => $e['name']]));
             }
-            if (self::entryText($x, $o) !== self::entryText($y, $e)) {
+            $groupsOnly = $line !== null && !$x['media'] && self::entryText($x, self::withoutGroups($o)) === self::entryText($y, self::withoutGroups($e));
+            if (self::entryText($x, $o) !== self::entryText($y, $e) && $groupsOnly) {
+                // only {unique: name} markers differ: change just them, every other marker stays where it is
+                $this->setLine($line, $this->groupEdit($line, self::groupsOf($o, $x['f']['name']), self::groupsOf($e, $y['f']['name'])));
+            } elseif (self::entryText($x, $o) !== self::entryText($y, $e)) {
                 if ($line === null) {
                     // implicit id that now differs - cannot happen (the id is fixed), but never write a guess
                     throw new PatchUnsafe(Msg::of('msg_patch.verify', 'The changed text would not match the diagram (check after the change).'));
@@ -876,6 +880,43 @@ final class PumlPatcher
         }
     }
 
+    /** Entity of the model JSON without named groups (to see whether a field line differs in more than its group markers) */
+    private static function withoutGroups(array $e): array
+    {
+        unset($e['unique_groups']);
+        return $e;
+    }
+
+    /** Named groups {unique: name} of field $name of entity $e, in the order of the entity */
+    private static function groupsOf(array $e, string $name): array
+    {
+        return array_keys(array_filter($e['unique_groups'] ?? [], function ($members) use ($name) {
+            return in_array($name, (array) $members, true);
+        }));
+    }
+
+    /**
+     * Line $i with the markers {unique: name} changed from $old to $new: removed groups lose their marker, new ones are
+     * appended after the last marker of the line (before a block comment at its end, which setLine() keeps); nothing else of
+     * the line changes
+     */
+    private function groupEdit(int $i, array $old, array $new): string
+    {
+        $text = $this->line($i);
+        $tail = isset($this->mixed[$i]) ? $this->trailingComment($i) : null;
+        if ($tail !== null && substr($text, -strlen($tail)) === $tail) {
+            $text = substr($text, 0, -strlen($tail));
+        }
+        foreach (array_diff($old, $new) as $g) {
+            $text = (string) preg_replace('/\s*\{unique\s*:\s*' . preg_quote($g, '/') . '\s*\}/i', '', $text, 1);
+        }
+        $text = rtrim($text);
+        foreach (array_diff($new, $old) as $g) {
+            $text .= ' {unique: ' . $g . '}';
+        }
+        return $text . ($tail ?? '');
+    }
+
     private function fieldIndent(array $p, int $anchor): string
     {
         if ($anchor !== $p['head']) {
@@ -906,7 +947,14 @@ final class PumlPatcher
             $kept[$key] = true;
             [$o, $line] = $orig[$key];
             if (PumlExporter::relationText($o) !== PumlExporter::relationText($r)) {
-                $this->setLine($line, $this->relationLine($this->lines[$line], $o, $r));
+                $plain = function (array $x): array {
+                    unset($x['unique_groups']);
+                    return $x;
+                };
+                // only {unique: name} markers differ: change just them (arrow, label and other markers stay as written)
+                $this->setLine($line, PumlExporter::relationText($plain($o)) === PumlExporter::relationText($plain($r))
+                    ? $this->groupEdit($line, $o['unique_groups'] ?? [], $r['unique_groups'] ?? [])
+                    : $this->relationLine($this->lines[$line], $o, $r));
             }
         }
         $last = null;
@@ -946,7 +994,7 @@ final class PumlPatcher
      */
     private function relationLine(string $line, array $o, array $r): string
     {
-        $re = '/^(\s*)(\S+)\s+"([^"]*)"\s+(\S+)\s+"([^"]*)"\s+([^\s{]+)\s*(?::\s*(.*?))?\s*((?:\{(?:\w*|(?i:renamed_from|filter_by):[^{}]*)\}\s*)*)$/';
+        $re = '/^(\s*)(\S+)\s+"([^"]*)"\s+(\S+)\s+"([^"]*)"\s+([^\s{]+)\s*(?::\s*(.*?))?\s*((?:\{(?:\w*|(?i:renamed_from|filter_by|unique):[^{}]*)\}\s*)*)$/';
         $indent = self::indentOf($line);
         // composition before or after: the line is written anew (whole first, `*--`) - its arrow and sides cannot be kept
         if (!empty($o['composition']) || !empty($r['composition']) || !preg_match($re, $line, $m)) {

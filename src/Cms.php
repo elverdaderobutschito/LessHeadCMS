@@ -134,6 +134,10 @@ final class Cms
                 if (!empty($f['foreign_key']['composition'])) {
                     $fk['composition'] = true;
                 }
+                // {translations}: the relation to the original of the language versions - likewise only then
+                if (!empty($f['foreign_key']['translations'])) {
+                    $fk['translations'] = true;
+                }
                 // {filter_by}: filtered selection in the form (field = field of this entity, target_field = field of the
                 // target rows) - likewise only if given in the diagram
                 if (!empty($f['foreign_key']['filter_by']) && $this->filterVisible($e, $target, $f['foreign_key']['filter_by'])) {
@@ -196,6 +200,18 @@ final class Cms
             // rule, also for models stored before this option, without the key
             'unique_fields' => array_values(array_diff($e['unique_fields'] ?? [], array_keys($denied))),
         ];
+        // named groups {unique: name}: only for entities that have some (the _schema of every other one stays as before);
+        // like unique_fields without the fields denied for the caller, a group without a visible field is left out
+        $groups = [];
+        foreach ($e['unique_groups'] ?? [] as $name => $cols) {
+            $visible = array_values(array_diff($cols, array_keys($denied)));
+            if ($visible) {
+                $groups[] = ['name' => (string) $name, 'fields' => $visible];
+            }
+        }
+        if (!empty($e['unique_groups'])) {
+            $schema['unique_groups'] = $groups;
+        }
         // manual order (type sort): the field and the FK columns its groups are formed over - only for entities with a sort
         // field the caller sees. The UI offers the arrows with it and hides the field itself (form, columns).
         $sort = Sorting::fieldOf($e);
@@ -242,6 +258,12 @@ final class Cms
         $compositions = $this->describeCompositions($e);
         if ($compositions) {
             $schema['compositions'] = $compositions;
+        }
+        // {translations}: language versions ("Übersetzung anlegen", GET .../translations, POST .../translate) - only for classes
+        // with the marker, and only if the caller sees the relation and the language field
+        $tr = Translations::of($e);
+        if ($tr !== null && !isset($denied[$tr['relation']]) && !isset($denied[$tr['language_field']])) {
+            $schema['translations'] = $tr;
         }
         // tracking metadata (RecordMeta): always present, never editable, outside the field permissions like the id;
         // without a session without created_by/updated_by (usernames are not published)
@@ -294,12 +316,16 @@ final class Cms
      * title (display text of the {title} fields), visibility (true/false, null without a visibility field), state (workflow
      * state or null)}, with a session also 'move' => {up, down} (is a move possible and allowed - the neighbour of a shared
      * order can be of another class, see move()); with $expand the complete records as GET /api/{entity}/{id} delivers them
-     * (media, n:n lists) plus 'entity'. Readability as for the single entities: parts of denied classes are missing, drafts
-     * only with $includeDrafts (session, checked by the caller). 404 for an unknown composition.
+     * (media, n:n lists) plus 'entity'; with $expand = 2 every part additionally 'parts' => {<name>: [...]} - its own
+     * compositions, expanded the same way (one level more, e.g. the tiles of a tile block; {} for a class without
+     * compositions; a composition whose part classes are all denied is missing). Readability as for the single entities:
+     * parts of denied classes are missing, drafts only with $includeDrafts (session, checked by the caller) - on both levels.
+     * 404 for an unknown composition.
      *
+     * @param int $expand 0 = short entries, 1 = complete records, 2 = complete records with their own parts
      * @return array{data:array[],name:string,shared_sort:bool}
      */
-    public function parts(string $table, int $id, string $name, bool $expand, bool $includeDrafts): array
+    public function parts(string $table, int $id, string $name, int $expand, bool $includeDrafts): array
     {
         $e = $this->entity($table);
         if ($this->fetchRow($e, $id) === null) {
@@ -376,8 +402,12 @@ final class Cms
         $data = [];
         foreach ($entries as [, $rowId, , $t, $row, , $sub]) {
             $part = $this->model['entities'][$t];
-            if ($expand) {
-                $data[] = ['entity' => $t] + $row;
+            if ($expand > 0) {
+                $full = ['entity' => $t] + $row;
+                if ($expand > 1) {
+                    $full['parts'] = (object) $this->nestedParts($t, $rowId, $includeDrafts);
+                }
+                $data[] = $full;
                 continue;
             }
             $visibility = $this->visibilityField($t);
@@ -396,6 +426,331 @@ final class Cms
             $data[] = $entry;
         }
         return ['data' => $data, 'name' => $group['name'], 'shared_sort' => $group['shared']] + ($groups ? ['groups' => $groups] : []);
+    }
+
+    /**
+     * The compositions of the part $table #$id for parts(…, expand 2): name => complete records (expand 1), in their order.
+     * Compositions whose part classes the caller may not read (entity or FK column denied) are left out, as in _schema.
+     *
+     * @return array<string,array[]>
+     */
+    private function nestedParts(string $table, int $id, bool $includeDrafts): array
+    {
+        $out = [];
+        foreach (Compositions::of($this->model, $table) as $g) {
+            $readable = false;
+            foreach ($g['parts'] as $t => $col) {
+                if (!($this->access !== null && $this->access->entityDenied($t)) && !isset($this->denied($this->model['entities'][$t])[$col])) {
+                    $readable = true;
+                }
+            }
+            if ($readable) {
+                $out[$g['name']] = $this->parts($table, $id, $g['name'], 1, $includeDrafts)['data'];
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * POST /api/{whole}/{id}/parts/{name}/visibility {"visible": true|false, "dry_run": bool}: „Alle veröffentlichen“ /
+     * „Alle zurückziehen“ - sets the visibility field of every part of the composition $name of record $id, recursively over
+     * nested compositions (the tiles of a tile block), in ONE transaction; every changed row gets a version and its
+     * 'updated' webhook. Parts of classes without a visibility field are passed through (their own parts count). Skipped,
+     * with reason: 'forbidden' (class not readable, no update right, visibility field denied) and 'workflow' (the class has a
+     * workflow - its approval is not bypassed). dry_run: the same answer without writing (count for the confirmation).
+     *
+     * @return array{visible:bool,dry_run:bool,changed:int,unchanged:int,skipped:int,classes:array[]} classes: per part class
+     *         {table, entity, changed: ids, unchanged: ids, skipped: [{id, reason}]}, in the order they were found
+     */
+    public function setPartsVisibility(string $table, int $id, string $name, array $input): array
+    {
+        $e = $this->entity($table);
+        if ($this->fetchRow($e, $id) === null) {
+            throw ApiException::of(404, 'not_found', Msg::of('msg_api.record_not_found', 'Record not found'));
+        }
+        $group = Compositions::find($this->model, $e['table'], $name);
+        if ($group === null) {
+            throw ApiException::of(404, 'no_composition', Msg::of('msg_records.no_composition', "'{entity}' has no composition '{name}'", [
+                'entity' => $e['name'], 'name' => $name,
+            ]));
+        }
+        $visible = $input['visible'] ?? null;
+        if (!is_bool($visible)) {
+            throw ApiException::invalid(['visible' => Msg::of('msg_records.visible_expected', 'true or false expected')]);
+        }
+        $dryRun = !empty($input['dry_run']);
+        // all parts below the section, wholes before their parts: [table, id]
+        $rows = [];
+        $queue = [];
+        foreach ($group['parts'] as $t => $col) {
+            $queue[] = [(string) $t, $col, $id];
+        }
+        while ($queue) {
+            [$t, $col, $whole] = array_shift($queue);
+            $stmt = $this->pdo->prepare('SELECT "id" FROM ' . SqlGenerator::q($t) . ' WHERE ' . SqlGenerator::q($col) . ' = ? ORDER BY "id"');
+            $stmt->execute([$whole]);
+            foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $rid) {
+                $rows[] = [$t, (int) $rid];
+                foreach (Compositions::of($this->model, $t) as $g) {
+                    foreach ($g['parts'] as $pt => $pcol) {
+                        $queue[] = [(string) $pt, $pcol, (int) $rid];
+                    }
+                }
+            }
+        }
+        $classes = [];
+        $todo = [];
+        foreach ($rows as [$t, $rid]) {
+            $field = $this->visibilityField($t);
+            if ($field === null) {
+                continue;
+            }
+            $pe = $this->model['entities'][$t];
+            if (!isset($classes[$t])) {
+                $classes[$t] = ['table' => $t, 'entity' => $pe['name'], 'changed' => [], 'unchanged' => [], 'skipped' => []];
+            }
+            if (($this->access !== null && ($this->access->entityDenied($t) || $this->access->actionDenied($t, 'update')))
+                || isset($this->denied($pe)[$field])) {
+                $classes[$t]['skipped'][] = ['id' => $rid, 'reason' => 'forbidden'];
+                continue;
+            }
+            if (Workflows::fieldOf($pe) !== null) {
+                $classes[$t]['skipped'][] = ['id' => $rid, 'reason' => 'workflow'];
+                continue;
+            }
+            $stmt = $this->pdo->prepare('SELECT ' . SqlGenerator::q($field) . ' FROM ' . SqlGenerator::q($t) . ' WHERE "id" = ?');
+            $stmt->execute([$rid]);
+            if ((int) $stmt->fetchColumn() === ($visible ? 1 : 0)) {
+                $classes[$t]['unchanged'][] = $rid;
+                continue;
+            }
+            $classes[$t]['changed'][] = $rid;
+            $todo[] = [$pe, $rid, $field];
+        }
+        $versions = [];
+        if (!$dryRun && $todo) {
+            $reason = Revisions::reasonOf($e, $input);
+            $versions = $this->transaction(function () use ($todo, $visible, $reason) {
+                $versions = [];
+                foreach ($todo as [$pe, $rid, $field]) {
+                    $set = [$field => $visible ? 1 : 0] + (RecordMeta::applies($pe) ? RecordMeta::updateValues($this->user) : []);
+                    $sql = implode(', ', array_map(function ($c) {
+                        return SqlGenerator::q($c) . ' = ?';
+                    }, array_keys($set)));
+                    $this->pdo->prepare('UPDATE ' . SqlGenerator::q($pe['table']) . " SET $sql WHERE \"id\" = ?")
+                        ->execute(array_merge(array_values($set), [$rid]));
+                    $row = $this->fetchRow($pe, $rid);
+                    $versions[] = Revisions::record($this->pdo, $pe, $rid, $row, 'update', $this->user, $this->sortPlace($pe, $row, ['reason' => $reason]));
+                }
+                return $versions;
+            });
+            foreach ($todo as $i => [$pe, $rid]) {
+                $this->fireWebhooks($pe, $rid, 'updated', $versions[$i]);
+            }
+        }
+        $count = function (string $key) use ($classes): int {
+            return array_sum(array_map(function (array $c) use ($key): int {
+                return count($c[$key]);
+            }, $classes));
+        };
+        return ['visible' => $visible, 'dry_run' => $dryRun, 'changed' => $count('changed'), 'unchanged' => $count('unchanged'),
+            'skipped' => $count('skipped'), 'classes' => array_values($classes)];
+    }
+
+    // ---------------------------------------------------------------- Language versions ({translations})
+
+    /** Entity with {translations} and its structure, 404 otherwise (also if the caller cannot see the relation or language field) */
+    private function translatable(string $table): array
+    {
+        $e = $this->entity($table);
+        $tr = Translations::of($e);
+        $denied = $this->denied($e);
+        if ($tr === null || isset($denied[$tr['relation']]) || isset($denied[$tr['language_field']])) {
+            throw ApiException::of(404, 'no_translations', Msg::of('msg_records.no_translations', "'{entity}' has no language versions "
+                . '({translations})', ['entity' => $e['name'], 'translations' => '{translations}']));
+        }
+        return [$e, $tr];
+    }
+
+    /**
+     * The class (the record's own one or a part class below it) the caller may not create in - "Übersetzung anlegen" copies
+     * the parts as well; null = allowed
+     */
+    private function translateDenied(array $e): ?array
+    {
+        if ($this->access === null) {
+            return null;
+        }
+        foreach (array_merge([$e['table']], RecordCopy::partTables($this->model, $e['table'])) as $t) {
+            if ($this->access->entityDenied($t) || $this->access->actionDenied($t, 'create')) {
+                return $this->model['entities'][$t];
+            }
+        }
+        return null;
+    }
+
+    /**
+     * GET /api/{entity}/{id}/translations: the translation group of the record - {original: {id, language, title}|null,
+     * versions: [{id, language, title, original, current}] (original first, then by id), missing: [enum values without a
+     * version], language_field, relation, values (all enum values), can_translate (the caller may create in the class and in
+     * all part classes; with a session only), denied_entity (name of the class that is missing, else null)}. Drafts only with
+     * $includeDrafts; a hidden original appears as null.
+     */
+    public function translations(string $table, int $id, bool $includeDrafts): array
+    {
+        [$e, $tr] = $this->translatable($table);
+        $original = Translations::originalOf($this->pdo, $e, $tr, $id);
+        if ($original === null) {
+            throw ApiException::of(404, 'not_found', Msg::of('msg_api.record_not_found', 'Record not found'));
+        }
+        $titles = $this->visibleTitle($e);
+        $visibility = $this->visibilityField($e['table']);
+        $rows = Translations::rows($this->pdo, $e, $tr, $original, array_merge($titles, $visibility !== null ? [$visibility] : []));
+        $versions = [];
+        $used = [];
+        $originalEntry = null;
+        foreach ($rows as $rid => $r) {
+            $used[] = $r[$tr['language_field']]; // also hidden drafts: their language is not free
+            if (!$includeDrafts && $visibility !== null && (int) $r[$visibility] !== 1 && $rid !== $id) {
+                continue;
+            }
+            $entry = ['id' => $rid, 'language' => $r[$tr['language_field']], 'title' => self::titleOfRow($titles, $r),
+                'original' => $rid === $original, 'current' => $rid === $id];
+            $versions[] = $entry;
+            if ($rid === $original) {
+                $originalEntry = ['id' => $rid, 'language' => $entry['language'], 'title' => $entry['title']];
+            }
+        }
+        $denied = $this->user !== null ? $this->translateDenied($e) : null;
+        return [
+            'original' => $originalEntry, 'versions' => $versions,
+            'missing' => array_values(array_diff($tr['values'], $used)),
+            'language_field' => $tr['language_field'], 'relation' => $tr['relation'], 'values' => $tr['values'],
+            'can_translate' => $this->user !== null && $denied === null, 'denied_entity' => $denied !== null ? $denied['name'] : null,
+        ];
+    }
+
+    /**
+     * POST /api/{entity}/{id}/translate {"language": "<enum value>"}: new language version as a deep copy (RecordCopy) in ONE
+     * transaction - the record with all parts of its compositions (recursively), media links with their metadata, n:n links.
+     * The copy gets the language, the relation to the ORIGINAL of the group (also when $id is a version itself: the group
+     * stays flat), visibility false and the initial workflow state - every copied part with a visibility field on every level
+     * is a draft as well (an API reading the parts directly would otherwise deliver them untranslated). n:1/1:1 references to classes with {translations} point
+     * at the version in the target language if there is one (otherwise they stay and are reported as untranslated); n:n links
+     * with {filter_by:<language field>} to such a class are mapped likewise or dropped. 403 if the caller may not create in
+     * the class or one of its part classes, 409 if the language exists in the group, 422 for an unknown value.
+     *
+     * @return array{id:int,entity:string,language:string,original:int,summary:array,record:array}
+     */
+    public function translate(string $table, int $id, array $input): array
+    {
+        [$e, $tr] = $this->translatable($table);
+        $this->requireAction($e, 'create');
+        $denied = $this->translateDenied($e);
+        if ($denied !== null) {
+            throw ApiException::of(403, 'forbidden', Msg::of('msg_records.translate_forbidden', "No permission to create in '{entity}' - "
+                . 'creating a translation copies the parts as well', ['entity' => $denied['name']]), ['action' => 'create', 'entity' => $denied['table']]);
+        }
+        $language = $input['language'] ?? null;
+        if (!is_string($language) || !in_array($language, $tr['values'], true)) {
+            throw ApiException::invalid(['language' => Msg::of('msg_records.translate_language', 'Unknown language - allowed: {values}', [
+                'values' => implode(', ', $tr['values']),
+            ])]);
+        }
+        $original = Translations::originalOf($this->pdo, $e, $tr, $id);
+        if ($original === null) {
+            throw ApiException::of(404, 'not_found', Msg::of('msg_api.record_not_found', 'Record not found'));
+        }
+        $existing = Translations::versionIn($this->pdo, $e, $tr, $original, $language);
+        if ($existing !== null) {
+            throw ApiException::of(409, 'translation_exists', Msg::of('msg_records.translation_exists', 'The language {language} already '
+                . 'exists in this group ({entity} #{id}).', ['language' => $language, 'entity' => $e['name'], 'id' => $existing]),
+                ['existing_id' => $existing, 'entity' => $e['table']]);
+        }
+        $overrides = [$tr['language_field'] => $language, $tr['relation'] => $original];
+        $visibility = $this->visibilityField($e['table']);
+        if ($visibility !== null) {
+            $overrides[$visibility] = 0; // the copy starts as a draft
+        }
+        $redirect = function (array $target, int $tid) use ($language): array {
+            $ttr = Translations::of($target);
+            if ($ttr === null) {
+                return [$tid, 'same'];
+            }
+            $version = Translations::versionIn($this->pdo, $target, $ttr, $tid, $language);
+            if ($version === $tid) {
+                return [$tid, 'same'];
+            }
+            return $version !== null ? [$version, 'redirected'] : [$tid, 'untranslated'];
+        };
+        $redirectLink = function (array $from, array $m, int $other) use ($language): array {
+            $own = Translations::of($from);
+            $filter = $m['filter_by'] ?? null;
+            $target = $this->model['entities'][$m['table']];
+            $ttr = Translations::of($target);
+            if ($own === null || $ttr === null || ($filter['field'] ?? null) !== $own['language_field']) {
+                return [$other, 'same'];
+            }
+            $version = Translations::versionIn($this->pdo, $target, $ttr, $other, $language);
+            if ($version === $other) {
+                return [$other, 'same'];
+            }
+            return $version !== null ? [$version, 'redirected'] : [null, 'dropped'];
+        };
+        $duplicate = function (array $de, array $fields, array $values, int $hit, ?string $group = null): ApiException {
+            return new ApiException(409, $this->duplicatePayload($de, $fields, $values, $hit, $group));
+        };
+        $copier = new RecordCopy($this->pdo, $this->model, $this->user, strtolower($language), $duplicate, $redirect, $redirectLink);
+        $reason = Revisions::reasonOf($e, $input);
+        $partDraft = function (array $pe): array {
+            $field = $this->visibilityField($pe['table']);
+            return $field !== null ? [$field => 0] : [];
+        };
+        [$result, $versions, $record] = $this->transaction(function () use ($copier, $e, $id, $overrides, $reason, $partDraft) {
+            $result = $copier->copy($e['table'], $id, $overrides, $partDraft);
+            $versions = [];
+            foreach ($result['rows'] as [$t, $newId]) {
+                $re = $this->model['entities'][$t];
+                $row = $this->fetchRow($re, $newId);
+                $versions[] = Revisions::record($this->pdo, $re, $newId, $row, 'create', $this->user, $this->sortPlace($re, $row, ['reason' => $reason]));
+                $this->recordSymmetricPartners($re, $newId, null, $row);
+            }
+            return [$result, $versions, $this->visible($e, $this->fetchRow($e, $result['id']), $this->denied($e))];
+        }, $e, $overrides);
+        foreach ($result['rows'] as $i => [$t, $newId]) {
+            $this->fireWebhooks($this->model['entities'][$t], $newId, 'created', $versions[$i]);
+        }
+        return [
+            'id' => $result['id'], 'entity' => $e['table'], 'language' => $language, 'original' => $original,
+            'summary' => $this->translateSummary($result), 'record' => $record,
+        ];
+    }
+
+    /**
+     * Summary of a copy for the caller: parts {table: count}, redirected / untranslated / dropped [{entity, field, target,
+     * from, to, title}] (title = display text of the target the reference pointed at), renamed [{entity, field, from, to}]
+     */
+    private function translateSummary(array $result): array
+    {
+        // drafts: did the record get visibility false, how many parts did (parts without a visibility field are visible at once)
+        $draftParts = 0;
+        $visibleParts = 0;
+        foreach (array_slice($result['rows'], 1) as [$t]) {
+            if ($this->visibilityField($t) !== null) {
+                $draftParts++;
+            } else {
+                $visibleParts++;
+            }
+        }
+        $out = ['parts' => (object) $result['parts'], 'renamed' => $result['renamed'], 'draft' => $this->visibilityField($result['rows'][0][0]) !== null,
+            'draft_parts' => $draftParts, 'visible_parts' => $visibleParts];
+        foreach (['redirected', 'untranslated', 'dropped'] as $kind) {
+            $out[$kind] = array_map(function (array $r): array {
+                $target = $this->model['entities'][$r['target']];
+                return $r + ['target_entity' => $target['name'], 'title' => $this->readable($target) ? $this->titleText($target, $r['from']) : ''];
+            }, $result[$kind]);
+        }
+        return $out;
     }
 
     /** Display text of a row: the values of the {title} fields, comma-separated, empty ones left out */
@@ -2079,7 +2434,8 @@ final class Cms
      */
     private function rejectDuplicate(array $e, array $values, ?int $id): void
     {
-        foreach (SqlGenerator::uniqueGroups($e) as $fields) {
+        foreach (SqlGenerator::uniqueRules($e) as $rule) {
+            $fields = $rule['columns'];
             $where = [];
             $params = [];
             foreach ($fields as $name) {
@@ -2100,16 +2456,19 @@ final class Cms
             $stmt->execute($params);
             $existing = $stmt->fetchColumn();
             if ($existing !== false) {
-                throw new ApiException(409, $this->duplicatePayload($e, $fields, $values, (int) $existing));
+                throw new ApiException(409, $this->duplicatePayload($e, $fields, $values, (int) $existing, $rule['name']));
             }
         }
     }
 
     /**
      * 409 response for an already used combination $fields ($existing = null: row unknown, constraint). For a
-     * 1:1 column the message names the target row ("Nutzer #3 ist bereits Profil #1 zugeordnet"), otherwise columns and values.
+     * 1:1 column the message names the target row ("Nutzer #3 ist bereits Profil #1 zugeordnet"), for a named group
+     * {unique: name} ($group) the labels of its fields ("Die Kombination aus Slug, Sprache und Website ist bereits vergeben"),
+     * otherwise columns and values. 'group' = name of the group (null = the unnamed {unique} group or a 1:1 column),
+     * 'fields' = its columns the caller may see (as 'unique_fields').
      */
-    private function duplicatePayload(array $e, array $fields, array $values, ?int $existing): array
+    private function duplicatePayload(array $e, array $fields, array $values, ?int $existing, ?string $group = null): array
     {
         $oneToOne = null;
         foreach ($e['fields'] as $f) {
@@ -2129,6 +2488,21 @@ final class Cms
             $fieldError = $existing !== null
                 ? Msg::of('msg_records.assigned_to', 'Already assigned to {entity} #{id}', $params)
                 : Msg::of('msg_records.assigned', 'Already assigned');
+        } elseif ($group !== null) {
+            $params = ['fields' => Msg::andList(array_map(function (string $name) use ($e) {
+                return Msg::of('msg_api.plain', '{text}', ['text' => $this->fieldParam($e, $name)]);
+            }, $fields)), 'entity' => $e['name'], 'id' => $existing, 'group' => $group];
+            if (count($fields) > 1) {
+                $message = $existing !== null
+                    ? Msg::of('msg_records.group_taken_at', 'The combination of {fields} is already taken ({entity} #{id}).', $params)
+                    : Msg::of('msg_records.group_taken', 'The combination of {fields} is already taken.', $params);
+                $fieldError = Msg::of('msg_records.combination_exists_short', 'Combination already exists');
+            } else {
+                $message = $existing !== null
+                    ? Msg::of('msg_records.group_value_taken_at', '{fields} is already taken ({entity} #{id}).', $params)
+                    : Msg::of('msg_records.group_value_taken', '{fields} is already taken.', $params);
+                $fieldError = Msg::of('msg_records.value_taken_short', 'Already taken');
+            }
         } else {
             $parts = [];
             foreach ($fields as $name) {
@@ -2157,7 +2531,25 @@ final class Cms
         return ['error' => 'duplicate'] + $message->fields() + [
             'unique_fields' => $visible,
             'existing_id'   => $existing,
+            'group'         => $group,
+            'fields'        => $visible,
         ] + ApiException::fields(array_fill_keys($visible, $fieldError));
+    }
+
+    /**
+     * A field of $e as a message parameter: the UI shows its label in the display language (fieldLabel), the English text the
+     * label from the diagram (FK: the relationship label or the target table, as the UI does without a translation)
+     */
+    private function fieldParam(array $e, string $name): array
+    {
+        $label = $name;
+        foreach ($e['fields'] as $f) {
+            if ($f['name'] === $name && $f['foreign_key']) {
+                $label = ($f['foreign_key']['label'] ?? '') !== '' ? $f['foreign_key']['label'] : preg_replace('/_id$/', '', $name);
+            }
+        }
+        $label = str_replace('_', ' ', (string) $label);
+        return Msg::field($e['table'], $name, mb_strtoupper(mb_substr($label, 0, 1, 'UTF-8'), 'UTF-8') . mb_substr($label, 1, null, 'UTF-8'));
     }
 
     /**
@@ -2571,9 +2963,9 @@ final class Cms
                 $cols = array_map(function ($c) {
                     return substr(trim($c), strrpos(trim($c), '.') + 1);
                 }, explode(',', $m[1]));
-                foreach (SqlGenerator::uniqueGroups($e) as $group) {
-                    if ($group === $cols) {
-                        throw new ApiException(409, $this->duplicatePayload($e, $group, $values, null));
+                foreach (SqlGenerator::uniqueRules($e) as $rule) {
+                    if ($rule['columns'] === $cols) {
+                        throw new ApiException(409, $this->duplicatePayload($e, $cols, $values, null, $rule['name']));
                     }
                 }
             }

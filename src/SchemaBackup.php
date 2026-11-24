@@ -30,7 +30,8 @@ use PDO;
  *   2026-10-01_14-30-00_cms.sqlite
  *   2026-10-01_14-30-00_kursverwaltung.puml
  *
- * (for two applies in the same second with "-2" etc. appended to the timestamp). The last
+ * (for two applies in the same second with "-2" etc. appended to the timestamp; sorted by time and then the counter
+ * numerically, see sortKey()). The last
  * Settings::SCHEMA_BACKUP_KEEP pairs are kept (default 5); older pairs are deleted together after a successful apply.
  * data/ is blocked via .htaccess, so the backups cannot be retrieved over the web. Restoring: restore()
  * (System -> Schema, „Wiederherstellen“), if need be via FTP (README).
@@ -72,10 +73,7 @@ final class SchemaBackup
             throw $failed(Msg::of('msg_backup.dir_writable', 'The directory {dir} is not writable.',
                 ['dir' => Config::displayPath(self::dir(), true)]));
         }
-        $stamp = date('Y-m-d_H-i-s');
-        for ($n = 2; glob($dir . '/' . $stamp . '_*'); $n++) {
-            $stamp = date('Y-m-d_H-i-s') . "-$n";
-        }
+        $stamp = self::nextStamp(date('Y-m-d_H-i-s', self::now()));
         $db = "$dir/{$stamp}_cms.sqlite";
         $puml = "$dir/{$stamp}_" . basename($schemaFile);
         // VACUUM INTO (SQLite >= 3.27) writes a self-consistent copy; older versions: copy the file (the
@@ -101,6 +99,65 @@ final class SchemaBackup
         }
         @chmod($db, 0600);
         return ['stamp' => $stamp, 'files' => array_map('basename', array_filter([$db, is_file($puml) ? $puml : null]))];
+    }
+
+    /** Clock for the timestamp (tests: setClock() simulates a second boundary). @var callable|null */
+    private static $clock = null;
+
+    /** Tests only: replace the clock (a callable returning a Unix time), null = time() */
+    public static function setClock(?callable $clock): void
+    {
+        self::$clock = $clock;
+    }
+
+    private static function now(): int
+    {
+        return self::$clock !== null ? (int) (self::$clock)() : time();
+    }
+
+    /**
+     * Stamp for a new pair in the second $base: $base itself, or with the next free counter "-2", "-3", … The counter
+     * follows the highest one that already exists in this second (not the first gap), so a new pair always sorts after
+     * all existing pairs of the same second. The base is taken once per backup: before, it was re-read in the loop, and
+     * a loop crossing a second boundary produced e.g. "…54-4" before a later "…54" - which then sorted as older.
+     */
+    private static function nextStamp(string $base): string
+    {
+        $max = 0;
+        foreach (self::all() as $b) {
+            [$bBase, $n] = self::stampParts($b['stamp']);
+            if ($bBase === $base) {
+                $max = max($max, $n);
+            }
+        }
+        return $max === 0 ? $base : $base . '-' . ($max + 1);
+    }
+
+    /**
+     * Base and counter of a stamp: "2026-10-01_14-30-00" -> [base, 1], "2026-10-01_14-30-00-12" -> [base, 12]. Legacy
+     * stamps ("20261001-143000") are converted to the same base format.
+     *
+     * @return array{0:string,1:int}
+     */
+    private static function stampParts(string $stamp): array
+    {
+        if (preg_match('/^(\d{4}-\d\d-\d\d_\d\d-\d\d-\d\d)(?:-(\d+))?$/', $stamp, $m)) {
+            return [$m[1], isset($m[2]) ? (int) $m[2] : 1];
+        }
+        if (preg_match('/^(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)$/', $stamp, $m)) {
+            return ["$m[1]-$m[2]-$m[3]_$m[4]-$m[5]-$m[6]", 1];
+        }
+        return [$stamp, 1];
+    }
+
+    /**
+     * Sort key, ascending = older: time, then the counter NUMERICALLY ("…-9" before "…-10", "…54" before "…54-2").
+     * Shared by the rotation, the list in System -> Schema and „Wiederherstellen“ (all go through all()).
+     */
+    private static function sortKey(string $stamp): string
+    {
+        [$base, $n] = self::stampParts($stamp);
+        return $base . '#' . sprintf('%09d', $n);
     }
 
     /** Remove all files of a backup (e.g. if the apply fails afterwards - the DB stayed unchanged after all) */
@@ -142,19 +199,17 @@ final class SchemaBackup
             }
             if (preg_match(self::PATTERN, $name, $m)) {
                 $stamp = $m[1];
-                $sort = $stamp;
                 $created = substr($stamp, 0, 10) . ' ' . str_replace('-', ':', substr($stamp, 11, 8));
             } elseif (preg_match(self::LEGACY_PATTERN, $name, $m)) {
                 $stamp = $m[1] . '-' . $m[2];
                 $created = substr($m[1], 0, 4) . '-' . substr($m[1], 4, 2) . '-' . substr($m[1], 6, 2) . ' '
                     . substr($m[2], 0, 2) . ':' . substr($m[2], 2, 2) . ':' . substr($m[2], 4, 2);
-                $sort = str_replace([' ', ':'], ['_', '-'], $created);
             } else {
                 continue;
             }
             $groups[$stamp]['stamp'] = $stamp;
             $groups[$stamp]['created'] = $created;
-            $groups[$stamp]['sort'] = $sort;
+            $groups[$stamp]['sort'] = self::sortKey($stamp);
             $groups[$stamp]['files'][] = [
                 'name'  => $name,
                 'kind'  => substr($name, -7) === '.sqlite' ? 'database' : 'schema',

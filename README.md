@@ -46,11 +46,15 @@ a REST API and an editorial UI, ready to use.
 
 `templates/web-cms.puml` shows how to model an arbitrary website (description: `templates/web-cms.md`). It works in
 layers: **website** (global settings, navigation) → **page** (tree, one record per language) → **block** (in an area
-such as `HAUPTINHALT` or `SEITENLEISTE` – a role, not a position; the layout is up to the frontend) → **content**
-(channel-neutral posts, events, services, text snippets). The core – `Website`, `Navigation`, `Navigationspunkt`,
-`Seite` and `abstract class Block` – stays; per project or design you adapt the enums `Template` and `Bereich`, the block
-types and the content types. It is also a complete example of the `sort` field type, of compositions (`Seite *-- "n" TextBlock`:
-the blocks are edited in the form of their page) and of the multilingual pattern.
+such as `MAIN` or `SIDEBAR` – a role, not a position; the layout is up to the frontend) → **content**
+(channel-neutral posts, events, services, snippets). The core – `Website`, `Navigation`, `NavItem`, `Page` and
+`abstract class Block` – stays; per project or design you adapt the enums `Template` and `Area`, the block types and the
+content types. It is also a complete example of the `sort` field type, of compositions (`Page *-- "n" TextBlock : on`:
+the blocks are edited in the form of their page) and of the multilingual pattern with `{translations}` („Übersetzung
+anlegen“ copies a page with all its blocks into another language). All names are English; a commented-out block at its
+end documents the variant with several websites in one CMS – with a named uniqueness group `{unique: slug_per_site}`, so a
+slug is unique per website and language next to the translation group of the page. A German version with the same
+structure is `templates/web-cms_de.puml` (`templates/web-cms_de.md`).
 
 ## License
 

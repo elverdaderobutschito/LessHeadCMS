@@ -1,0 +1,340 @@
+@startuml Web-CMS
+' Web-CMS-Grundmodell für LessHeadCMS (deutsche Fassung von web-cms.puml, strukturell identisch)
+' Schichten: Website (global) -> Seite (Baum) -> Block (in einem Bereich) -> Inhalt (kanalneutral)
+' Regel: Das CMS kennt Rollen (Bereich), keine Positionen ("oben links"). Layout macht das Frontend.
+' Mehrsprachigkeit: Standard-Pattern (Enum Sprache + Selbstreferenz "Original von" + {unique}), mit {translations}:
+' "Übersetzung anlegen" kopiert eine Seite mit ihren Blöcken in eine andere Sprache.
+'
+' Anpassen pro Projekt/Design:
+'  - Enums Template und Bereich an das Layout des Frontends anpassen
+'  - Blocktypen ergänzen/entfernen: class XyBlock extends Block { ... } + Seite *-- "n" XyBlock : auf
+' Komposition (*--, Raute beim Ganzen): Blöcke, Kacheln, FAQ-Einträge und Navigationspunkte sind Teile ihres Ganzen -
+' sie werden im Formular des Ganzen angelegt, sortiert und bearbeitet und mit ihm gelöscht.
+'  - Inhaltstypen ergänzen: class Xy extends Inhalt { ... } + Beziehung "Original von" ({translations}) + Wert in Enum Inhaltstyp
+' Mehrere Websites in einem CMS: siehe den Kommentarblock "Mehrere Websites" am Ende.
+
+' ============================================================
+' Wertebereiche
+' ============================================================
+
+enum Sprache {
+  DE
+  EN
+}
+
+enum Navigationsort {
+  HAUPTNAVIGATION
+  FOOTER
+  META
+}
+
+enum Template {
+  STANDARD
+  MIT_SEITENLEISTE
+  LANDINGPAGE
+}
+
+' Bereiche einer Seite. Header und Footer sind global (Website / Navigation), nicht pro Seite.
+enum Bereich {
+  HERO
+  HAUPTINHALT
+  SEITENLEISTE
+  VOR_FOOTER
+}
+
+enum Inhaltstyp {
+  BEITRAG
+  TERMIN
+  LEISTUNG
+}
+
+enum Listensortierung {
+  NEUESTE_ZUERST
+  AELTESTE_ZUERST
+  ALPHABETISCH
+}
+
+' ============================================================
+' Website: globale Einstellungen, Navigation
+' ============================================================
+
+package "Website" {
+
+  ' Genau ein Datensatz pro Website. Sprachneutral.
+  class Website {
+    + name: string {title}
+    + basis_url: string {pattern: url}
+    + logo: media?
+    + copyright: string?
+    -- SEO-Standards --
+    + standard_meta_beschreibung: text? {maxLength: 160}
+    + standard_share_bild: media?
+  }
+
+  ' Eine Navigation pro Ort und Sprache
+  class Navigation {
+    + name: string {title}
+    + ort: Navigationsort {unique}
+    + sprache: Sprache {unique}
+  }
+
+  ' Intern (Seite) oder extern (URL)
+  class Navigationspunkt {
+    + bezeichnung: string {title}
+    + externe_url: string? {pattern: url}
+    + position: sort {by: Navigation, Navigationspunkt}
+  }
+}
+
+' ============================================================
+' Seiten: Baum, Route, Meta
+' ============================================================
+
+package "Seiten" {
+
+  ' Jede Sprachversion ist eine eigene Seite; Übersetzungen zeigen auf ihr Original.
+  class Seite {
+    + titel: string {title}
+    + slug: string {pattern: slug}
+    + sprache: Sprache {unique}
+    + template: Template
+    + position: sort {by: "Unterseite von"}
+    + veroeffentlicht: visibility
+    -- SEO --
+    + seo_titel: string? {maxLength: 60}
+    + meta_beschreibung: text? {maxLength: 160}
+    + share_bild: media?
+    + nicht_indexieren: bool
+  }
+}
+
+' ============================================================
+' Blöcke: die Inhaltselemente einer Seite
+' Alle Blocktypen einer Seite teilen sich eine Reihenfolge (sort über die abstrakte Klasse).
+' Das Frontend gruppiert nach Bereich und behält die Reihenfolge bei.
+' Blöcke haben keine eigene Sprache: sie gehören zur Sprachversion ihrer Seite.
+' ============================================================
+
+package "Bloecke" {
+
+  abstract class Block {
+    + bezeichnung: string {title}
+    + bereich: Bereich
+    + position: sort {by: "auf"}
+    + anker: string? {pattern: slug}
+    + veroeffentlicht: visibility
+  }
+
+  class HeroBlock extends Block {
+    + ueberschrift: string
+    + unterzeile: text?
+    + bild: media?
+    -- Button --
+    + button_text: string?
+    + button_url: string? {pattern: url}
+  }
+
+  ' Fließtext, optional mit Bild und Link
+  class TextBlock extends Block {
+    + ueberschrift: string?
+    + inhalt: richtext
+    + bild: media?
+    + link_url: string? {pattern: url}
+  }
+
+  ' Ein Bild = Liste mit einem Element, mehrere = Galerie/Slider
+  class BildBlock extends Block {
+    + titel: string?
+    + bilder: media(Bildangabe)
+  }
+
+  class CtaBlock extends Block {
+    + aussage: string
+    + button_text: string
+    + button_url: string? {pattern: url}
+  }
+
+  class FaqBlock extends Block {
+    + ueberschrift: string?
+  }
+
+  class FaqEintrag {
+    + frage: string {title}
+    + antwort: richtext
+    + position: sort {by: FaqBlock}
+  }
+
+  ' Bildkacheln mit Link (Teaser auf Seiten)
+  class KachelBlock extends Block {
+    + titel: string?
+  }
+
+  class Kachel {
+    + bezeichnung: string {title}
+    + bild: media
+    + externe_url: string? {pattern: url}
+    + position: sort {by: KachelBlock}
+  }
+
+  ' Dynamische Liste: "die 3 neuesten Beiträge aus Kategorie X"
+  class ListenBlock extends Block {
+    + ueberschrift: string?
+    + inhaltstyp: Inhaltstyp
+    + anzahl: int {min: 1, max: 50}
+    + sortierung: Listensortierung
+  }
+
+  ' Bindet geteilten Inhalt ein (z. B. Kontaktbox auf vielen Seiten)
+  class TextbausteinBlock extends Block {
+  }
+}
+
+' Zusatzangaben je Bild in BildBlock.bilder
+class Bildangabe <<media_meta>> {
+  + bildunterschrift: string?
+}
+
+' ============================================================
+' Inhalte: kanalneutrale Daten, nicht an eine Seite gebunden
+' ============================================================
+
+package "Inhalte" {
+
+  abstract class Inhalt {
+    + titel: string {title}
+    + slug: string {pattern: slug}
+    + sprache: Sprache {unique}
+    + teaser: text? {maxLength: 300}
+    + bild: media?
+    + veroeffentlicht: visibility
+  }
+
+  class Beitrag extends Inhalt {
+    + datum: date
+    + inhalt: richtext
+  }
+
+  class Termin extends Inhalt {
+    + beginn: date
+    + ende: date?
+    + ort: string?
+    + beschreibung: richtext?
+  }
+
+  class Leistung extends Inhalt {
+    + beschreibung: richtext
+    + preis: decimal?
+  }
+
+  class Person {
+    + name: string {title}
+    + funktion: string?
+    + email: string? {pattern: email}
+    + foto: media?
+    + vita: richtext?
+  }
+
+  class Kategorie {
+    + name: string {title}
+    + slug: string {pattern: slug}
+    + sprache: Sprache {unique}
+  }
+
+  class Textbaustein {
+    + titel: string {title}
+    + sprache: Sprache {unique}
+    + inhalt: richtext
+    + bild: media?
+  }
+}
+
+' ============================================================
+' Beziehungen
+' ============================================================
+
+' Website
+Website "n" --> "0..1" Seite : Startseite
+
+' Navigation
+Navigation *-- "n" Navigationspunkt : gehoert zu
+Navigationspunkt "n" --> "0..1" Navigationspunkt : Unterpunkt von {cascade}
+Navigationspunkt "n" --> "0..1" Seite : verlinkt auf
+
+' Seitenbaum und Sprachversionen
+Seite "n" --> "0..1" Seite : Unterseite von
+Seite "n" --> "0..1" Seite : Original von {translations} {cascade} {unique}
+
+' Blöcke sind Teile ihrer Seite (Beziehungen werden nicht vererbt, daher je Blocktyp)
+Seite *-- "n" HeroBlock : auf
+Seite *-- "n" TextBlock : auf
+Seite *-- "n" BildBlock : auf
+Seite *-- "n" CtaBlock : auf
+Seite *-- "n" FaqBlock : auf
+Seite *-- "n" KachelBlock : auf
+Seite *-- "n" ListenBlock : auf
+Seite *-- "n" TextbausteinBlock : auf
+
+' Interne Link-Ziele (Alternative zur externen URL)
+HeroBlock "n" --> "0..1" Seite : Button-Ziel
+TextBlock "n" --> "0..1" Seite : Link-Ziel
+CtaBlock "n" --> "0..1" Seite : Button-Ziel
+Kachel "n" --> "0..1" Seite : verlinkt auf
+
+' Wiederholgruppen
+FaqBlock *-- "1..*" FaqEintrag : gehoert zu
+KachelBlock *-- "1..*" Kachel : gehoert zu
+
+' Blöcke, die Inhalte zeigen
+ListenBlock "n" --> "0..1" Kategorie : gefiltert nach
+TextbausteinBlock "n" --> "1" Textbaustein : zeigt
+
+' Sprachversionen der Inhalte (Beziehungen werden nicht vererbt, daher je Klasse)
+Beitrag "n" --> "0..1" Beitrag : Original von {translations} {cascade} {unique}
+Termin "n" --> "0..1" Termin : Original von {translations} {cascade} {unique}
+Leistung "n" --> "0..1" Leistung : Original von {translations} {cascade} {unique}
+Kategorie "n" --> "0..1" Kategorie : Original von {translations} {cascade} {unique}
+Textbaustein "n" --> "0..1" Textbaustein : Original von {translations} {cascade} {unique}
+
+' Inhalte untereinander
+Beitrag "n" --> "0..1" Kategorie : gehoert zu {filter_by:sprache}
+Beitrag "n" --> "0..1" Person : verfasst von
+Termin "n" --> "0..1" Kategorie : gehoert zu {filter_by:sprache}
+Leistung "n" --> "0..1" Kategorie : gehoert zu {filter_by:sprache}
+
+' ============================================================
+' Mehrere Websites (nur Dokumentation - das Modell oben ist der Standardfall mit EINER Website)
+' ============================================================
+' Standard: eine Website. Seiten und Navigationen gehören zu keiner Website; Website hat genau einen Datensatz.
+' Für mehrere Websites in einem CMS genügen die vorhandenen Mittel. Die Zeilen unten sind so, wie sie stehen, gültig,
+' sobald das führende Hochkomma entfernt ist (siehe templates/web-cms.md, "Multiple websites"):
+'
+' 1. Seiten und Navigationen werden Teile ihrer Website - ergänzen:
+'
+'Website *-- "n" Seite : gehoert zu {unique: slug_per_site}
+'Website *-- "n" Navigation : gehoert zu {unique}
+'
+' 2. Reihenfolge je Website und Elternseite, Slug eindeutig je Website und Sprache - in der Klasse Seite die Zeilen
+'    position, slug und sprache ersetzen durch:
+'
+'    + position: sort {by: "gehoert zu", "Unterseite von"}
+'    + slug: string {pattern: slug} {unique: slug_per_site}
+'    + sprache: Sprache {unique} {unique: slug_per_site}
+'
+' 3. Navigation: das {unique} an "gehoert zu" (Zeile oben) nimmt die neue Beziehung in die {unique}-Gruppe der
+'    Navigation auf -> eine Navigation je Ort, Sprache und Website.
+'
+' 4. Seite: ihre {unique}-Gruppe (sprache + "Original von") bleibt, wie sie ist - sie legt die Sprachversionen fest, und
+'    {translations} erlaubt in ihr nichts anderes. Die benannte Gruppe slug_per_site (slug + sprache + "gehoert zu")
+'    kommt hinzu: Derselbe Slug darf in jeder Website und Sprache vorkommen, aber nur einmal je Website und Sprache. Eine
+'    Übersetzung entsteht in der Website ihres Originals ("Übersetzung anlegen" kopiert die Beziehung mit); ihre neue
+'    Sprache hält den Slug frei.
+'
+' 5. Inhaltstypen (Beitrag, Termin, Leistung, Kategorie, Textbaustein) können über die Websites hinweg geteilt bleiben,
+'    oder jeder bekommt eine eigene Komposition (z. B. Website *-- "n" Beitrag : gehoert zu) - eine Projektentscheidung.
+'
+' Migration: Bei einer späteren Umstellung müssen bestehende Seiten und Navigationen einer Website zugeordnet werden -
+' "Änderungen prüfen" verlangt dafür einen Backfill-Wert (die id einer bestehenden Website). Haben zwei bestehende
+' Seiten denselben Slug in derselben Sprache, blockiert die neue Gruppe slug_per_site die Änderung mit einer Liste der
+' Zeilen, bis die Duplikate bereinigt sind.
+
+@enduml

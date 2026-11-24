@@ -223,9 +223,9 @@ _Part of the [LessHeadCMS documentation](../README.md)._
     their IDs). `int`/`int?` → `sort` keeps the existing order: per group renumbered without gaps, equal values by ID, empty
     values at the end of their group. A changed `{by: …}` renumbers per new group, the relative order is kept.
   * **Complete example:** the model template [web CMS base model](../templates/web-cms.md) (`templates/web-cms.puml`) uses `sort` for
-    menu items (`{by: Navigation, Navigationspunkt}`), pages (`{by: "Unterseite von"}` – the label is needed because of
-    the second self-reference „Original von“), all block types of a page in one shared order (`{by: "auf"}` in
-    `abstract class Block`) and FAQ entries and tiles per block (`{by: FaqBlock}`, `{by: KachelBlock}`).
+    nav items (`{by: Navigation, NavItem}`), pages (`{by: "child of"}` – the label is needed because of the second
+    self-reference „translation of“), all block types of a page in one shared order (`{by: "on"}` in
+    `abstract class Block`) and FAQ items and tiles per block (`{by: FaqBlock}`, `{by: TileBlock}`).
 * `A "n" --> "1" B : label` → foreign key in `a` (`NOT NULL`; optional with `"0..1"`). Whether the FK is required depends only
   on the multiplicity, not on the `?` syntax. `A "1" <-- "n" B` is recognized as well: the FK belongs to the n side.
   On the n side `n`, `0..*`, `*`, `m`, `0..n` are allowed, as well as the **minimum count** `"1..*"`/`"1..n"` (see
@@ -291,12 +291,42 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   a ternary assignment (student, course, teacher) accordingly with three marked relations. A single marked
   column yields simple uniqueness. Implemented as a `UNIQUE (…)` constraint in the table; the API checks beforehand itself
   and answers `POST`/`PUT` with `409` (see [REST API](rest-api.md)). If the combination contains `NULL` (optional field or
-  optional FK empty), it never counts as a duplicate, as in SQL. **Deliberate restriction:** per class there is exactly one
-  `{unique}` group; several independent rules in one class (e.g. `code` unique **and** separately `name`
-  unique) cannot be expressed at present – if you mark both, the rule "combination of `code` and
-  `name`" results. Schema errors: `{unique}` on an n:n relation (the link table is unique per pair anyway), on the field
+  optional FK empty), it never counts as a duplicate, as in SQL. The unnamed `{unique}` forms **one** group per class – if
+  you mark `code` and `name` with it, the rule "combination of `code` and `name`" results; for independent rules use named
+  groups (next point). Schema errors: `{unique}` on an n:n relation (the link table is unique per pair anyway), on the field
   `id` (unique anyway) and twice on one line. Example with a field and a self-reference in one group:
   [Multilingual data content (modelling pattern)](multilingual.md#multilingual-data-content-modelling-pattern).
+* **Named groups `{unique: name}`** (since 2026-11-24): any number of further, independent uniqueness rules per class.
+  Every field and n:1/1:1 relation (compositions included) marked with the same name forms one group – one `UNIQUE (…)`
+  constraint each, next to the unnamed `{unique}` group. A field or relation may stand in several groups: repeat the marker,
+  `{unique} {unique: a} {unique: b}`.
+  ```
+  class Page {
+    + slug: string {pattern: slug} {unique: slug_per_site}
+    + language: Language {unique} {unique: slug_per_site}
+  }
+  Page "n" --> "0..1" Page : translation of {translations} {cascade} {unique}
+  Website *-- "n" Page : belongs to {unique: slug_per_site}
+  ```
+  Here the unnamed group (language + „translation of“) makes the language versions, the named group `slug_per_site` (slug +
+  language + website) allows the same slug once per website and language. The name is a technical key: lowercase letter
+  first, then lowercase letters, digits and `_`, unique per class; it is not translated – the `409` message names the
+  **labels** of the fields of the group (translatable), e.g. „Die Kombination aus Slug, Sprache und Website ist bereits
+  vergeben“, and the response carries `group` and `fields` (see [REST API](rest-api.md)). Model JSON: entity
+  `unique_groups: {name: [fields]}` (own fields), field and relation `unique_groups: [names]`; `unique`/`unique_fields` stay
+  the unnamed group. Without named groups the model, `_schema` and the table are exactly as before.
+  * **Inheritance:** the groups of an abstract base are taken over (like `unique_fields`); a relation of the subclass may
+    join an inherited group. The same group name in base and subclass is a schema error.
+  * **Schema errors** (German/English): `{unique:}` without a name or an invalid name (`{unique: 9x}`, `{unique: Slug}`) –
+    the message shows the correct notation; the same group twice on one line; on n:n relations, the field `id`, media
+    fields, `sort` fields, workflow fields and in metadata classes (as `{unique}`); two groups with the **same columns**
+    (the unnamed one included – the message names both); a group consisting only of a 1:1 column (unique anyway).
+  * **„Änderungen prüfen“:** groups are recognized by their columns (the constraints are anonymous). A new group checks the
+    existing data – duplicates are a blocker with the list of rows; a removed group is an info entry; changed columns =
+    removed + new; only renamed (same columns) is an info entry without rebuilding the table. There is no
+    `{renamed_from}` for groups.
+  * **`{translations}`** may stand in the unnamed or in a named group; its rules apply to the group of the marked
+    relation (see below), the other groups of the class are free.
 * `A "n" -- "n" B : label` → link table `a_b` (`a_id`, `b_id`, `ON DELETE CASCADE`: deleting one of the two
   rows only removes the link, it never blocks), API list `b_ids`. With **one** n:n relationship from A to B
   these names do not depend on the label.
@@ -413,6 +443,30 @@ _Part of the [LessHeadCMS documentation](../README.md)._
     | `-->` without `{cascade}` (restrict) → `*--` | confirmation: deleting a whole deletes its parts from now on (table rebuilt for `ON DELETE CASCADE`) |
     | `-->` with `"0..1"` → `*--` | blocker while parts without a whole exist, with the list of these rows – assign a whole or delete them first; without such rows like restrict (confirmation) |
     | `*--` → `-->` | only the model, info entry; with `{cascade}` the DDL stays the same, without it the entry recommends `{cascade}` to keep the delete behaviour |
+* **`{translations}`: language versions with „Übersetzung anlegen“** (since 2026-11-23). On the self-reference of the
+  [multilingual pattern](multilingual.md#multilingual-data-content-modelling-pattern), in any order with `{cascade}`,
+  `{unique}` and `{renamed_from:…}`:
+  ```
+  enum Sprache {
+    DE
+    EN
+  }
+  class Seite {
+    + titel: string {title}
+    + sprache: Sprache {unique}
+  }
+  Seite "n" --> "0..1" Seite : Original von {translations} {cascade} {unique}
+  ```
+  Purely structural – no names are looked at: the language field is the one enum field in the uniqueness group the marked
+  relation stands in – the unnamed `{unique}` group as here, or a named one (`… {translations} {unique: languages}` with
+  `+ sprache: Sprache {unique: languages}`); further named groups of the class are free (e.g. `slug_per_site`). The FK gets `foreign_key.translations: true`, the model JSON relation `"translations": true`; the table is the
+  same as without the marker (setting or removing it: only the model, an info entry). What the form and the API do with it:
+  [Create translation](multilingual.md#create-translation).
+  * **Schema errors** (German/English, naming class, relationship and fields): not an n:1 self-reference (n:n, 1:1, another
+    class, a composition), a required target `"1"` instead of `"0..1"`, without `{unique}`, not exactly one enum field in
+    the `{unique}` group („… braucht in der {unique}-Gruppe der Klasse genau ein Enum-Feld (gefunden: keins).“), an
+    optional language field, further fields or relationships in the group, the relation in more than one group, a second
+    `{translations}` in the same class, an abstract class (the message names the subclasses).
 * **Inheritance = field copy mechanism** (not a database concept: no shared table, no polymorphism):
   ```
   abstract class Basisinhalt {
@@ -430,7 +484,8 @@ _Part of the [LessHeadCMS documentation](../README.md)._
   `abstract class` is a pure template **without a table of its own** (no API, no sidebar entry). Note: until
   2026-09-30 an `abstract class` got a normal table. `class B extends A` first gets all fields of A (in
   A's order), then its own, exactly as if they were written directly in B: `?`, `{title}`, `{unique}` and
-  enum types apply unchanged, `title_field`/`unique_fields` start with the inherited fields. `_schema` and
+  enum types apply unchanged, `title_field`/`unique_fields` start with the inherited fields (named groups
+  `{unique: name}` likewise). `_schema` and
   UI know nothing about inheritance, B is a perfectly normal entity. A change to A takes effect on all subclasses at the
   next bootstrap. Nesting works too (`abstract class Mitte extends Basis`, `class B extends Mitte`: B
   gets the Basis fields, then the Mitte fields, then its own). The order of the declarations in the diagram does not matter. An

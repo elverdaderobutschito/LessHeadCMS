@@ -1168,7 +1168,8 @@ Flight::route('GET /api/@entity/@id:[0-9]+', function ($entity, $id) {
 
 // Teile einer Komposition (`Seite *-- "n" TextBlock : auf`) in ihrer Reihenfolge, bei einer gemeinsamen Reihenfolge mehrerer
 // Teilklassen gemischt, je Eintrag mit "entity" (Cms::parts()). @name = Name aus _schema.compositions (normalisiertes Label)
-// oder das Label. ?expand=1: vollständige Datensätze inkl. Medien. Lesbarkeit wie bei den einzelnen Entitäten: das Ganze als
+// oder das Label. ?expand=1: vollständige Datensätze inkl. Medien; ?expand=2: dazu je Teil dessen eigene Kompositionen
+// (parts: {name: [...]}, ebenfalls vollständig), höchstens 2 Ebenen. Lesbarkeit wie bei den einzelnen Entitäten: das Ganze als
 // Entwurf ohne Session -> 404, Teile als Entwurf nur mit ?include_drafts=true und Session.
 Flight::route('GET /api/@entity/@id:[0-9]+/parts/@name', function ($entity, $id, $name) {
     Http::api(function (Cms $cms, PDO $pdo) use ($entity, $id, $name) {
@@ -1181,7 +1182,44 @@ Flight::route('GET /api/@entity/@id:[0-9]+/parts/@name', function ($entity, $id,
             Auth::requireSession($pdo);
             $drafts = true;
         }
-        return [200, $cms->parts($entity, (int) $id, rawurldecode((string) $name), Http::flag('expand'), $drafts)];
+        $expand = $_GET['expand'] ?? null;
+        if (is_string($expand) && ctype_digit($expand) && (int) $expand > 2) {
+            throw ApiException::of(422, 'validation', Msg::of('msg_api.expand_max', 'expand: at most 2 levels'),
+                ApiException::fields(['expand' => Msg::of('msg_api.expand_values', '0, 1 or 2 expected')]));
+        }
+        $depth = $expand === '2' ? 2 : (Http::flag('expand') ? 1 : 0);
+        return [200, $cms->parts($entity, (int) $id, rawurldecode((string) $name), $depth, $drafts)];
+    });
+});
+
+// Sprachversionen einer Klasse mit {translations} (Cms::translations()): Original, vorhandene Versionen, fehlende Sprachen.
+// Lesbarkeit wie GET /api/{entity}/{id}: Entwurf ohne Session -> 404, Entwürfe in der Gruppe nur mit Session. 404 ohne Marker.
+Flight::route('GET /api/@entity/@id:[0-9]+/translations', function ($entity, $id) {
+    Http::api(function (Cms $cms, PDO $pdo) use ($entity, $id) {
+        $row = $cms->find($entity, (int) $id);
+        $drafts = Auth::canSeeDrafts($pdo);
+        if ($cms->isDraft($entity, $row) && !$drafts) {
+            throw ApiException::of(404, 'not_found', Msg::of('msg_api.record_not_found', 'Record not found'));
+        }
+        return [200, $cms->translations($entity, (int) $id, $drafts)];
+    });
+});
+
+// „Alle veröffentlichen“ / „Alle zurückziehen“ im Abschnitt einer Komposition: Body {"visible": true|false, "dry_run": bool} -
+// setzt visibility aller Teile rekursiv in einer Transaktion (Cms::setPartsVisibility()); Teile ohne Recht oder mit Workflow
+// werden übersprungen und mit Grund genannt
+Flight::route('POST /api/@entity/@id:[0-9]+/parts/@name/visibility', function ($entity, $id, $name) {
+    Http::api(function (Cms $cms) use ($entity, $id, $name) {
+        return [200, $cms->setPartsVisibility($entity, (int) $id, rawurldecode((string) $name), Http::body())];
+    });
+});
+
+// "Übersetzung anlegen": Body {"language": "<Enum-Wert>"} - tiefe Kopie in einer Transaktion (Cms::translate()); 201 mit
+// id und summary, 409 wenn die Sprache in der Gruppe schon existiert, 422 für einen unbekannten Wert, 403 ohne Anlegerecht
+// in der Klasse oder einer ihrer Teilklassen
+Flight::route('POST /api/@entity/@id:[0-9]+/translate', function ($entity, $id) {
+    Http::api(function (Cms $cms) use ($entity, $id) {
+        return [201, $cms->translate($entity, (int) $id, Http::body())];
     });
 });
 

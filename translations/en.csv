@@ -74,6 +74,26 @@ ui_text,form.saved_stay,Saved: {entity} #{id}.
 ui_text,form.no_update,"No permission to edit '{entity}'. You can view the contents, but not save them."
 ui_text,form.no_create,"No permission to create '{entity}'. You can view the form, but not save it."
 ui_text,form.copy_notice,Copy of {entity} #{id} – not saved yet.
+ui_text,form.translation_bar_aria,Language versions
+ui_text,form.translation_create,Create translation ▸
+ui_text,form.translation_busy,Creating …
+ui_text,form.translation_all,All languages exist
+ui_text,form.translation_denied,No permission to create in '{entity}' – “Create translation” copies the parts as well.
+ui_text,form.translation_done,"Translation created: {entity} in {language} – as a draft, not published yet."
+ui_text,form.translation_done_part,"Translation created: {entity} and 1 part in {language} as drafts – not published yet."
+ui_text,form.translation_done_parts,"Translation created: {entity} and {count} parts in {language} as drafts – not published yet."
+ui_text,form.translation_done_plain,Translation created: {entity} in {language}.
+ui_text,form.translation_visible_parts,{count} parts without a visibility field are visible right away.
+ui_text,form.translation_visible_parts_one,1 part without a visibility field is visible right away.
+ui_text,form.translation_publish_hint,"To publish after translating: „Publish all“ in each section."
+ui_text,form.translation_parts,Parts copied: {parts}.
+ui_text,form.translation_parts_one,Part copied: {parts}.
+ui_text,form.translation_no_parts,No parts to copy.
+ui_text,form.translation_redirected,{count} references pointed at existing translations.
+ui_text,form.translation_redirected_one,1 reference pointed at an existing translation.
+ui_text,form.translation_untranslated,Not translated yet: {target} (the reference still points at the source version).
+ui_text,form.translation_dropped,Not taken over: {target} (no version in this language).
+ui_text,form.translation_renamed,"{entity}: “{from}” was taken, now “{to}”."
 ui_text,form.copy_one_to_one,“{label}” was cleared (1:1 relation: already assigned to the original).
 ui_text,form.min_warning,⚠ {entity} #{id} has no record in “{child}” yet (at least 1 required).
 ui_text,parts.add,+ Add {entity}
@@ -82,6 +102,20 @@ ui_text,parts.empty,No entries yet ({entity}).
 ui_text,parts.min_warning,At least one entry „{entity}“ required.
 ui_text,parts.published,Published
 ui_text,parts.draft,Draft
+ui_text,parts.publish_all,Publish all
+ui_text,parts.unpublish_all,Unpublish all
+ui_text,parts.publish_confirm,Publish {count} parts?
+ui_text,parts.publish_confirm_one,Publish 1 part?
+ui_text,parts.unpublish_confirm,Unpublish {count} parts?
+ui_text,parts.unpublish_confirm_one,Unpublish 1 part?
+ui_text,parts.publish_done,Published: {count} parts.
+ui_text,parts.publish_done_one,Published: 1 part.
+ui_text,parts.unpublish_done,Unpublished: {count} parts.
+ui_text,parts.unpublish_done_one,Unpublished: 1 part.
+ui_text,parts.publish_nothing,Nothing to publish – all parts are published already.
+ui_text,parts.unpublish_nothing,Nothing to unpublish – no part is published.
+ui_text,parts.visibility_forbidden,{count} × {entity} skipped: no permission to edit.
+ui_text,parts.visibility_workflow,{count} × {entity} skipped: has a workflow – please publish via its approval.
 ui_text,parts.move_up_aria,Move {entity} #{id} up
 ui_text,parts.move_down_aria,Move {entity} #{id} down
 ui_text,parts.path_aria,Belongs to
@@ -829,6 +863,14 @@ ui_text,schema_panel.optional,optional (?)
 ui_text,schema_panel.title_title,Display name of the row
 ui_text,schema_panel.title_disabled_title,"Only for string, int, date, decimal and enums"
 ui_text,schema_panel.unique_title,All {unique} fields of a class together form one uniqueness rule
+ui_text,schema_panel.unique_label,Unique
+ui_text,schema_panel.unique_group_title,Belongs to the named uniqueness group '{group}' of the class (all fields and relationships of the group together form one rule)
+ui_text,schema_panel.unique_new,New uniqueness group
+ui_text,schema_panel.unique_new_placeholder,new group …
+ui_text,schema_panel.unique_add,Create group
+ui_text,schema_panel.unique_join,Assign
+ui_text,schema_panel.unique_groups,Uniqueness groups
+ui_text,schema_panel.unique_inherited,inherited
 ui_text,schema_panel.sort_by,Order per … ({by})
 ui_text,schema_panel.sort_by_hint,"Without a selection, one order applies to all records. With a selection, every combination of the chosen parents has its own order."
 ui_text,schema_panel.sort_by_none,"The class has no n:1 or 1:1 relationship to group by - one order applies to all records."
@@ -852,6 +894,8 @@ ui_text,schema_panel.mult_required,{mult} (required)
 ui_text,schema_panel.mult_optional,{mult} (optional)
 ui_text,schema_panel.label,Label
 ui_text,schema_panel.cascade_title,Deleting the target also deletes the dependent rows (otherwise the deletion is rejected)
+ui_text,schema_panel.translations,Translations {translations}
+ui_text,schema_panel.translations_title,The rows of the class are language versions of an original – the form offers “Create translation”
 ui_text,schema_panel.unique_relation_title,Column is part of the uniqueness rule of the source
 ui_text,schema_panel.label_title,The interface shows the label instead of the table name
 ui_text,schema_panel.symmetric_title,Undirected: one row per pair
@@ -884,6 +928,7 @@ ui_text,schema_check.field_inherited,“{name}” is already inherited.
 ui_text,schema_check.enum_choose,Please choose an enum.
 ui_text,schema_check.title_type,"{title} is only possible for string, int, date, decimal and enums."
 ui_text,schema_check.unique_media,{unique} is not possible for media fields.
+ui_text,schema_check.group_name,"Group name: a lowercase letter first, then only lowercase letters, digits and _ (e.g. slug_per_site)."
 ui_text,schema_check.visibility_once,At most one visibility field per class.
 ui_text,schema_check.sort_once,At most one sort field per class (inherited ones count too).
 ui_text,schema_check.sort_required,A sort field is always required.
@@ -900,6 +945,14 @@ ui_text,schema_check.nn_self_label,An n:n self-reference needs a label.
 ui_text,schema_check.label_needed,{label} needs a label.
 ui_text,schema_check.one_self_optional,A 1:1 self-reference is only possible as optional (0..1).
 ui_text,schema_check.composition_self,A part cannot be its own whole.
+ui_text,schema_check.translations_self,{translations} only works on an n:1 self-reference.
+ui_text,schema_check.translations_target,{translations} needs “0..1” on the target side (the original has no original).
+ui_text,schema_check.translations_unique,{translations} needs {unique} on this relationship as well.
+ui_text,schema_check.translations_groups,The relationship with {translations} stands in several uniqueness groups ({groups}) - please put it in exactly one.
+ui_text,schema_check.translations_twice,The class already has a relationship with {translations}.
+ui_text,schema_check.translations_enum,{translations} needs exactly one enum field in the {unique} group of the class (found: {found}).
+ui_text,schema_check.translations_enum_optional,The language field “{field}” must be required.
+ui_text,schema_check.translations_group,The {unique} group may only contain this relationship and the language field “{field}” (also in it: {others}).
 ui_text,schema_check.composition_two_owners,{name} is already part of another whole – a part belongs to exactly one.
 ui_text,schema_diff.title,Changes to the text
 ui_text,schema_diff.summary,{added} / {removed} line(s). This is how the text field looks after “Accept”; the database only changes via “Check changes” → “Apply”.
@@ -1314,6 +1367,8 @@ ui_text,msg_api.active_schema_unreadable,The text of the active schema cannot be
 ui_text,msg_api.language_missing,Language missing
 ui_text,msg_api.id_expected,ID expected
 ui_text,msg_api.record_not_found,Record not found
+ui_text,msg_api.expand_max,expand: at most 2 levels
+ui_text,msg_api.expand_values,"0, 1 or 2 expected"
 ui_text,msg_api.column_list_expected,List of column names expected
 ui_text,msg_api.unknown_column,Unknown column: {column}
 ui_text,msg_api.max_chars,At most {max} characters
@@ -1414,8 +1469,8 @@ ui_text,msg_schema.enum_is_class,enum '{enum}' has the same name as a class. Ple
 ui_text,msg_schema.warn_package_color,Colour '{color}' on package is not taken over
 ui_text,msg_schema.warn_decoration,'{statement}' is not taken over
 ui_text,msg_schema.warn_arrow_color,Colour in the arrow '{arrow}' is not taken over
-ui_text,msg_schema.relation_markers,"Only one marker per relation possible ({cascade} or {label}, in addition at most once {unique}, {symmetric}, {filter_by:…} or {renamed_from:…}): {source}"
-ui_text,msg_schema.relation_marker_unknown,"Unknown marker '{marker}' on relation (allowed: {cascade}, {label}, {unique}, {symmetric}, {renamed_from:Old label}, {filter_by:field}): {source}"
+ui_text,msg_schema.relation_markers,"Only one marker per relation possible ({cascade} or {label}, in addition at most once {unique}, {symmetric}, {translations}, {filter_by:…} or {renamed_from:…}): {source}"
+ui_text,msg_schema.relation_marker_unknown,"Unknown marker '{marker}' on relation (allowed: {cascade}, {label}, {unique}, {symmetric}, {translations}, {renamed_from:Old label}, {filter_by:field}): {source}"
 ui_text,msg_schema.relation_abstract,"Relationship to abstract class '{class}' not possible - abstract classes have no table of their own (relationships are not inherited; please draw one per subclass): {source}"
 ui_text,msg_schema.package_line,"package line not understood (expected: package ""Name"" { ... } with the classes in it): {source}"
 ui_text,msg_schema.relation_line,"Relation not understood (expected: A ""n"" --> ""1"" B : label): {source}"
@@ -1468,6 +1523,11 @@ ui_text,msg_schema.type_unknown,Unknown type '{type}' at {class}.{field} (allowe
 ui_text,msg_schema.id_title,"Field 'id' in class '{class}' cannot be marked with {title} (the ID is always put in front of display labels as ""#<id>"" anyway)."
 ui_text,msg_schema.title_type,{where}: {title} only makes sense with the types {types} and enum types (not with '{type}').
 ui_text,msg_schema.unique_media,"{where}: {unique} is not possible on media fields (a list of media, not a column)."
+ui_text,msg_schema.unique_group_name,"Invalid group name in {marker} - a group name starts with a lowercase letter and contains only lowercase letters, digits and _ (e.g. {example}): {source}"
+ui_text,msg_schema.unique_group_twice,{marker} given twice on the same line: {source}
+ui_text,msg_schema.unique_group_same,Class '{class}': the groups {first} and {second} consist of the same columns ({columns}) - one of them is enough.
+ui_text,msg_schema.unique_group_one_to_one,"Class '{class}': the group {group} consists only of the 1:1 column '{column}', which is unique anyway. Please remove the marker or add further fields to the group."
+ui_text,msg_schema.unique_group_inherited,Class '{class}': the group {group} is already defined in the base class '{base}' - fields of a subclass cannot join it. Please choose another group name (a relationship of the subclass may join the inherited group).
 ui_text,msg_schema.id_unique,Field 'id' in class '{class}' cannot be marked with {unique} (the ID is unique anyway).
 ui_text,msg_schema.field_twice,Field '{field}' in class '{class}' defined twice.
 ui_text,msg_schema.field_system,"{where}: The name is reserved for the automatic system fields ({fields}; the system sets the time and user of creation and last change itself). Please rename it, e.g. erstellt_am."
@@ -1510,6 +1570,17 @@ ui_text,msg_schema.composition_part,"Composition '{whole}' - '{part}': the side 
 ui_text,msg_schema.composition_marker,"Marker {marker} is not possible on a composition (allowed: label, {unique}, {filter_by:…}, {renamed_from:…}): {source}"
 ui_text,msg_schema.composition_two_owners,"Class '{part}' is already part of '{first}' - a part belongs to exactly one whole, a second composition (with '{second}') is not possible. For a further reference please draw a normal relationship (-->): {source}"
 ui_text,msg_schema.composition_cycle,Compositions form a cycle ({cycle}) - every row would need a whole that itself needs a row of the first class. Please make one of them a normal relationship (-->).
+ui_text,msg_schema.translations_self,"{translations} on '{a}' → '{b}' is only possible on a self-reference - the language versions are rows of the same class (e.g. {a} ""n"" --> ""0..1"" {a} : Original von {translations} {unique}): {source}"
+ui_text,msg_schema.translations_kind,"{translations} on '{a}' → '{b}' needs an n:1 self-reference (""n"" --> ""0..1""), not {kind}: {source}"
+ui_text,msg_schema.translations_required,"{translations} on '{a}' → '{b}' needs ""0..1"" on the target side - the original itself has no original, a required target ""1"" is not possible: {source}"
+ui_text,msg_schema.translations_twice,Class '{a}' has more than one relationship with {translations} - at most one per class is possible: {source}
+ui_text,msg_schema.translations_unique,{translations} on '{a}' → '{b}' needs {unique} as well - together with the language field it makes sure every language exists only once per original: {source}
+ui_text,msg_schema.translations_groups,{translations} on '{a}' → '{b}': the relationship stands in several uniqueness groups ({groups}) - please put it in exactly one; that group defines the language versions: {source}
+ui_text,msg_schema.translations_enum,{translations} on '{a}' → '{b}' needs exactly one enum field in the {unique} group of the class (found: {found}).
+ui_text,msg_schema.translations_none,none
+ui_text,msg_schema.translations_enum_optional,"{translations} on '{a}' → '{b}': the language field '{field}' must be required (without ""?"") - a version without a language could not be told apart."
+ui_text,msg_schema.translations_group,{translations} on '{a}' → '{b}': the {unique} group of the class may only contain this relationship and the language field '{field}' (also in it: {others}) - otherwise it is not clear what makes a language version.
+ui_text,msg_schema.translations_abstract,{translations} on the abstract class '{class}' not possible - relationships are not inherited. Please draw the self-reference with {translations} for every subclass ({subclasses}): {source}
 ui_text,msg_schema.nn_label_empty,"{label} on the n:n relation '{a}' -- '{b}' needs a label before it (e.g. {a} ""n"" -- ""n"" {b} : interessiert an {label}). Without a label the table name is shown anyway."
 ui_text,msg_schema.nn_unique,"{unique} is only possible on fields and n:1 relations, not on the n:n relation '{a}' -- '{b}'."
 ui_text,msg_schema.nn_self_label,"n:n self-reference '{a}' needs a label (e.g. {a} ""n"" -- ""n"" {a} : folgt, or {a} ""n"" -- ""n"" {a} : befreundet mit {symmetric}); the columns of the link table are named after it."
@@ -1637,6 +1708,8 @@ ui_text,msg_migration.confirm_composition,I confirm that deleting a {whole} dele
 ui_text,msg_migration.composition_added,"{what} becomes a composition - only the model changes: {part} is edited in the form of its {whole} from now on, the table stays the same."
 ui_text,msg_migration.min_added,"{what}: minimum count wanted (every row in {parent} should have at least one row in {class}) - existing rows without one are only marked, nothing is changed."
 ui_text,msg_migration.min_removed,{what}: minimum count dropped.
+ui_text,msg_migration.translations_added,"{what}: marks the language versions ({translations}) - the form offers ""Create translation""; only the model changes."
+ui_text,msg_migration.translations_removed,"{what}: no longer marks language versions ({translations} dropped) - only the model changes, the stored versions stay."
 ui_text,msg_migration.new_relation_denied,"New required relationship {field} points to the entity {target}, which is denied"
 ui_text,msg_migration.relation_required_denied,"{what} becomes required and points to the entity {target}, which is denied"
 ui_text,msg_migration.workflow_backfill,{what}: {count} existing row(s) automatically get the initial state '{state}'.
@@ -1646,6 +1719,11 @@ ui_text,msg_migration.sort_regrouped,"{what}: the groups of the manual order cha
 ui_text,msg_migration.unique_new_columns,"{class}: the new uniqueness ({columns}) consists only of new required columns - a common backfill value for {count} existing rows would inevitably be duplicated. Please first create the column(s) as optional, fill them and only then make them required or unique."
 ui_text,msg_migration.unique_violated,{class}: the new uniqueness ({columns}) is violated in the existing data - {count} value combination(s) occur more than once. Please clean up the duplicates or leave out the marker.
 ui_text,msg_migration.unique_added,{class}: new uniqueness ({columns}) - existing data fits.
+ui_text,msg_migration.unique_group_added,{class}: new group {group} ({columns}) - existing data fits.
+ui_text,msg_migration.unique_group_removed,{class}: group {group} ({columns}) removed - the combination may occur more than once from now on.
+ui_text,msg_migration.unique_group_renamed,"{class}: group {old} renamed to {new} - same columns ({columns}), the table stays unchanged."
+ui_text,msg_migration.unique_group_new_columns,"{class}: the new group {group} ({columns}) consists only of new required columns - a common backfill value for {count} existing rows would inevitably be duplicated. Please first create the column(s) as optional, fill them and only then make them required or unique."
+ui_text,msg_migration.unique_group_violated,{class}: the new group {group} ({columns}) is violated in the existing data - {count} value combination(s) occur more than once. Please clean up the duplicates or leave out the marker.
 ui_text,msg_migration.rules_none,(none)
 ui_text,msg_migration.rules_violated_one,"{what}: rules {old} -> {new}. 1 existing record violates the new rules ({ids}). It is not changed; after applying it is listed under ""Rule violations"" and can only be saved again once it is valid."
 ui_text,msg_migration.rules_violated,"{what}: rules {old} -> {new}. {count} existing records violate the new rules ({ids}). They are not changed; after applying they are listed under ""Rule violations"" and can only be saved again once they are valid."
@@ -1706,6 +1784,8 @@ ui_text,msg_export.enum,Enum {n}
 ui_text,msg_export.enum_value,{where}: invalid value {value}.
 ui_text,msg_export.entity,Entity {n}
 ui_text,msg_export.no_name,{where}: '{key}' contains no name.
+ui_text,msg_export.unique_groups,"{where}: 'unique_groups' must map group names (lowercase letters, digits, _) to lists of field names."
+ui_text,msg_export.relation_unique_groups,"{where}: 'unique_groups' must be a list of group names (lowercase letters, digits, _)."
 ui_text,msg_export.section_invalid,"{where}: invalid section title {title} (one line, not empty, without { and })."
 ui_text,msg_export.section_twice,{where}: section '{title}' twice.
 ui_text,msg_export.section_unknown,{where}: field '{field}' belongs to an unknown section {section}.
@@ -1718,6 +1798,7 @@ ui_text,msg_export.media_meta,Metadata class {n}
 ui_text,msg_export.relation,Relationship {n}
 ui_text,msg_export.kind_invalid,"{where}: 'kind' must be n1, one_to_one or nn."
 ui_text,msg_export.composition_kind,{where}: a composition must have the kind n1.
+ui_text,msg_export.translations_kind,{where}: {translations} needs the kind n1.
 ui_text,msg_layout.positions_expected,"Object {id: {x, y}} expected"
 ui_text,msg_layout.draft_id,provisional ID (element not applied yet) - position is not saved
 ui_text,msg_layout.unknown_id,unknown ID (no entity/enum/metadata class of the active schema)
@@ -1800,6 +1881,11 @@ ui_text,msg_records.move_first,The record is already the first of its group.
 ui_text,msg_records.move_last,The record is already the last of its group.
 ui_text,msg_records.move_neighbour_forbidden,"Cannot move: the neighbouring record is a '{neighbour}', and you have no permission to edit in '{neighbour}'."
 ui_text,msg_records.no_composition,'{entity}' has no composition '{name}'
+ui_text,msg_records.visible_expected,true or false expected
+ui_text,msg_records.no_translations,'{entity}' has no language versions ({translations})
+ui_text,msg_records.translate_forbidden,No permission to create in '{entity}' - creating a translation copies the parts as well
+ui_text,msg_records.translate_language,Unknown language - allowed: {values}
+ui_text,msg_records.translation_exists,The language {language} already exists in this group ({entity} #{id}).
 ui_text,msg_records.transition_unknown,The transition '{transition}' does not exist in the workflow {workflow}
 ui_text,msg_records.unknown,unknown
 ui_text,msg_records.transition_state,The transition '{transition}' is not possible in the state '{state}' (only from '{from}')
@@ -1833,6 +1919,10 @@ ui_text,msg_records.combination_exists_short,Combination already exists
 ui_text,msg_records.value_taken_at,The value {values} is already taken ({entity} #{id}).
 ui_text,msg_records.value_taken,The value {values} is already taken.
 ui_text,msg_records.value_taken_short,Already taken
+ui_text,msg_records.group_taken_at,The combination of {fields} is already taken ({entity} #{id}).
+ui_text,msg_records.group_taken,The combination of {fields} is already taken.
+ui_text,msg_records.group_value_taken_at,{fields} is already taken ({entity} #{id}).
+ui_text,msg_records.group_value_taken,{fields} is already taken.
 ui_text,msg_records.combination_hidden,This combination already exists (the rule includes a field that is denied for you).
 ui_text,msg_records.media_required,Required field: select at least one medium
 ui_text,msg_records.media_ids_expected,List of media IDs expected
@@ -2093,6 +2183,7 @@ ui_text,msg_i18n.csv_too_large,The CSV file is too large (at most {mb} MB)
 ui_text,msg_i18n.csv_not_utf8,The file is not UTF-8 encoded.
 ui_text,msg_i18n.csv_header,"Not a translation CSV: the first line must be “kind,ref,text”."
 ui_text,msg_i18n.type_entity,Entity
+ui_text,msg_i18n.type_abstract_heading,Abstract class (heading of the section in {wholes})
 ui_text,msg_i18n.type_enum_field,Field (Enum {enum})
 ui_text,msg_i18n.type_field,Field ({type})
 ui_text,msg_i18n.type_media,Media field
@@ -2105,6 +2196,7 @@ ui_text,msg_i18n.type_enum_value,Enum value
 ui_text,msg_testdata.mutual,Tables reference each other via required foreign keys ({tables}) – so the first row cannot be created.
 ui_text,msg_testdata.aborted,Aborted after {rows} row(s): {reason}
 ui_text,msg_testdata.no_unique,no further free combination found for the {unique} fields ({fields}).
+ui_text,msg_testdata.no_unique_group,no further free combination found for the group {group} ({fields}).
 ui_text,msg_testdata.counts_object,counts must be an object
 ui_text,msg_testdata.object_expected,Object expected
 ui_text,msg_testdata.unknown_entity,Unknown entity

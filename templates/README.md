@@ -12,6 +12,7 @@ for and which LessHeadCMS concept it shows.
 | [wordpress-like](wordpress-like.md) | Posts, pages, categories, tags and authors of a website. | Media field, restrict everywhere |
 | [wordpress-like-abstract](wordpress-like-abstract.md) | The same website with the shared fields of posts and pages written once. | `abstract class` and `extends` |
 | [web-cms](web-cms.md) | Website, navigation, page tree, pages built from blocks, and channel-neutral content in several languages. | Base model for any website: blocks in areas, shared `sort` across block types, multilingual pattern, `<<media_meta>>` |
+| [web-cms_de](web-cms_de.md) | The same base model with German names and comments, structurally identical to web-cms. | Language versions of a template (checked by a test) |
 | [pim](pim.md) | Products with variants, translations, images, categories, brands and channels. | Product data, multilingual content, `{symmetric}`, `{unique}` |
 | [immobilienmakler-openimmo](immobilienmakler-openimmo.md) | Listings, contact persons and agency of a real estate website, fields after OpenImmo. | Form sections (separator lines), large optional models, media fields by group |
 

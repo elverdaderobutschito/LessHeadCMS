@@ -564,11 +564,13 @@ A click on a box, a field row or a relationship line (or its label) opens a **pr
 a click on empty space closes it:
 
 * **Entity:** name, abstract, extends (abstract classes), package (existing ones, none or a new one via text input),
-  field list (inherited ones grey) including „Feld hinzufügen“, its relationships.
-* **Field:** name, type (base types incl. `media`, or enum + choice of the enum), optional (`?`), `{title}`, `{unique}`
-  (only where the parser allows them).
+  field list (inherited ones grey) including „Feld hinzufügen“, its uniqueness groups (`{unique}` and every
+  `{unique: name}` with their fields and relationships, inherited ones marked), its relationships.
+* **Field:** name, type (base types incl. `media`, or enum + choice of the enum), optional (`?`), `{title}`, „Eindeutig“
+  – a multiple choice of `{unique}` (the unnamed group), every named group `{unique: name}` of the class and „neue Gruppe …“
+  (name + „Gruppe anlegen“) – (only where the parser allows them).
 * **Relationship:** source and target (dropdowns, „Richtung tauschen“), kind n:1/1:1/n:n, multiplicities per kind, label,
-  `{cascade}`/`{unique}` (n:1, 1:1), `{label}` (n:n), `{symmetric}` (n:n self-reference), filter field for `{filter_by}`
+  `{cascade}` and „Eindeutig“ as for fields (n:1, 1:1), `{label}` (n:n), `{symmetric}` (n:n self-reference), filter field for `{filter_by}`
   (text: `sprache` or `sprache=lang`; checked by the server on saving, a renamed field has to be adjusted there
   by hand).
 * **Enum:** name, values (add, remove, reorder).

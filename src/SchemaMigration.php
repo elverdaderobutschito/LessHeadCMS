@@ -1676,6 +1676,15 @@ final class SchemaMigration
                         ])
                     : Msg::of('msg_migration.min_removed', '{what}: minimum count dropped.', ['what' => $label]));
             }
+            // {translations}: only the model changes ("Übersetzung anlegen" in the form), no table
+            if ($f0 !== null && $f1['foreign_key'] && $f0['foreign_key']
+                && !empty($f0['foreign_key']['translations']) !== !empty($f1['foreign_key']['translations'])) {
+                $p['changes'][] = self::change('translations', 'info', !empty($f1['foreign_key']['translations'])
+                    ? Msg::of('msg_migration.translations_added', '{what}: marks the language versions ({translations}) - the form offers '
+                        . '"Create translation"; only the model changes.', ['what' => $label, 'translations' => '{translations}'])
+                    : Msg::of('msg_migration.translations_removed', '{what}: no longer marks language versions ({translations} dropped) - '
+                        . 'only the model changes, the stored versions stay.', ['what' => $label, 'translations' => '{translations}']));
+            }
             if ($f0 !== null && $f1['foreign_key'] && $f0['foreign_key']
                 && ($f0['foreign_key']['filter_by'] ?? null) !== ($f1['foreign_key']['filter_by'] ?? null)) {
                 $p['changes'][] = self::change('filter_by', 'info', Msg::of('msg_migration.what_colon', '{what}: {text}', [
@@ -1718,17 +1727,45 @@ final class SchemaMigration
             }
         }
         unset($c);
-        // new uniqueness ({unique} group, 1:1): existing data must not contain duplicates
-        $oldGroups = [];
-        foreach (SqlGenerator::uniqueGroups($e0) as $g) {
-            $oldGroups[] = array_map(function ($col) use ($p, $t1) {
+        // new uniqueness ({unique} group, 1:1, named groups {unique: name}): existing data must not contain duplicates.
+        // Groups are recognized by their columns (the constraints are anonymous): same columns under another name = renamed
+        // (info, the table stays), a named group whose columns no longer form a group = removed (info).
+        $oldRules = [];
+        foreach (SqlGenerator::uniqueRules($e0) as $rule) {
+            $rule['columns'] = array_map(function ($col) use ($p, $t1) {
                 return $p['colMaps'][$t1][$col] ?? null;
-            }, $g);
+            }, $rule['columns']);
+            $oldRules[] = $rule;
         }
-        foreach (SqlGenerator::uniqueGroups($e1) as $g) {
-            if (in_array($g, $oldGroups, true) || $rows < 2) {
-                continue; // unchanged (the data already satisfies it) or at most one row
+        $oldGroups = array_column($oldRules, 'columns');
+        $newGroups = array_column(SqlGenerator::uniqueRules($e1), 'columns');
+        foreach ($oldRules as $rule) {
+            if ($rule['name'] !== null && !in_array($rule['columns'], $newGroups, true)) {
+                $p['changes'][] = self::change('unique_removed', 'info', Msg::of('msg_migration.unique_group_removed', '{class}: group '
+                    . '{group} ({columns}) removed - the combination may occur more than once from now on.', [
+                        'class' => $e1['name'], 'group' => self::groupMarker($rule['name']),
+                        'columns' => implode(', ', array_filter($rule['columns'], 'is_string')),
+                    ]));
             }
+        }
+        foreach (SqlGenerator::uniqueRules($e1) as $rule) {
+            $g = $rule['columns'];
+            $before = array_search($g, $oldGroups, true);
+            if ($before !== false) {
+                if (!$rule['one_to_one'] && !$oldRules[$before]['one_to_one'] && $oldRules[$before]['name'] !== $rule['name']) {
+                    $p['changes'][] = self::change('unique_renamed', 'info', Msg::of('msg_migration.unique_group_renamed', '{class}: group '
+                        . '{old} renamed to {new} - same columns ({columns}), the table stays unchanged.', [
+                            'class' => $e1['name'], 'old' => self::groupMarker($oldRules[$before]['name']),
+                            'new' => self::groupMarker($rule['name']), 'columns' => implode(', ', $g),
+                        ]));
+                }
+                continue; // unchanged (the data already satisfies it)
+            }
+            if ($rows < 2) {
+                continue; // at most one row
+            }
+            $named = $rule['name'] !== null;
+            $params = ['class' => $e1['name'], 'columns' => implode(', ', $g)] + ($named ? ['group' => self::groupMarker($rule['name'])] : []);
             // New columns: without a backfill they stay NULL (NULL never counts as a duplicate) -> the group cannot be violated;
             // with a backfill all rows have the same value -> the remaining columns of the group are what matters
             $sources = [];
@@ -1746,11 +1783,14 @@ final class SchemaMigration
             }
             if (!$sources) {
                 $p['blockers'][] = ['key' => "unique:$t1." . implode('+', $g), 'count' => $rows, 'rows' => []]
-                    + Msg::of('msg_migration.unique_new_columns', '{class}: the new uniqueness ({columns}) consists only of new required '
-                        . 'columns - a common backfill value for {count} existing rows would inevitably be duplicated. Please first create the '
-                        . 'column(s) as optional, fill them and only then make them required or unique.', [
-                            'class' => $e1['name'], 'columns' => implode(', ', $g), 'count' => $rows,
-                        ])->fields('text');
+                    + ($named
+                        ? Msg::of('msg_migration.unique_group_new_columns', '{class}: the new group {group} ({columns}) consists only of new '
+                            . 'required columns - a common backfill value for {count} existing rows would inevitably be duplicated. Please '
+                            . 'first create the column(s) as optional, fill them and only then make them required or unique.', $params + ['count' => $rows])
+                        : Msg::of('msg_migration.unique_new_columns', '{class}: the new uniqueness ({columns}) consists only of new required '
+                            . 'columns - a common backfill value for {count} existing rows would inevitably be duplicated. Please first create the '
+                            . 'column(s) as optional, fill them and only then make them required or unique.', $params + ['count' => $rows])
+                    )->fields('text');
                 continue;
             }
             $q = implode(', ', array_map([SqlGenerator::class, 'q'], $sources));
@@ -1769,15 +1809,26 @@ final class SchemaMigration
                     $list[] = ['ids' => array_map('intval', explode(',', $d['ids'])), 'values' => $values];
                 }
                 $p['blockers'][] = ['key' => "unique:$t1." . implode('+', $g), 'count' => count($dups), 'rows' => $list]
-                    + Msg::of('msg_migration.unique_violated', '{class}: the new uniqueness ({columns}) is violated in the existing data - '
-                        . '{count} value combination(s) occur more than once. Please clean up the duplicates or leave out the marker.', [
-                            'class' => $e1['name'], 'columns' => implode(', ', $g), 'count' => count($dups),
-                        ])->fields('text');
+                    + ($named
+                        ? Msg::of('msg_migration.unique_group_violated', '{class}: the new group {group} ({columns}) is violated in the '
+                            . 'existing data - {count} value combination(s) occur more than once. Please clean up the duplicates or leave '
+                            . 'out the marker.', $params + ['count' => count($dups)])
+                        : Msg::of('msg_migration.unique_violated', '{class}: the new uniqueness ({columns}) is violated in the existing data - '
+                            . '{count} value combination(s) occur more than once. Please clean up the duplicates or leave out the marker.',
+                            $params + ['count' => count($dups)])
+                    )->fields('text');
             } else {
-                $p['changes'][] = self::change('unique_added', 'info', Msg::of('msg_migration.unique_added', '{class}: new uniqueness '
-                    . '({columns}) - existing data fits.', ['class' => $e1['name'], 'columns' => implode(', ', $g)]));
+                $p['changes'][] = self::change('unique_added', 'info', $named
+                    ? Msg::of('msg_migration.unique_group_added', '{class}: new group {group} ({columns}) - existing data fits.', $params)
+                    : Msg::of('msg_migration.unique_added', '{class}: new uniqueness ({columns}) - existing data fits.', $params));
             }
         }
+    }
+
+    /** "{unique: name}" or, for the unnamed group, "{unique}" - the marker as written in the diagram */
+    private static function groupMarker(?string $name): string
+    {
+        return $name === null ? '{unique}' : '{unique: ' . $name . '}';
     }
 
     /**
